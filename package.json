@@ -1,0 +1,51 @@
+{
+  "name": "choir-strategy",
+  "displayName": "Choir Strategy Manager",
+  "description": "Workspace-aware strategy and knowledge layer for your project",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onChatParticipant:choir"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "choir.init",
+        "title": "Choir: Initialize Strategy"
+      }
+    ],
+    "chatParticipants": [
+      {
+        "id": "choir",
+        "name": "choir",
+        "fullName": "Choir Strategy Manager",
+        "description": "Understands and manages workspace strategy",
+        "isSticky": true
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/glob": "^8.1.0",
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "glob": "^13.0.6",
+    "ts-morph": "^28.0.0",
+    "yaml": "^2.8.4",
+    "zod": "^4.4.2"
+  }
+}
