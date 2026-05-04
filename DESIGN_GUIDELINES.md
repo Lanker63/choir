@@ -15,6 +15,33 @@ Use Zod to ensure the schema is:
 - Enforceable
 - Queryable
 
+## Chat Partipant Functions
+- choir.architect: defines intent (rules, constraints)
+- choir.analyst:   interprets code/tasks
+- choir.enforcer:  guarantees compliance (hard + soft)
+
+choir.enforcer is the only authoritative gate.
+
+The enforcer pipeline:
+
+    Input (task + workspace snapshot)  
+        ↓  
+    Context Builder  
+        ↓  
+    AST Enforcement        (hard guarantees)  
+        ↓  
+    Semantic Enforcement   (cross-file, type-aware)  
+        ↓  
+    Code Enforcement       (lint, patterns)  
+        ↓  
+    Strategy Enforcement   (LLM / intent alignment)  
+        ↓  
+    Conflict Resolver  
+        ↓  
+    Fix Engine  
+        ↓  
+    Output (diagnostics + patches + verdict)  
+
 ## Chat Usage
 
 - @choir.architect add goal: build scalable auth
@@ -28,15 +55,24 @@ Use Zod to ensure the schema is:
 - Analyst: understands reality
 - Enforcer: checks alignment
 
+## Rule Editor for Enforcer
 
+    VSCode Webview (Rule Editor)  
+        ⇅ postMessage  
+    Extension Host (Controller)  
+        ⇅  
+    Choir Enforcer Pipeline  
+        ⇅  
+    Diagnostics + Fixes
 
-Next upgrades that actually matter:
-1. AST-based analysis (huge upgrade). Replace string matching with:
-- TypeScript compiler API
-2. Strategy-aware analysis
-- Have analyst compare findings against strategy:
-- “You defined service layer but only 20% of files follow it”
-3. Auto-refactoring suggestions
-- Not just “hotspot”
+## TODOs
+- Introduce a dedicated AST enforcement phase
+    - Strategy-aware analysis
+    - Auto-refactoring suggestions (not just hotspots)
+- Use real parsers (TypeScript / Tree-sitter)
+- Define structured rules with fixers
+- Integrate into VSCode diagnostics
 
-But “split this file into X + Y”
+## Notes
+- Within extension always resolve from context.extensionPath, not cwd
+- /media = dumb static assets

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none';
+                 style-src 'unsafe-inline' __STYLE_URI__;
+                 script-src 'nonce-__NONCE__';">
+
+  <link href="__STYLE_URI__" rel="stylesheet" />
+</head>
+<body>
+  <div class="container">
+    <h3>Choir Rule Editor</h3>
+
+    <textarea id="dsl"></textarea>
+
+    <div class="actions">
+      <button id="validateBtn">Validate</button>
+    </div>
+
+    <pre id="output"></pre>
+  </div>
+
+  <script nonce="__NONCE__" src="__SCRIPT_URI__"></script>
+</body>
+</html>

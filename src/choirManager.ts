@@ -16,34 +16,34 @@ export function getChoirPath(): string | undefined {
     return path.join(root, ".choir");
 }
 
-export async function initializeChoir() {
-    const choirPath = getChoirPath();
-    if (!choirPath) {
-        vscode.window.showErrorMessage("No workspace open.");
-        return;
-    }
+// export async function initializeChoir() {
+//     const choirPath = getChoirPath();
+//     if (!choirPath) {
+//         vscode.window.showErrorMessage("No workspace open.");
+//         return;
+//     }
 
-    if (!fs.existsSync(choirPath)) {
-        fs.mkdirSync(choirPath);
-    }
+//     if (!fs.existsSync(choirPath)) {
+//         fs.mkdirSync(choirPath);
+//     }
 
-    const strategyFile = path.join(choirPath, "strategy.yaml");
+//     const strategyFile = path.join(choirPath, "strategy.yaml");
 
-    if (!fs.existsSync(strategyFile)) {
-        const initial = {
-            project: {
-                name: "My Project",
-                goals: []
-            },
-            standards: {},
-            constraints: []
-        };
+//     if (!fs.existsSync(strategyFile)) {
+//         const initial = {
+//             project: {
+//                 name: "My Project",
+//                 goals: []
+//             },
+//             standards: {},
+//             constraints: []
+//         };
 
-        fs.writeFileSync(strategyFile, YAML.stringify(initial));
-    }
+//         fs.writeFileSync(strategyFile, YAML.stringify(initial));
+//     }
 
-    vscode.window.showInformationMessage("Choir initialized.");
-}
+//     vscode.window.showInformationMessage("Choir initialized.");
+// }
 
 export function readStrategy(): Strategy | null {
     const choirPath = getChoirPath();

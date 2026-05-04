@@ -1,0 +1,31 @@
+- id: no-db-in-controller
+  description: Prevent DB usage in controllers
+
+  appliesTo:
+    files:
+      - "**/controller/**"
+
+  match:
+    imports:
+      - "db"
+
+  constraint:
+    type: forbid
+
+  message: "Controllers must not import DB modules"
+  severity: error
+
+- id: validate-request
+  description: Ensure request validation is performed
+
+  appliesTo:
+    files:
+      - "**"
+
+  constraint:
+    type: require
+    callExpressions:
+      - validateRequest
+
+  message: "All request handlers must call validateRequest"
+  severity: warning

@@ -5,6 +5,11 @@ import { enforceStrategy, enforceCode } from "./enforcer";
 import { analyzeWorkspace, findHotspots } from "./analyst";
 
 export function registerArchitect(context: vscode.ExtensionContext) {
+    if (!vscode.chat?.createChatParticipant) {
+        console.warn("Choir Architect chat participant API is unavailable");
+        return;
+    }
+
     const architect = vscode.chat.createChatParticipant(
         "choir.architect",
         async (request, ctx, stream) => {
@@ -69,6 +74,11 @@ Try:
 }
 
 export function registerEnforcer(context: vscode.ExtensionContext) {
+    if (!vscode.chat?.createChatParticipant) {
+        console.warn("Choir Enforcer chat participant API is unavailable");
+        return;
+    }
+
     const enforcer = vscode.chat.createChatParticipant("choir.enforcer", async (request, context, stream) => {
         const userMessage = request.prompt;
         
@@ -93,6 +103,11 @@ export function registerEnforcer(context: vscode.ExtensionContext) {
 }
 
 export function registerAnalyst(context: vscode.ExtensionContext) {
+    if (!vscode.chat?.createChatParticipant) {
+        console.warn("Choir Analyst chat participant API is unavailable");
+        return;
+    }
+
     const analyst = vscode.chat.createChatParticipant(
         "choir.analyst",
         async (request, ctx, stream) => {
