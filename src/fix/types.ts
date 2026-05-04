@@ -62,6 +62,7 @@ export type Fix = {
   isPreferred?: boolean;
   isSafe?: boolean;
   requiresConfirmation?: boolean;
+  dependsOn?: string[];
   conflictsWith?: string[];
   traceId: string;
 };
@@ -75,7 +76,7 @@ export type PatchResult = {
 export type FixConflict = {
   fixA: string;
   fixB: string;
-  reason: "overlapping-range" | "semantic-conflict" | "rule-priority";
+  reason: "overlapping-range" | "semantic-conflict" | "rule-priority" | "file-conflict";
 };
 
 export interface PatchValidationIssue {

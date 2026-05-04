@@ -13,7 +13,13 @@ export const ControlPlaneSchema = z.object({
         constraints: z.array(z.string()).default([])
     }).strict(),
     policy: z.object({
-        rules: z.array(DSLRuleSchema).default([])
+        rules: z.array(DSLRuleSchema).default([]),
+        priorityOverrides: z.object({
+            AST: z.number().finite().optional(),
+            semantic: z.number().finite().optional(),
+            strategy: z.number().finite().optional(),
+            pattern: z.number().finite().optional(),
+        }).strict().optional()
     }).strict()
 }).strict();
 

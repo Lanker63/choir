@@ -12,6 +12,35 @@ import {
   snapshotWorkspace,
   validateStateDeterminism,
 } from "./harness.js";
+import { runConflictResolutionEngine } from "../../fix/conflictEngine.js";
+import { Diagnostic, SourceLocation } from "../../core/types.js";
+import { Fix } from "../../fix/types.js";
+import { CONTROL_PLANE_VERSION, ControlPlane } from "../../schema.js";
+
+function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
+  return {
+    file,
+    start: { line: startLine, character: startChar },
+    end: { line: endLine, character: endChar },
+  };
+}
+
+function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"]): ControlPlane {
+  return {
+    version: CONTROL_PLANE_VERSION,
+    mission: "",
+    vision: "",
+    "non-goals": [],
+    intent: {
+      goals: [],
+      constraints: [],
+    },
+    policy: {
+      rules: [],
+      ...(overrides ? { priorityOverrides: overrides } : {}),
+    },
+  };
+}
 
 type TestCase = {
   id: string;
@@ -294,6 +323,199 @@ const finalPass: TestPass = {
           const control = harness.loadControlPlane();
           assert.ok(typeof control.version === "string" && control.version.length > 0);
         });
+      },
+    },
+    {
+      id: "X.4",
+      name: "conflict resolution is deterministic and priority driven",
+      run: async () => {
+        const sharedLocation = testLocation("src/example.ts", 1, 0, 1, 10);
+
+        const diagnostics: Diagnostic[] = [
+          {
+            id: "diag-A",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "error",
+            category: "AST",
+            location: sharedLocation,
+            traceId: "trace-A",
+          },
+          {
+            id: "diag-B",
+            ruleId: "rule-b",
+            message: "B",
+            severity: "warning",
+            category: "strategy",
+            location: sharedLocation,
+            traceId: "trace-B",
+          },
+        ];
+
+        const fixes: Fix[] = [
+          {
+            id: "fix-A",
+            ruleId: "rule-a",
+            title: "Fix A",
+            diagnosticIds: ["diag-A"],
+            patches: [
+              {
+                type: "replace",
+                location: sharedLocation,
+                text: "alpha",
+              },
+            ],
+            isSafe: true,
+            traceId: "trace-A",
+          },
+          {
+            id: "fix-B",
+            ruleId: "rule-b",
+            title: "Fix B",
+            diagnosticIds: ["diag-B"],
+            patches: [
+              {
+                type: "replace",
+                location: sharedLocation,
+                text: "beta",
+              },
+            ],
+            isSafe: true,
+            traceId: "trace-B",
+          },
+        ];
+
+        const first = runConflictResolutionEngine({
+          fixes,
+          diagnostics,
+          controlPlane: makeControlPlane(),
+        });
+
+        const second = runConflictResolutionEngine({
+          fixes,
+          diagnostics,
+          controlPlane: makeControlPlane(),
+        });
+
+        assert.deepStrictEqual(first, second);
+        assert.deepStrictEqual(first.selectedFixes.map((fix) => fix.id), ["fix-A"]);
+        assert.deepStrictEqual(first.rejectedFixes, [{ fixId: "fix-B", reason: "lower-priority" }]);
+        assert.ok(first.conflicts.some((conflict) => conflict.reason === "overlapping-range"));
+      },
+    },
+    {
+      id: "X.5",
+      name: "priority overrides and dependency safety rejections are honored",
+      run: async () => {
+        const sharedLocation = testLocation("src/example.ts", 2, 0, 2, 6);
+        const diagnostics: Diagnostic[] = [
+          {
+            id: "diag-A",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "error",
+            category: "AST",
+            location: sharedLocation,
+            traceId: "trace-A",
+          },
+          {
+            id: "diag-B",
+            ruleId: "rule-b",
+            message: "B",
+            severity: "warning",
+            category: "strategy",
+            location: sharedLocation,
+            traceId: "trace-B",
+          },
+          {
+            id: "diag-U",
+            ruleId: "rule-u",
+            message: "U",
+            severity: "error",
+            category: "AST",
+            location: sharedLocation,
+            traceId: "trace-U",
+          },
+          {
+            id: "diag-D",
+            ruleId: "rule-d",
+            message: "D",
+            severity: "error",
+            category: "AST",
+            location: sharedLocation,
+            traceId: "trace-D",
+          },
+        ];
+
+        const fixes: Fix[] = [
+          {
+            id: "fix-A",
+            ruleId: "rule-a",
+            title: "Fix A",
+            diagnosticIds: ["diag-A"],
+            patches: [
+              {
+                type: "replace",
+                location: sharedLocation,
+                text: "alpha",
+              },
+            ],
+            isSafe: true,
+            traceId: "trace-A",
+          },
+          {
+            id: "fix-B",
+            ruleId: "rule-b",
+            title: "Fix B",
+            diagnosticIds: ["diag-B"],
+            patches: [
+              {
+                type: "replace",
+                location: sharedLocation,
+                text: "beta",
+              },
+            ],
+            isSafe: true,
+            traceId: "trace-B",
+          },
+          {
+            id: "fix-U",
+            ruleId: "rule-u",
+            title: "Unsafe fix",
+            diagnosticIds: ["diag-U"],
+            patches: [],
+            isSafe: false,
+            traceId: "trace-U",
+          },
+          {
+            id: "fix-D",
+            ruleId: "rule-d",
+            title: "Dependent fix",
+            diagnosticIds: ["diag-D"],
+            patches: [],
+            dependsOn: ["fix-Missing"],
+            traceId: "trace-D",
+          },
+        ];
+
+        const result = runConflictResolutionEngine({
+          fixes,
+          diagnostics,
+          controlPlane: makeControlPlane({
+            AST: 1,
+            strategy: 9,
+          }),
+        });
+
+        assert.deepStrictEqual(result.selectedFixes.map((fix) => fix.id), ["fix-B"]);
+        assert.deepStrictEqual(
+          result.rejectedFixes,
+          [
+            { fixId: "fix-A", reason: "lower-priority" },
+            { fixId: "fix-D", reason: "dependency-failure" },
+            { fixId: "fix-U", reason: "unsafe" },
+          ]
+        );
       },
     },
   ],

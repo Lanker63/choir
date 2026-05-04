@@ -2,7 +2,7 @@ import { buildContext, buildWorkspaceSnapshot, WorkspaceSnapshot } from "./conte
 import { runAST } from "../ast/engine.js";
 import { RuleRegistry } from "../rules/registry.js";
 import { compileControlPlaneToRules } from "../dsl/compiler.js";
-import { Diagnostic, SourceLocation, Trace } from "./types.js";
+import { Diagnostic, Trace } from "./types.js";
 import { ControlPlane } from "../schema.js";
 import { persistStatePlane } from "./state.js";
 import { runSemantic } from "../semantic/engine.js";
@@ -11,6 +11,7 @@ import { runStrategy } from "../strategy/engine.js";
 import { normalizeAST } from "../ast/model.js";
 import { applyPatchesWithRoundTrip } from "../fix/engine.js";
 import { Fix, FixConflict, PatchResult, isTextPatch } from "../fix/types.js";
+import { ConflictTrace, RejectedFix, runConflictResolutionEngine } from "../fix/conflictEngine.js";
 import { createZeroLengthLocation, makeDiagnosticId } from "./diagnostics.js";
 import { createHash } from "crypto";
 import path from "path";
@@ -40,111 +41,26 @@ function createDeterministicRunId(input: PipelineInput): string {
   return `run-${createHash("sha256").update(serialized).digest("hex").slice(0, 16)}`;
 }
 
-function comparePosition(left: SourceLocation["start"], right: SourceLocation["start"]): number {
-  if (left.line !== right.line) {
-    return left.line - right.line;
-  }
-
-  return left.character - right.character;
-}
-
-function rangesOverlap(left: SourceLocation, right: SourceLocation): boolean {
-  if (left.file !== right.file) {
-    return false;
-  }
-
-  const leftStartsBeforeRightEnds = comparePosition(left.start, right.end) < 0;
-  const rightStartsBeforeLeftEnds = comparePosition(right.start, left.end) < 0;
-  return leftStartsBeforeRightEnds && rightStartsBeforeLeftEnds;
-}
-
-function detectFixConflicts(fixes: Fix[]): FixConflict[] {
-  const conflicts: FixConflict[] = [];
-
-  for (const fix of fixes) {
-    for (const conflictId of fix.conflictsWith ?? []) {
-      if (fix.id < conflictId) {
-        conflicts.push({
-          fixA: fix.id,
-          fixB: conflictId,
-          reason: "semantic-conflict",
-        });
-      }
-    }
-  }
-
-  for (let i = 0; i < fixes.length; i += 1) {
-    const left = fixes[i];
-    const leftPatches = left.patches.filter(isTextPatch);
-
-    for (let j = i + 1; j < fixes.length; j += 1) {
-      const right = fixes[j];
-      const rightPatches = right.patches.filter(isTextPatch);
-      const hasOverlap = leftPatches.some((leftPatch) =>
-        rightPatches.some((rightPatch) => rangesOverlap(leftPatch.location, rightPatch.location))
-      );
-
-      if (hasOverlap) {
-        conflicts.push({
-          fixA: left.id,
-          fixB: right.id,
-          reason: "overlapping-range",
-        });
-      }
-    }
-  }
-
-  return conflicts
-    .sort((left, right) => {
-      if (left.fixA !== right.fixA) {
-        return left.fixA.localeCompare(right.fixA);
-      }
-
-      if (left.fixB !== right.fixB) {
-        return left.fixB.localeCompare(right.fixB);
-      }
-
-      return left.reason.localeCompare(right.reason);
-    })
-    .filter((conflict, index, all) => {
-      const previous = all[index - 1];
-      return !previous
-        || previous.fixA !== conflict.fixA
-        || previous.fixB !== conflict.fixB
-        || previous.reason !== conflict.reason;
-    });
-}
-
-function selectAcceptedFixes(fixes: Fix[], conflicts: FixConflict[]): { accepted: Fix[]; rejected: Set<string> } {
-  const rejected = new Set<string>();
-
-  for (const conflict of conflicts) {
-    const loser = conflict.fixA.localeCompare(conflict.fixB) <= 0 ? conflict.fixB : conflict.fixA;
-    rejected.add(loser);
-  }
-
-  return {
-    accepted: fixes.filter((fix) => !rejected.has(fix.id)),
-    rejected,
-  };
-}
-
 function applyFixesSafely(
   context: ReturnType<typeof buildContext>,
   astResult: ReturnType<typeof runAST>,
   fixes: Fix[],
-  conflicts: FixConflict[],
+  selectedFixes: Fix[],
+  rejectedFixes: RejectedFix[],
   traceId: string
-): { diagnostics: Diagnostic[]; appliedPatches: PatchResult[] } {
-  if (fixes.length === 0) {
+): { diagnostics: Diagnostic[]; appliedPatches: PatchResult[]; rolledBack: boolean } {
+  if (selectedFixes.length === 0 && rejectedFixes.length === 0) {
     return {
       diagnostics: [],
       appliedPatches: [],
+      rolledBack: false,
     };
   }
 
   const diagnostics: Diagnostic[] = [];
-  const patchResults: PatchResult[] = [];
+  const patchResults = new Map<string, PatchResult>();
+  const rejectedById = new Map(rejectedFixes.map((rejection) => [rejection.fixId, rejection.reason]));
+  const fixesById = new Map(fixes.map((fix) => [fix.id, fix]));
   const workingSourceByFile = new Map<string, { sourceFile: ReturnType<typeof normalizeAST>["sourceFile"]; normalizedAst: ReturnType<typeof normalizeAST> }>();
 
   for (const [filePath, normalizedAst] of Object.entries(astResult.normalizedAsts)) {
@@ -159,34 +75,62 @@ function applyFixesSafely(
     });
   }
 
-  const { accepted, rejected } = selectAcceptedFixes(fixes, conflicts);
+  for (const fix of selectedFixes) {
+    rejectedById.delete(fix.id);
+  }
 
-  for (const fix of fixes) {
-    if (rejected.has(fix.id)) {
-      for (let patchIndex = 0; patchIndex < fix.patches.length; patchIndex += 1) {
-        patchResults.push({
-          patchId: `${fix.id}:${patchIndex + 1}`,
-          success: false,
-          error: "Rejected due to fix conflict",
-        });
-      }
+  for (const [fixId, rejectionReason] of rejectedById.entries()) {
+    const rejectedFix = fixesById.get(fixId);
+    const patchCount = rejectedFix?.patches.length ?? 0;
+
+    if (!rejectionReason) {
+      continue;
+    }
+
+    if (patchCount === 0) {
+      patchResults.set(`${fixId}:0`, {
+        patchId: `${fixId}:0`,
+        success: false,
+        error: `Rejected fix (${rejectionReason})`,
+      });
+      continue;
+    }
+
+    for (let patchIndex = 0; patchIndex < patchCount; patchIndex += 1) {
+      const patchId = `${fixId}:${patchIndex + 1}`;
+      patchResults.set(patchId, {
+        patchId,
+        success: false,
+        error: `Rejected fix (${rejectionReason})`,
+      });
     }
   }
 
-  for (const fix of accepted.sort((left, right) => left.id.localeCompare(right.id))) {
+  let rollbackRequired = false;
+
+  for (const fix of selectedFixes) {
     for (let patchIndex = 0; patchIndex < fix.patches.length; patchIndex += 1) {
       const patch = fix.patches[patchIndex];
       const patchId = `${fix.id}:${patchIndex + 1}`;
 
+      if (rollbackRequired) {
+        patchResults.set(patchId, {
+          patchId,
+          success: false,
+          error: "Skipped due to rollback",
+        });
+        continue;
+      }
+
       if (!isTextPatch(patch)) {
-        patchResults.push({ patchId, success: true });
+        patchResults.set(patchId, { patchId, success: true });
         continue;
       }
 
       const filePath = patch.location.file;
       const working = workingSourceByFile.get(filePath);
       if (!working) {
-        patchResults.push({
+        patchResults.set(patchId, {
           patchId,
           success: false,
           error: `No AST context available for ${filePath}`,
@@ -201,6 +145,7 @@ function applyFixesSafely(
           category: "AST",
           traceId,
         });
+        rollbackRequired = true;
         continue;
       }
 
@@ -213,7 +158,7 @@ function applyFixesSafely(
           ?? applyResult.validation.issues.map((issue) => issue.message).join(" | ");
         const error = rawError.length > 0 ? rawError : "Unknown patch application error";
 
-        patchResults.push({
+        patchResults.set(patchId, {
           patchId,
           success: false,
           error,
@@ -228,10 +173,11 @@ function applyFixesSafely(
           category: "AST",
           traceId,
         });
+        rollbackRequired = true;
         continue;
       }
 
-      patchResults.push({ patchId, success: true });
+      patchResults.set(patchId, { patchId, success: true });
       const updatedNormalized = normalizeAST(applyResult.ast, filePath);
       workingSourceByFile.set(filePath, {
         sourceFile: applyResult.ast,
@@ -240,9 +186,24 @@ function applyFixesSafely(
     }
   }
 
+  if (rollbackRequired) {
+    for (const [patchId, result] of patchResults.entries()) {
+      if (!result.success) {
+        continue;
+      }
+
+      patchResults.set(patchId, {
+        patchId,
+        success: false,
+        error: "Rolled back due to patch application failure",
+      });
+    }
+  }
+
   return {
     diagnostics,
-    appliedPatches: patchResults,
+    appliedPatches: [...patchResults.values()].sort((left, right) => left.patchId.localeCompare(right.patchId)),
+    rolledBack: rollbackRequired,
   };
 }
 
@@ -254,8 +215,11 @@ export type PipelineInput = {
 export type PipelineResult = {
   diagnostics: Diagnostic[];
   fixes: Fix[];
+  selectedFixes: Fix[];
+  rejectedFixes: RejectedFix[];
   appliedPatches: PatchResult[];
   conflicts: FixConflict[];
+  conflictTrace: ConflictTrace;
   statePath: string;
   trace: Trace;
   // Legacy compatibility for existing callers and tests.
@@ -284,15 +248,31 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const strategyDiagnostics = await runStrategy(context, runId);
 
   const allFixes = [...astResult.fixes].sort((left, right) => left.id.localeCompare(right.id));
-  const conflicts = detectFixConflicts(allFixes);
-  const patchResult = applyFixesSafely(context, astResult, allFixes, conflicts, runId);
-
-  const diagnostics = [
+  const prePatchDiagnostics = [
     ...astResult.diagnostics,
     ...semanticResult.diagnostics,
-    ...patchResult.diagnostics,
     ...codeDiagnostics,
     ...strategyDiagnostics,
+  ].sort((left, right) => left.id.localeCompare(right.id));
+
+  const conflictResult = runConflictResolutionEngine({
+    fixes: allFixes,
+    diagnostics: prePatchDiagnostics,
+    controlPlane: input.controlPlane,
+  });
+
+  const patchResult = applyFixesSafely(
+    context,
+    astResult,
+    allFixes,
+    conflictResult.selectedFixes,
+    conflictResult.rejectedFixes,
+    runId
+  );
+
+  const diagnostics = [
+    ...prePatchDiagnostics,
+    ...patchResult.diagnostics,
   ].sort((left, right) => left.id.localeCompare(right.id));
 
   const triggeredRuleIds = Array.from(new Set(diagnostics.map((diagnostic) => diagnostic.ruleId))).sort((a, b) => a.localeCompare(b));
@@ -324,14 +304,17 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     rulesTriggered: triggeredRuleIds,
     diagnosticsEmitted: diagnostics.map((diagnostic) => diagnostic.id),
     fixesGenerated: allFixes.map((fix) => fix.id),
-    conflictsDetected: conflicts,
+    conflictsDetected: conflictResult.conflicts,
     decisions: [
       astOverrideApplied ? "AST override applied" : "AST default precedence retained",
       "Pipeline stage order: AST -> Semantic -> Code -> Strategy",
       `Evaluated ${executableRules.length} executable rules`,
       `Triggered ${triggeredRuleIds.length} rule(s)`,
       `Generated ${allFixes.length} fix(es)`,
-      `Detected ${conflicts.length} conflict(s)`,
+      `Conflict resolution selected ${conflictResult.selectedFixes.length} fix(es) and rejected ${conflictResult.rejectedFixes.length}`,
+      `Detected ${conflictResult.conflicts.length} conflict(s)`,
+      ...(patchResult.rolledBack ? ["Patch apply rollback triggered"] : []),
+      ...conflictResult.trace.decisions,
       `State materialized at ${statePath}`,
     ],
     durationMs: Date.now() - startTime,
@@ -340,8 +323,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   return {
     diagnostics,
     fixes: allFixes,
+    selectedFixes: conflictResult.selectedFixes,
+    rejectedFixes: conflictResult.rejectedFixes,
     appliedPatches: patchResult.appliedPatches,
-    conflicts,
+    conflicts: conflictResult.conflicts,
+    conflictTrace: conflictResult.trace,
     statePath,
     trace,
     violations: diagnostics,
