@@ -1,8 +1,9 @@
 import * as vscode from "vscode";
 import * as YAML from "yaml";
-import { readStrategy, writeStrategy } from "./choirManager.js";
-import { enforceStrategy, enforceCode } from "./enforcer.js";
+import { readControlPlane, writeControlPlane } from "./choirManager.js";
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
+import { applyChatToControlPlane } from "./chatCompiler.js";
+import { runPipelineForWorkspace } from "./enforcer.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
 
@@ -31,81 +32,75 @@ export function registerArchitect(context: vscode.ExtensionContext) {
             const raw = (request as any).prompt ?? "";
             const message = raw.toLowerCase();
 
-            const strategy = readStrategy();
-            if (!strategy) {
-                stream.markdown("No strategy found. Run `Choir: Initialize Strategy`.");
+            const controlPlane = readControlPlane();
+            if (!controlPlane) {
+                stream.markdown("No control plane found. Open a workspace folder first.");
                 return;
             }
 
-            // 📘 Show strategy
-            if (message.includes("show") || message.includes("strategy")) {
-                stream.markdown("```yaml\n" + YAML.stringify(strategy) + "\n```");
+            // Show control plane
+            if (message.includes("show") || message.includes("control") || message.includes("strategy")) {
+                stream.markdown("```yaml\n" + YAML.stringify(controlPlane) + "\n```");
                 return;
             }
 
-            // 🎯 Add goal
-            if (message.includes("add goal")) {
-                const goal = raw.replace(/add goal/i, "").trim();
-                strategy.project.goals.push(goal);
-                writeStrategy(strategy);
-
-                stream.markdown(`✅ Added goal: ${goal}`);
-                return;
-            }
-
-            // 🚧 Add constraint
-            if (message.includes("add constraint")) {
-                const constraint = raw.replace(/add constraint/i, "").trim();
-                strategy.constraints.push(constraint);
-                writeStrategy(strategy);
-
-                stream.markdown(`⚠️ Added constraint: ${constraint}`);
-                return;
-            }
-
-            // 🏗 Add architecture layer
-            if (message.includes("add layer")) {
-                const layer = raw.replace(/add layer/i, "").trim();
-                strategy.architecture.layers.push(layer);
-                writeStrategy(strategy);
-
-                stream.markdown(`🏗 Added layer: ${layer}`);
-                return;
-            }
-
-            stream.markdown(`
+            const updated = applyChatToControlPlane(raw, controlPlane);
+            const changed = JSON.stringify(updated) !== JSON.stringify(controlPlane);
+            if (!changed) {
+                stream.markdown(`
 ### 🧠 Choir Architect
 
 Try:
-- "Show strategy"
+- "Show control plane"
 - "Add goal: Build auth system"
 - "Add constraint: no direct db access"
 - "Add layer: service"
-            `);
+- "Remove goal: Build auth system"
+- "Remove constraint: no direct db access"
+                `);
+                return;
+            }
+
+            writeControlPlane(updated);
+
+            const pipelineResult = await runPipelineForWorkspace({ controlPlane: updated });
+            if (!pipelineResult) {
+                stream.markdown("✅ Control plane updated, but no workspace root is open for pipeline execution.");
+                return;
+            }
+
+            stream.markdown(
+                `✅ Control plane updated and pipeline executed. Violations: ${pipelineResult.violations.length}`
+            );
         }
     );
 }
 
 export function registerEnforcer(context: vscode.ExtensionContext) {
-    registerParticipant(context, "choir.enforcer", "Choir Enforcer", async (request, context, stream) => {
-        const userMessage = request.prompt;
-        
-        const result = enforceCode(userMessage);
-        if (!result.ok) {
-            stream.markdown(`⛔ Code blocked by enforcer:\n\n` + result.violations.map(v => `- ${v}`).join("\n"));
-            return;
-        }
-        stream.markdown("✅ Code passed enforcement");
-
-        const strategy = readStrategy();
-        if (!strategy) {
-            stream.markdown("No strategy found.");
+    registerParticipant(context, "choir.enforcer", "Choir Enforcer", async (_request, _context, stream) => {
+        const controlPlane = readControlPlane();
+        if (!controlPlane) {
+            stream.markdown("No control plane found.");
             return;
         }
 
-        const results = await enforceStrategy(strategy);
-        stream.markdown(results.length ? results.join("\n") : "✅ Clean");
-        
+        const result = await runPipelineForWorkspace({
+            controlPlane,
+        });
+        if (!result) {
+            stream.markdown("No workspace folder found.");
+            return;
+        }
+
+        if (result.violations.length === 0) {
+            stream.markdown("✅ Clean");
+            return;
+        }
+
+        stream.markdown(
+            "⛔ Pipeline reported violations:\n\n" +
+            result.violations.map((violation) => `- [${violation.ruleId}] ${violation.message} (${violation.file})`).join("\n")
+        );
     });
 }
 

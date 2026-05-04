@@ -96,7 +96,10 @@
     "watch": "npm run watch:extension",
     "watch:extension": "tsc -watch -p ./",
     "watch:webview": "vite build --watch",
-    "dev:webview": "vite"
+    "dev:webview": "vite",
+    "test:rules": "npm run build:extension && node out/tests/rules/harness.js",
+    "test:architecture": "npm run build:extension && node out/tests/architecture/suite.js",
+    "test": "npm run test:rules && npm run test:architecture"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

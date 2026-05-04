@@ -8,6 +8,12 @@ export class RuleRegistry {
   }
 
   getASTRules() {
-    return this.astRules;
+    return [...this.astRules].sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return a.priority - b.priority;
+      }
+
+      return a.id.localeCompare(b.id);
+    });
   }
 }

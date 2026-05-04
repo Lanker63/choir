@@ -1,8 +1,7 @@
-import * as path from "path";
-import fs from "fs";
 import * as vscode from "vscode";
-import { loadDSLRules } from "../dsl/loader.js";
 import { DSLRule } from "../dsl/types.js";
+import { readControlPlane, getControlPlanePath } from "../choirManager.js";
+import { resolveControlPlanePath } from "./rulesPath.js";
 
 class RuleTreeItem extends vscode.TreeItem {
   constructor(public readonly label: string, public readonly rule?: DSLRule) {
@@ -23,7 +22,7 @@ export class RuleTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
   private _onDidChangeTreeData: vscode.EventEmitter<vscode.TreeItem | undefined | null> = new vscode.EventEmitter<vscode.TreeItem | undefined | null>();
   readonly onDidChangeTreeData: vscode.Event<vscode.TreeItem | undefined | null> = this._onDidChangeTreeData.event;
 
-  constructor(private context: vscode.ExtensionContext) {
+  constructor() {
     console.log("RuleTreeProvider: constructed");
   }
 
@@ -45,36 +44,19 @@ export class RuleTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
       return [new vscode.TreeItem("Open a folder/workspace to list rules")];
     }
 
-    // Find a rules.yaml (or rules.yml) in any workspace folder
-    let rulesPath: string | undefined;
-    for (const folder of folders) {
-      const p = path.join(folder.uri.fsPath, ".choir", "rules.yaml");
-      if (fs.existsSync(p)) {
-        rulesPath = p;
-        break;
-      }
-    }
-    if (!rulesPath) {
-      for (const folder of folders) {
-        const p = path.join(folder.uri.fsPath, ".choir", "rules.yml");
-        if (fs.existsSync(p)) {
-          rulesPath = p;
-          break;
-        }
-      }
-    }
+    const controlPath = resolveControlPlanePath();
 
-    if (!rulesPath) {
-      return [new vscode.TreeItem("No .choir/rules.yaml found in workspace folders")];
+    if (!controlPath) {
+      return [new vscode.TreeItem("No .choir/choir.config.yaml found in workspace folders")];
     }
 
     try {
-      const raw = loadDSLRules(rulesPath) as unknown;
-      const rules = Array.isArray(raw) ? (raw as DSLRule[]) : [];
-      console.log("RuleTreeProvider: loaded rules count=", rules.length, "from", rulesPath);
+      const control = readControlPlane();
+      const rules = control?.policy.rules ?? [];
+      console.log("RuleTreeProvider: loaded rules count=", rules.length, "from", getControlPlanePath());
 
       if (rules.length === 0) {
-        return [new vscode.TreeItem("No rules found in .choir/rules.yaml")];
+        return [new vscode.TreeItem("No rules found in .choir/choir.config.yaml")];
       }
 
       return rules.map(r => new RuleTreeItem(r.id ?? "<no-id>", r));

@@ -1,78 +1,59 @@
-# Design Guidelines for Choir
+# Choir Design Guidelines (Revised)
 
-## Design Insights
+Choir is a VSCode extension that enables structured, policy-driven management of a workspace through a formal enforcement pipeline. It exposes chat participants that allow users to define strategy and constraints, which are compiled into enforceable rules applied to the codebase.
 
-## Build a declarative system contract for the codebase:
+---
 
-- YAML = intent + constraints
-- JSON = facts + computed state
-- Chat = interface layer
+# Core System Model
 
-## Design Schema Validation
+## Three-Plane Architecture
 
-Use Zod to ensure the schema is:
-- Validated
-- Enforceable
-- Queryable
+### 1. Control Plane (Authoritative Source of Truth)
+- Format: YAML
+- Owned by: User (via Architect)
+- Defines:
+  - Intent
+  - Constraints
+  - Policies
+- Properties:
+  - Versioned
+  - Deterministic
+  - Immutable input to enforcement
 
-## Chat Partipant Functions
-- choir.architect: defines intent (rules, constraints)
-- choir.analyst:   interprets code/tasks
-- choir.enforcer:  guarantees compliance (hard + soft)
+> Chat must compile into YAML. YAML is the only source of truth.
 
-choir.enforcer is the only authoritative gate.
+---
 
-The enforcer pipeline:
+### 2. State Plane (Derived, Reproducible)
+- Format: JSON
+- Owned by: System (Enforcer)
+- Contains:
+  - AST indexes
+  - Symbol graphs
+  - Violations
+  - Metrics
+  - Dependency graph
+- Properties:
+  - Fully reproducible from (workspace + YAML)
+  - No user edits
 
-    Input (task + workspace snapshot)  
-        ↓  
-    Context Builder  
-        ↓  
-    AST Enforcement        (hard guarantees)  
-        ↓  
-    Semantic Enforcement   (cross-file, type-aware)  
-        ↓  
-    Code Enforcement       (lint, patterns)  
-        ↓  
-    Strategy Enforcement   (LLM / intent alignment)  
-        ↓  
-    Conflict Resolver  
-        ↓  
-    Fix Engine  
-        ↓  
-    Output (diagnostics + patches + verdict)  
+---
 
-## Chat Usage
+### 3. Interaction Plane (Ephemeral Interface)
+- Format: Chat
+- Owned by: User + Agents
+- Used for:
+  - Authoring intent
+  - Triggering analysis
+  - Explaining results
 
-- @choir.architect add goal: build scalable auth
-- @choir.architect add constraint: no direct db access
-- @choir.analyst workspace summary
-- @choir.analyst find hotspots
+> Chat is not state. It is a compiler interface into the control plane.
 
-## Choir Agents
+---
 
-- Architect: defines intent
-- Analyst: understands reality
-- Enforcer: checks alignment
+# System Contract
 
-## Rule Editor for Enforcer
-
-    VSCode Webview (Rule Editor)  
-        ⇅ postMessage  
-    Extension Host (Controller)  
-        ⇅  
-    Choir Enforcer Pipeline  
-        ⇅  
-    Diagnostics + Fixes
-
-## TODOs
-- Introduce a dedicated AST enforcement phase
-    - Strategy-aware analysis
-    - Auto-refactoring suggestions (not just hotspots)
-- Use real parsers (TypeScript / Tree-sitter)
-- Define structured rules with fixers
-- Integrate into VSCode diagnostics
-
-## Notes
-- Within extension always resolve from context.extensionPath, not cwd
-- /media = dumb static assets
+```yaml
+YAML  = intent + constraints + policy
+JSON  = facts + computed state
+Chat  = interface (non-authoritative)

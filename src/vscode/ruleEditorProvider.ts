@@ -1,8 +1,10 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as vscode from "vscode";
-import { resolveRulesPath } from "./rulesPath.js";
+import { resolveControlPlanePath } from "./rulesPath.js";
+import { createDefaultControlPlane, readControlPlane, writeControlPlane } from "../choirManager.js";
 import yaml from "yaml";
+import { DSLRule } from "../dsl/types.js";
 
 
 export class RuleEditorProvider implements vscode.WebviewViewProvider {
@@ -54,36 +56,27 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private getDefaultRulesPath(): string | null {
+  private getDefaultControlPath(): string | null {
     const firstWorkspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!firstWorkspace) {
       return null;
     }
 
-    return path.join(firstWorkspace, ".choir", "rules.yaml");
-  }
-
-  private parseYamlRuleArray(rawContent: string): any[] {
-    try {
-      const parsed = yaml.parse(rawContent);
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
+    return path.join(firstWorkspace, ".choir", "choir.config.yaml");
   }
 
   private async saveDSL(dslText: string) {
-    const rulesPath = resolveRulesPath() ?? this.getDefaultRulesPath();
-    if (!rulesPath) {
+    const controlPath = resolveControlPlanePath() ?? this.getDefaultControlPath();
+    if (!controlPath) {
       return {
         ok: false,
         error: "No workspace folder is open.",
       };
     }
 
-    const previousContent = fs.existsSync(rulesPath)
-      ? fs.readFileSync(rulesPath, "utf-8")
-      : "";
+    const control = readControlPlane() ?? createDefaultControlPlane();
+    const existingRules = Array.isArray(control.policy?.rules) ? control.policy.rules : [];
+    const previousContent = yaml.stringify(existingRules);
 
     const tempPath = `${this.context.extensionPath}/.tmp.rules.save.yaml`;
     fs.writeFileSync(tempPath, dslText, "utf-8");
@@ -91,42 +84,36 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     const { loadDSLRules } = await import("../dsl/loader.js");
     const incomingRules = loadDSLRules(tempPath);
 
-    const incomingRawParsed = yaml.parse(dslText);
-    const incomingRawRules = Array.isArray(incomingRawParsed) ? incomingRawParsed : incomingRules;
-
-    let mergedRules: any[] = incomingRawRules;
+    let mergedRules: DSLRule[] = incomingRules;
     let saveMode: "replace-one" | "append-one" | "replace-all" | "no-op" = "replace-all";
     if (incomingRules.length === 1) {
-      const existingRules = fs.existsSync(rulesPath)
-        ? this.parseYamlRuleArray(previousContent)
-        : [];
+      const existingTypedRules = [...existingRules];
 
       const incomingRule = incomingRules[0];
-      const incomingRawRule = incomingRawRules[0] ?? incomingRule;
       const incomingId = typeof incomingRule?.id === "string" ? incomingRule.id : undefined;
       const selectedId = this.selectedRuleId;
 
       // Prefer matching incoming id; fallback to selected id to support id renames.
       const byIncomingIdIndex = incomingId
-        ? existingRules.findIndex((rule: any) => rule?.id === incomingId)
+        ? existingTypedRules.findIndex((rule) => rule?.id === incomingId)
         : -1;
       const bySelectedIdIndex = selectedId
-        ? existingRules.findIndex((rule: any) => rule?.id === selectedId)
+        ? existingTypedRules.findIndex((rule) => rule?.id === selectedId)
         : -1;
       const index = byIncomingIdIndex >= 0 ? byIncomingIdIndex : bySelectedIdIndex;
 
       if (index >= 0) {
-        existingRules[index] = incomingRawRule;
-        mergedRules = existingRules;
+        existingTypedRules[index] = incomingRule;
+        mergedRules = existingTypedRules;
         saveMode = "replace-one";
-      } else if (existingRules.length > 0) {
-        existingRules.push(incomingRawRule);
-        mergedRules = existingRules;
+      } else if (existingTypedRules.length > 0) {
+        existingTypedRules.push(incomingRule);
+        mergedRules = existingTypedRules;
         saveMode = "append-one";
       }
 
       console.log("RuleEditorProvider: save merge", {
-        rulesPath,
+        controlPath,
         incomingId,
         selectedId,
         byIncomingIdIndex,
@@ -142,9 +129,15 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       saveMode = "no-op";
     }
 
-    fs.mkdirSync(path.dirname(rulesPath), { recursive: true });
+    fs.mkdirSync(path.dirname(controlPath), { recursive: true });
     if (changed) {
-      fs.writeFileSync(rulesPath, nextContent, "utf-8");
+      writeControlPlane({
+        ...control,
+        policy: {
+          ...control.policy,
+          rules: incomingRules.length === 1 ? mergedRules : incomingRules,
+        },
+      });
     }
 
     this.pendingDsl = dslText;
@@ -155,12 +148,12 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
     return {
       ok: true,
-      path: rulesPath,
+      path: controlPath,
       mode: saveMode,
       changed,
       message: changed
-        ? `Rules saved (${saveMode}) to ${rulesPath}`
-        : `No file changes detected (${saveMode}) for ${rulesPath}`,
+        ? `Rules saved (${saveMode}) to ${controlPath}`
+        : `No file changes detected (${saveMode}) for ${controlPath}`,
     };
   }
 
@@ -224,17 +217,20 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
       fs.writeFileSync(tempPath, dslText);
 
-      const [{ runEnforcer }, { loadDSLRules }, { compileAndRegister }, { RuleRegistry }] = await Promise.all([
-        import("../core/pipeline.js"),
+      const [{ loadDSLRules }, { runPipelineForWorkspace }] = await Promise.all([
         import("../dsl/loader.js"),
-        import("../dsl/compiler.js"),
-        import("../rules/registry.js"),
+        import("../enforcer.js"),
       ]);
 
-      const registry = new RuleRegistry();
       const rules = loadDSLRules(tempPath);
-
-      compileAndRegister(rules, registry);
+      const baseControl = readControlPlane() ?? createDefaultControlPlane();
+      const validationControl = {
+        ...baseControl,
+        policy: {
+          ...baseControl.policy,
+          rules,
+        },
+      };
 
       const workspace = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       if (!workspace) {
@@ -266,12 +262,23 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       }
 
       console.log("Starting validation...", validationRoot);
-      await runEnforcer(validationRoot);
+      const result = await runPipelineForWorkspace({
+        controlPlane: validationControl,
+        root: validationRoot,
+        publishResultDiagnostics: true,
+      });
       console.log("Validation completed.");
+
+      if (!result) {
+        return {
+          ok: false,
+          error: "Unable to execute pipeline validation.",
+        };
+      }
 
       return {
         ok: true,
-        message: `DSL validated successfully against ${validationRoot}`,
+        message: `DSL validated against ${validationRoot}. Violations: ${result.violations.length}. State: ${result.statePath}`,
       };
     } catch (err: any) {
       return {

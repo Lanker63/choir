@@ -1,13 +1,13 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { StrategySchema, Strategy } from "./schema.js";
+import { ControlPlane, ControlPlaneSchema, CONTROL_PLANE_VERSION } from "./schema.js";
 import * as YAML from "yaml";
 
+type UnknownRecord = Record<string, unknown>;
+
 function getWorkspaceRoot(): string | undefined {
-    const folders = vscode.workspace.workspaceFolders;
-    if (!folders) return undefined;
-    return folders[0].uri.fsPath;
+    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
 export function getChoirPath(): string | undefined {
@@ -16,59 +16,83 @@ export function getChoirPath(): string | undefined {
     return path.join(root, ".choir");
 }
 
-// export async function initializeChoir() {
-//     const choirPath = getChoirPath();
-//     if (!choirPath) {
-//         vscode.window.showErrorMessage("No workspace open.");
-//         return;
-//     }
-
-//     if (!fs.existsSync(choirPath)) {
-//         fs.mkdirSync(choirPath);
-//     }
-
-//     const strategyFile = path.join(choirPath, "strategy.yaml");
-
-//     if (!fs.existsSync(strategyFile)) {
-//         const initial = {
-//             project: {
-//                 name: "My Project",
-//                 goals: []
-//             },
-//             standards: {},
-//             constraints: []
-//         };
-
-//         fs.writeFileSync(strategyFile, YAML.stringify(initial));
-//     }
-
-//     vscode.window.showInformationMessage("Choir initialized.");
-// }
-
-export function readStrategy(): Strategy | null {
-    const choirPath = getChoirPath();
-    if (!choirPath) return null;
-
-    const file = path.join(choirPath, "strategy.yaml");
-    if (!fs.existsSync(file)) return null;
-
-    const raw = fs.readFileSync(file, "utf-8");
-
-    try {
-        const parsed = YAML.parse(raw);
-        return StrategySchema.parse(parsed); // 🔥 strict validation
-    } catch (err: any) {
-        vscode.window.showErrorMessage("Invalid strategy.yaml: " + err.message);
-        return null;
-    }
+function isRecord(value: unknown): value is UnknownRecord {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-export function writeStrategy(data: Strategy) {
+function normalizedVersion(input: UnknownRecord): string {
+    const version = input.version;
+    return typeof version === "string" && version.trim().length > 0
+        ? version
+        : CONTROL_PLANE_VERSION;
+}
+
+function normalizeControlPlane(input: unknown): ControlPlane {
+    const base = isRecord(input) ? input : {};
+
+    return ControlPlaneSchema.parse({
+        ...base,
+        version: normalizedVersion(base),
+    });
+}
+
+export function getControlPlanePath(): string | null {
     const choirPath = getChoirPath();
-    if (!choirPath) return;
+    if (!choirPath) {
+        return null;
+    }
 
-    const file = path.join(choirPath, "strategy.yaml");
+    return path.join(choirPath, "choir.config.yaml");
+}
 
-    const validated = StrategySchema.parse(data); // enforce shape
-    fs.writeFileSync(file, YAML.stringify(validated));
+export function readControlPlane(): ControlPlane | null {
+    const controlPath = getControlPlanePath();
+    if (!controlPath) return null;
+
+    if (!fs.existsSync(controlPath)) {
+        const initial = createDefaultControlPlane();
+        writeControlPlane(initial);
+        return initial;
+    }
+
+    const raw = fs.readFileSync(controlPath, "utf-8");
+    return normalizeControlPlane(YAML.parse(raw));
+}
+
+export function writeControlPlane(data: ControlPlane) {
+    const controlPath = getControlPlanePath();
+    if (!controlPath) {
+        return;
+    }
+
+    const validated = normalizeControlPlane(data);
+
+    fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+    fs.writeFileSync(controlPath, YAML.stringify(validated), "utf-8");
+}
+
+export function updateControlPlane(updater: (current: ControlPlane) => ControlPlane): ControlPlane | null {
+    const current = readControlPlane();
+    if (!current) {
+        return null;
+    }
+
+    // Serialize + parse to ensure immutable update input and deterministic writes.
+    const clone = JSON.parse(JSON.stringify(current)) as ControlPlane;
+    const updated = updater(clone);
+    writeControlPlane(updated);
+    return updated;
+}
+
+export function createDefaultControlPlane(): ControlPlane {
+    return {
+        version: CONTROL_PLANE_VERSION,
+        intent: {
+            goals: [],
+            constraints: []
+        },
+        policy: {
+            rules: []
+        }
+    };
 }

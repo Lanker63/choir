@@ -1,0 +1,18 @@
+version: "1.0.0"
+intent:
+  goals:
+    - secure services
+  constraints:
+    - no direct db access
+policy:
+  rules:
+    - id: explicit-no-console
+      description: Disallow console logging
+      priority: 1
+      match:
+        callExpressions:
+          - console.log
+      constraint:
+        type: forbid
+      message: Console logging is forbidden
+      severity: warn

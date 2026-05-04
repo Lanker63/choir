@@ -1,0 +1,19 @@
+version: "1.0.0"
+intent:
+  goals:
+    - security hardening
+  constraints:
+    - no eval
+    - no direct db access
+policy:
+  rules:
+    - id: explicit-no-fs-import
+      description: Disallow fs imports
+      priority: 5
+      match:
+        imports:
+          - fs
+      constraint:
+        type: forbid
+      message: Do not import fs directly
+      severity: error

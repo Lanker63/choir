@@ -1,0 +1,17 @@
+version: "1.0.0"
+intent:
+  goals:
+    - maintain layering
+  constraints: []
+policy:
+  rules:
+    - id: explicit-no-fs-import
+      description: Disallow fs imports
+      priority: 10
+      match:
+        imports:
+          - fs
+      constraint:
+        type: forbid
+      message: Do not import fs directly
+      severity: error

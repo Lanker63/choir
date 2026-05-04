@@ -1,0 +1,7 @@
+{
+  "expectedViolations": 1,
+  "expectedStructureDiff": {
+    "removedNodeIds": [],
+    "addedNodeIds": []
+  }
+}

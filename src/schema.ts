@@ -1,23 +1,17 @@
 import { z } from "zod";
+import { DSLRuleSchema } from "./dsl/types.js";
 
-export const StrategySchema = z.object({
-    project: z.object({
-        name: z.string().min(1),
-        goals: z.array(z.string()).default([])
-    }),
+export const CONTROL_PLANE_VERSION = "1.0.0";
 
-    standards: z.object({
-        language: z.enum(["typescript", "javascript"]).optional(),
-        linting: z.string().optional(),
-        testing: z.string().optional()
-    }).default({}),
+export const ControlPlaneSchema = z.object({
+    version: z.string().min(1),
+    intent: z.object({
+        goals: z.array(z.string()).default([]),
+        constraints: z.array(z.string()).default([])
+    }).strict(),
+    policy: z.object({
+        rules: z.array(DSLRuleSchema).default([])
+    }).strict()
+}).strict();
 
-    constraints: z.array(z.string()).default([]),
-
-    architecture: z.object({
-        layers: z.array(z.string()).default([]),
-        rules: z.array(z.string()).default([])
-    }).default({ layers: [], rules: [] })
-});
-
-export type Strategy = z.infer<typeof StrategySchema>;
+export type ControlPlane = z.infer<typeof ControlPlaneSchema>;

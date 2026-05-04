@@ -2,13 +2,22 @@ import * as vscode from "vscode";
 import { registerAnalyst, registerArchitect, registerEnforcer } from "../chat.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
+import { runPipelineForWorkspace } from "../enforcer.js";
 
 function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Disposable) {
     context.subscriptions.push(disposable);
 }
 
 export function activate(context: vscode.ExtensionContext) {
-    console.log("Choir Strategy extension active");
+    console.log("Choir extension active");
+
+    const triggerPipeline = async () => {
+        try {
+            await runPipelineForWorkspace();
+        } catch (error) {
+            console.error("Choir: pipeline execution failed", error);
+        }
+    };
     
     try {
         const provider = new RuleEditorProvider(context);
@@ -17,13 +26,21 @@ export function activate(context: vscode.ExtensionContext) {
         addSubscription(context, vscode.window.registerWebviewViewProvider("choir.ruleEditor", provider));
 
         // Register tree provider for the activity view that lists rules
-        const tree = new RuleTreeProvider(context);
+        const tree = new RuleTreeProvider();
         addSubscription(context, vscode.window.registerTreeDataProvider("choir.ruleList", tree));
         // expose refresh command for the Rules view
         addSubscription(context, vscode.commands.registerCommand("choir.refreshRules", () => tree.refresh()));
 
         // Auto-refresh rules when workspace folders change
-        addSubscription(context, vscode.workspace.onDidChangeWorkspaceFolders(() => tree.refresh()));
+        addSubscription(context, vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            tree.refresh();
+            void triggerPipeline();
+        }));
+
+        // Keep diagnostics in sync with edits through the unified pipeline.
+        addSubscription(context, vscode.workspace.onDidSaveTextDocument(() => {
+            void triggerPipeline();
+        }));
 
         // Command to open a selected rule in the webview panel
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorForRule", async (rule) => {
@@ -116,6 +133,8 @@ export function activate(context: vscode.ExtensionContext) {
     } catch (error) {
         console.error("Choir chat participants failed to register", error);
     }
+
+    void triggerPipeline();
 }
 
 export function deactivate() {}

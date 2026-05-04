@@ -2,18 +2,19 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 
-export function resolveRulesPath(): string | null {
+const CONTROL_PLANE_FILE_NAMES = ["choir.config.yaml", "choir.config.yml"] as const;
+
+function controlPlaneCandidates(root: string): string[] {
+  return CONTROL_PLANE_FILE_NAMES.map((name) => path.join(root, ".choir", name));
+}
+
+export function resolveControlPlanePath(): string | null {
   const workspaces = vscode.workspace.workspaceFolders ?? [];
   if (workspaces.length === 0) return null;
 
   for (const workspace of workspaces) {
     const root = workspace.uri.fsPath;
-    const candidates = [
-      path.join(root, ".choir", "rules.yaml"),
-      path.join(root, ".choir", "rules.yml"),
-      path.join(root, "rules.yaml"),
-      path.join(root, "rules.yml"),
-    ];
+    const candidates = controlPlaneCandidates(root);
 
     for (const file of candidates) {
       if (fs.existsSync(file)) {
