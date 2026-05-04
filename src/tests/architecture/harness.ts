@@ -7,7 +7,7 @@ import { applyChatToControlPlane } from "../../chatCompiler.js";
 import { buildWorkspaceSnapshot } from "../../core/context.js";
 import { PipelineResult, runPipeline } from "../../core/pipeline.js";
 import { materializeStatePlane, StatePlane } from "../../core/state.js";
-import { Violation } from "../../core/types.js";
+import { Diagnostic } from "../../core/types.js";
 import { ControlPlane, ControlPlaneSchema } from "../../schema.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -15,8 +15,6 @@ const __dirname = path.dirname(__filename);
 
 export const repoRoot = path.resolve(__dirname, "../../..");
 export const fixturesRoot = path.join(repoRoot, "test-fixtures");
-
-export type Diagnostic = Violation;
 
 export type Harness = {
   loadControlPlane(): ControlPlane;
@@ -66,7 +64,7 @@ class ChoirHarness implements Harness {
       workspace: buildWorkspaceSnapshot(this.root),
     });
 
-    this.diagnostics = [...result.violations];
+    this.diagnostics = [...result.diagnostics];
     return result;
   }
 
@@ -216,7 +214,10 @@ function canonicalizeState(root: string, state: StatePlane): StatePlane {
     symbolGraph: relativizeRecord(root, state.symbolGraph),
     violations: state.violations.map((violation) => ({
       ...violation,
-      file: toPortableRelativePath(root, violation.file),
+      location: {
+        ...violation.location,
+        file: toPortableRelativePath(root, violation.location.file),
+      },
     })),
     metrics: { ...state.metrics },
     dependencyGraph: relativizeRecord(root, state.dependencyGraph),

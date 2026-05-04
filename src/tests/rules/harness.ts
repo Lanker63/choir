@@ -154,6 +154,7 @@ function runRuleTest(ruleId: string): void {
     sourceFile,
     normalizedAst: createReadonlyNormalizedAST(normalized),
     semanticGraph: createReadonlySemanticGraph(semanticBuild.graph),
+    traceId: `rule-harness:${ruleId}`,
     resolveNodeId(node) {
       return normalized.nodeIdByNode.get(node);
     },
@@ -169,16 +170,17 @@ function runRuleTest(ruleId: string): void {
   );
 
   assert.strictEqual(
-    firstResult.violations.length,
+    firstResult.diagnostics.length,
     golden.test.expectedViolations,
-    `Rule ${ruleId} expected ${golden.test.expectedViolations} violations but got ${firstResult.violations.length}`
+    `Rule ${ruleId} expected ${golden.test.expectedViolations} violations but got ${firstResult.diagnostics.length}`
   );
 
   let emittedCode = golden.test.input;
   let normalizedAfter = normalized;
+  const patches = (firstResult.fixes ?? []).flatMap((fix) => fix.patches);
 
-  if (firstResult.patches && firstResult.patches.length > 0) {
-    const applyResult = applyPatchesWithRoundTrip(sourceFile, normalized, firstResult.patches);
+  if (patches.length > 0) {
+    const applyResult = applyPatchesWithRoundTrip(sourceFile, normalized, patches);
 
     assert.strictEqual(
       applyResult.patchValidation.ok,

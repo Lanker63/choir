@@ -1,6 +1,7 @@
 import { EnforcementContext } from "../core/context.js";
-import { Violation } from "../core/types.js";
+import { Diagnostic } from "../core/types.js";
 import ts from "typescript";
+import path from "path";
 import { NormalizedAST } from "../ast/model.js";
 import {
   SemanticBuildResult,
@@ -8,56 +9,74 @@ import {
   buildSemanticGraph,
   createEmptySemanticGraph,
 } from "./graph.js";
+import { makeDiagnosticId, sortDiagnostics, sourceLocationFromOffsets } from "../core/diagnostics.js";
 
 export interface SemanticRunResult {
-  violations: Violation[];
+  diagnostics: Diagnostic[];
   semanticGraph: SemanticGraph;
-  diagnostics: readonly ts.Diagnostic[];
+  semanticDiagnostics: readonly ts.Diagnostic[];
 }
 
-function toViolation(diagnostic: ts.Diagnostic): Violation {
-  const file = diagnostic.file?.fileName ?? "unknown";
+function toStableFilePath(root: string, filePath: string): string {
+  const relative = path.relative(root, filePath).split(path.sep).join("/");
+  if (relative.startsWith("../") || path.isAbsolute(relative)) {
+    return filePath.split(path.sep).join("/");
+  }
+
+  return relative;
+}
+
+function toDiagnostic(
+  diagnostic: ts.Diagnostic,
+  traceId: string,
+  index: number,
+  workspaceRoot: string
+): Diagnostic {
+  const file = diagnostic.file?.fileName
+    ? toStableFilePath(workspaceRoot, diagnostic.file.fileName)
+    : "unknown";
   const start = diagnostic.start ?? 0;
   const end = (diagnostic.start ?? 0) + (diagnostic.length ?? 1);
 
   return {
+    id: makeDiagnosticId(["semantic-diagnostic", file, start, end, index]),
     ruleId: "semantic-diagnostic",
     message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
-    file,
-    start,
-    end,
+    location: diagnostic.file
+      ? sourceLocationFromOffsets(diagnostic.file, file, start, end)
+      : {
+          file,
+          start: { line: 0, character: start },
+          end: { line: 0, character: end },
+        },
     severity: "error",
+    category: "semantic",
+    traceId,
   };
-}
-
-function sortViolations(violations: Violation[]): Violation[] {
-  return [...violations].sort((a, b) => {
-    if (a.file !== b.file) return a.file.localeCompare(b.file);
-    if (a.start !== b.start) return a.start - b.start;
-    if (a.end !== b.end) return a.end - b.end;
-    return a.message.localeCompare(b.message);
-  });
 }
 
 export function runSemantic(
   context: EnforcementContext,
   normalizedAsts: Record<string, NormalizedAST>,
+  traceId: string,
   prebuilt?: SemanticBuildResult
 ): SemanticRunResult {
   if (Object.keys(normalizedAsts).length === 0) {
     return {
-      violations: [],
-      semanticGraph: createEmptySemanticGraph(),
       diagnostics: [],
+      semanticGraph: createEmptySemanticGraph(),
+      semanticDiagnostics: [],
     };
   }
 
   const semanticBuild = prebuilt ?? buildSemanticGraph(context, normalizedAsts);
-  const violations = sortViolations(semanticBuild.diagnostics.map(toViolation));
+  const diagnostics = sortDiagnostics(
+    semanticBuild.diagnostics.map((diagnostic, index) => toDiagnostic(diagnostic, traceId, index, context.root))
+  );
 
   return {
-    violations,
+    diagnostics,
     semanticGraph: semanticBuild.graph,
-    diagnostics: semanticBuild.diagnostics,
+    semanticDiagnostics: semanticBuild.diagnostics,
   };
 }

@@ -1,16 +1,85 @@
 import ts from "typescript";
-import { NodeId, ValidationResult } from "../ast/model.js";
+import { ValidationResult } from "../ast/model.js";
+import { SourceLocation } from "../core/types.js";
 
 export type ASTNode = ts.Node;
 
-export type Patch = {
-  targetNodeId: NodeId;
-  operation: "replace" | "remove" | "insert";
-  payload?: ASTNode;
+export type Patch =
+  | ReplacePatch
+  | InsertPatch
+  | DeletePatch
+  | FilePatch;
+
+export type ReplacePatch = {
+  type: "replace";
+  location: SourceLocation;
+  text: string;
+  expectedText?: string;
+};
+
+export type InsertPatch = {
+  type: "insert";
+  location: SourceLocation;
+  text: string;
+  position: "before" | "after";
+};
+
+export type DeletePatch = {
+  type: "delete";
+  location: SourceLocation;
+  expectedText?: string;
+};
+
+export type FilePatch =
+  | CreateFilePatch
+  | DeleteFilePatch
+  | RenameFilePatch;
+
+export type CreateFilePatch = {
+  type: "create-file";
+  file: string;
+  content: string;
+};
+
+export type DeleteFilePatch = {
+  type: "delete-file";
+  file: string;
+};
+
+export type RenameFilePatch = {
+  type: "rename-file";
+  from: string;
+  to: string;
+};
+
+export type Fix = {
+  id: string;
+  ruleId: string;
+  title: string;
+  description?: string;
+  diagnosticIds: string[];
+  patches: Patch[];
+  isPreferred?: boolean;
+  isSafe?: boolean;
+  requiresConfirmation?: boolean;
+  conflictsWith?: string[];
+  traceId: string;
+};
+
+export type PatchResult = {
+  patchId: string;
+  success: boolean;
+  error?: string;
+};
+
+export type FixConflict = {
+  fixA: string;
+  fixB: string;
+  reason: "overlapping-range" | "semantic-conflict" | "rule-priority";
 };
 
 export interface PatchValidationIssue {
-  targetNodeId: NodeId;
+  patchId: string;
   message: string;
 }
 
@@ -25,9 +94,14 @@ export interface PatchApplyResult {
   validation: ValidationResult;
   patchValidation: PatchValidationResult;
   roundTripSafe: boolean;
+  results?: PatchResult[];
 }
 
 export interface StructureDiff {
-  removedNodeIds: NodeId[];
-  addedNodeIds: NodeId[];
+  removedNodeIds: string[];
+  addedNodeIds: string[];
+}
+
+export function isTextPatch(patch: Patch): patch is ReplacePatch | InsertPatch | DeletePatch {
+  return patch.type === "replace" || patch.type === "insert" || patch.type === "delete";
 }

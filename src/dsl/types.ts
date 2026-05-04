@@ -1,11 +1,18 @@
 import { z } from "zod";
 import ts from "typescript";
-import { Violation } from "../core/types.js";
+import { Diagnostic } from "../core/types.js";
 import { NodeId, ReadonlyNormalizedAST } from "../ast/model.js";
 import { ReadonlySemanticGraph } from "../semantic/graph.js";
-import { Patch } from "../fix/types.js";
+import { Fix } from "../fix/types.js";
 
-export const DSLSeverityValues = ["error", "warn", "info"] as const;
+export const DSLSeverityValues = [
+  "error",
+  "warn",
+  "warning",
+  "info",
+  "information",
+  "hint",
+] as const;
 
 export const DSLRuleSchema = z.object({
   id: z.string().min(1),
@@ -48,12 +55,13 @@ export interface RuleContext {
   sourceFile: ts.SourceFile;
   normalizedAst: ReadonlyNormalizedAST;
   semanticGraph: ReadonlySemanticGraph;
+  traceId: string;
   resolveNodeId(node: ts.Node): NodeId | undefined;
 }
 
 export interface RuleResult {
-  violations: Violation[];
-  patches?: Patch[];
+  diagnostics: Diagnostic[];
+  fixes?: Fix[];
 }
 
 /**

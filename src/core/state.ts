@@ -1,6 +1,6 @@
 import fs from "fs";
 import path from "path";
-import { Violation } from "./types.js";
+import { Diagnostic } from "./types.js";
 
 export type AST = {
   rootNodeId: string;
@@ -18,7 +18,7 @@ export type Graph = Record<string, string[]>;
 export type StatePlane = {
   astIndex: Record<string, AST>;
   symbolGraph: SymbolGraph;
-  violations: Violation[];
+  violations: Diagnostic[];
   metrics: Record<string, number>;
   dependencyGraph: Graph;
 };
@@ -57,11 +57,17 @@ function sortAstIndex(astIndex: Record<string, AST>): Record<string, AST> {
   return Object.fromEntries(entries);
 }
 
-function sortViolations(violations: Violation[]): Violation[] {
+function sortViolations(violations: Diagnostic[]): Diagnostic[] {
   return [...violations].sort((a, b) => {
-    if (a.file !== b.file) return a.file.localeCompare(b.file);
-    if (a.start !== b.start) return a.start - b.start;
-    if (a.end !== b.end) return a.end - b.end;
+    if (a.location.file !== b.location.file) return a.location.file.localeCompare(b.location.file);
+    if (a.location.start.line !== b.location.start.line) return a.location.start.line - b.location.start.line;
+    if (a.location.start.character !== b.location.start.character) {
+      return a.location.start.character - b.location.start.character;
+    }
+    if (a.location.end.line !== b.location.end.line) return a.location.end.line - b.location.end.line;
+    if (a.location.end.character !== b.location.end.character) {
+      return a.location.end.character - b.location.end.character;
+    }
     if (a.ruleId !== b.ruleId) return a.ruleId.localeCompare(b.ruleId);
     return a.message.localeCompare(b.message);
   });

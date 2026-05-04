@@ -77,7 +77,7 @@ Try:
             }
 
             stream.markdown(
-                `✅ Control plane updated and pipeline executed. Violations: ${pipelineResult.violations.length}`
+                `✅ Control plane updated and pipeline executed. Diagnostics: ${pipelineResult.diagnostics.length}`
             );
         }
     );
@@ -99,14 +99,16 @@ export function registerEnforcer(context: vscode.ExtensionContext) {
             return;
         }
 
-        if (result.violations.length === 0) {
+        if (result.diagnostics.length === 0) {
             stream.markdown("✅ Clean");
             return;
         }
 
         stream.markdown(
-            "⛔ Pipeline reported violations:\n\n" +
-            result.violations.map((violation) => `- [${violation.ruleId}] ${violation.message} (${violation.file})`).join("\n")
+            "⛔ Pipeline reported diagnostics:\n\n" +
+            result.diagnostics
+                .map((diagnostic) => `- [${diagnostic.ruleId}] ${diagnostic.message} (${diagnostic.location.file})`)
+                .join("\n")
         );
     });
 }

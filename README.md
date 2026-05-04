@@ -140,12 +140,17 @@ Reads and writes your control plane. Use it to evolve your policy through natura
 | `Show control plane` | Prints the current `.choir/choir.config.yaml` as YAML. |
 | `Set mission: ...` | Updates the top-level mission statement. |
 | `Set vision: ...` | Updates the top-level vision statement. |
-| `Add non-goal: ...` | Appends a non-goal if it does not already exist. |
-| `Remove non-goal: ...` | Removes the matching non-goal. |
+| `Add non-goal: some non-goal` | Appends a non-goal if it does not already exist. |
+| `Add non-goals: one non-goal, another non-goal` | Appends multiple non-goals if they do not already exist |
+| `Remove non-goal: some non-goal` | Removes the matching non-goal. |
+| `Remove non-goals: one non-goal, another non-goal` | Removes multiple non-goals |
 | `Add goal: Build auth system` | Appends an entry to `intent.goals`. |
+| `Add goals: Build auth system, create user list` | Appends multiple entries to `intent.goals`. |
 | `Add constraint: no direct db access` | Appends an entry to `intent.constraints`. |
+| `Add constraints: no direct db access, no caching` | Appends multiple entries to `intent.constraints`. |
 | `Remove goal: Build auth system` | Removes the matching goal. |
 | `Remove constraint: no direct db access` | Removes the matching constraint. |
+| `Remove constraints: no direct db access, no caching` | Removes the matching constraints. |
 
 After every update the Architect re-runs the enforcement pipeline and reports the violation count.
 

@@ -1,42 +1,80 @@
 import ts from "typescript";
 import {
   AST,
-  NodeId,
   NormalizedAST,
   normalizeAST,
   validateNormalizedAST,
 } from "../ast/model.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
-import { Violation } from "../core/types.js";
+import { Diagnostic } from "../core/types.js";
 import {
+  DeletePatch,
+  Fix,
+  FilePatch,
+  InsertPatch,
   Patch,
   PatchApplyResult,
+  PatchResult,
   PatchValidationResult,
+  ReplacePatch,
   StructureDiff,
+  isTextPatch,
 } from "./types.js";
+import { locationToOffsetRange } from "../core/diagnostics.js";
 
-function validatePatch(normalizedAst: NormalizedAST, patch: Patch): string[] {
+function patchIdForIndex(index: number): string {
+  return `patch-${index + 1}`;
+}
+
+function validateFilePatch(patch: FilePatch): string[] {
   const errors: string[] = [];
-  const targetNode = normalizedAst.nodeById.get(patch.targetNodeId);
 
-  if (!targetNode) {
-    errors.push(`Target node ${patch.targetNodeId} does not exist`);
+  if (patch.type === "create-file" && patch.content.length === 0) {
+    errors.push("create-file patch content cannot be empty");
+  }
+
+  if (patch.type === "rename-file" && patch.from === patch.to) {
+    errors.push("rename-file patch requires distinct from/to paths");
+  }
+
+  return errors;
+}
+
+function validateTextPatchForFile(
+  sourceText: string,
+  normalizedAst: NormalizedAST,
+  patch: ReplacePatch | InsertPatch | DeletePatch
+): string[] {
+  const errors: string[] = [];
+
+  if (patch.location.file !== normalizedAst.filePath) {
+    errors.push(`Patch targets ${patch.location.file} but expected ${normalizedAst.filePath}`);
     return errors;
   }
 
-  if (patch.operation === "remove" && patch.targetNodeId === normalizedAst.rootNodeId) {
-    errors.push("Cannot remove root SourceFile node");
+  let offsets: { start: number; end: number };
+  try {
+    offsets = locationToOffsetRange(sourceText, patch.location);
+  } catch (error) {
+    errors.push((error as Error).message);
+    return errors;
   }
 
-  if ((patch.operation === "replace" || patch.operation === "insert") && !patch.payload) {
-    errors.push(`Patch ${patch.operation} requires payload`);
+  if (offsets.start > offsets.end) {
+    errors.push("Patch location start must be <= end");
   }
 
-  if (patch.operation === "insert" && patch.payload) {
-    const insertable = ts.isSourceFile(targetNode) || ts.isBlock(targetNode);
-    const statementPayload = ts.isStatement(patch.payload);
-    if (!insertable || !statementPayload) {
-      errors.push("Insert is only supported for SourceFile/Block targets with statement payload");
+  if (patch.type === "replace" && patch.expectedText !== undefined) {
+    const actualText = sourceText.slice(offsets.start, offsets.end);
+    if (actualText !== patch.expectedText) {
+      errors.push("replace expectedText did not match source text");
+    }
+  }
+
+  if (patch.type === "delete" && patch.expectedText !== undefined) {
+    const actualText = sourceText.slice(offsets.start, offsets.end);
+    if (actualText !== patch.expectedText) {
+      errors.push("delete expectedText did not match source text");
     }
   }
 
@@ -44,12 +82,14 @@ function validatePatch(normalizedAst: NormalizedAST, patch: Patch): string[] {
 }
 
 export function validatePatches(normalizedAst: NormalizedAST, patches: Patch[]): PatchValidationResult {
-  const issues = patches.flatMap((patch) =>
-    validatePatch(normalizedAst, patch).map((message) => ({
-      targetNodeId: patch.targetNodeId,
-      message,
-    }))
-  );
+  const sourceText = normalizedAst.sourceFile.getFullText();
+  const issues = patches.flatMap((patch, index) => {
+    const errors = isTextPatch(patch)
+      ? validateTextPatchForFile(sourceText, normalizedAst, patch)
+      : validateFilePatch(patch);
+
+    return errors.map((message) => ({ patchId: patchIdForIndex(index), message }));
+  });
 
   return {
     ok: issues.length === 0,
@@ -58,55 +98,176 @@ export function validatePatches(normalizedAst: NormalizedAST, patches: Patch[]):
 }
 
 export function applyPatches(ast: AST, normalizedAst: NormalizedAST, patches: Patch[]): AST {
-  const frozenPatches = deepFreeze([...patches]);
-  const patchValidation = validatePatches(normalizedAst, frozenPatches);
-  if (!patchValidation.ok) {
-    const message = patchValidation.issues
-      .map((issue) => `${issue.targetNodeId}: ${issue.message}`)
-      .join(" | ");
-    throw new Error(`Invalid patch set: ${message}`);
+  const result = applyPatchesWithRoundTrip(ast, normalizedAst, patches);
+  if (!result.roundTripSafe) {
+    const reason = result.patchValidation.issues.map((issue) => issue.message).join(" | ");
+    throw new Error(`Invalid patch set: ${reason}`);
   }
 
-  const patchByTarget = new Map<NodeId, Patch>();
-  for (const patch of frozenPatches) {
-    patchByTarget.set(patch.targetNodeId, patch);
+  return result.ast;
+}
+
+type TextPatchOperation = {
+  patchId: string;
+  patch: ReplacePatch | InsertPatch | DeletePatch;
+  start: number;
+  end: number;
+  order: number;
+};
+
+function buildTextOperations(sourceText: string, patches: Patch[], filePath: string): TextPatchOperation[] {
+  const operations: TextPatchOperation[] = [];
+
+  for (let index = 0; index < patches.length; index += 1) {
+    const patch = patches[index];
+    if (!isTextPatch(patch) || patch.location.file !== filePath) {
+      continue;
+    }
+
+    const range = locationToOffsetRange(sourceText, patch.location);
+    const start = patch.type === "insert" && patch.position === "after" ? range.end : range.start;
+    const end = patch.type === "insert" ? start : range.end;
+
+    operations.push({
+      patchId: patchIdForIndex(index),
+      patch,
+      start,
+      end,
+      order: index,
+    });
   }
 
-  const transformer: ts.TransformerFactory<ts.SourceFile> = (transformContext) => {
-    const visit: ts.Visitor = (node: ts.Node): ts.VisitResult<ts.Node> => {
-      const nodeId = normalizedAst.nodeIdByNode.get(node);
-      const patch = nodeId ? patchByTarget.get(nodeId) : undefined;
+  return operations;
+}
 
-      if (patch) {
-        if (patch.operation === "remove") {
-          return undefined as unknown as ts.VisitResult<ts.Node>;
+function detectOverlaps(operations: TextPatchOperation[]): Set<string> {
+  const overlappingPatchIds = new Set<string>();
+  const sorted = [...operations].sort((left, right) => {
+    if (left.start !== right.start) {
+      return left.start - right.start;
+    }
+
+    if (left.end !== right.end) {
+      return left.end - right.end;
+    }
+
+    return left.order - right.order;
+  });
+
+  let previousEnd = -1;
+  for (const operation of sorted) {
+    const isInsert = operation.start === operation.end;
+    const overlaps = operation.start < previousEnd && !isInsert;
+
+    if (overlaps) {
+      overlappingPatchIds.add(operation.patchId);
+    }
+
+    previousEnd = Math.max(previousEnd, operation.end);
+  }
+
+  return overlappingPatchIds;
+}
+
+function applyTextPatchesToFile(
+  sourceText: string,
+  patches: Patch[],
+  filePath: string
+): { code: string; results: PatchResult[] } {
+  const operations = buildTextOperations(sourceText, patches, filePath);
+  const overlapping = detectOverlaps(operations);
+
+  let next = sourceText;
+  const results = new Map<string, PatchResult>();
+
+  const sortedForApply = [...operations].sort((left, right) => {
+    if (left.start !== right.start) {
+      return right.start - left.start;
+    }
+
+    if (left.end !== right.end) {
+      return right.end - left.end;
+    }
+
+    return right.order - left.order;
+  });
+
+  for (const operation of sortedForApply) {
+    if (overlapping.has(operation.patchId)) {
+      results.set(operation.patchId, {
+        patchId: operation.patchId,
+        success: false,
+        error: "overlapping-range",
+      });
+      continue;
+    }
+
+    try {
+      if (operation.patch.type === "replace") {
+        const actual = next.slice(operation.start, operation.end);
+        if (operation.patch.expectedText !== undefined && actual !== operation.patch.expectedText) {
+          throw new Error("replace expectedText did not match source text during apply");
         }
 
-        if (patch.operation === "replace" && patch.payload) {
-          return patch.payload;
-        }
-
-        if (patch.operation === "insert" && patch.payload) {
-          if (ts.isSourceFile(node) && ts.isStatement(patch.payload)) {
-            return ts.factory.updateSourceFile(node, [patch.payload, ...node.statements]);
-          }
-
-          if (ts.isBlock(node) && ts.isStatement(patch.payload)) {
-            return ts.factory.updateBlock(node, [patch.payload, ...node.statements]);
-          }
-        }
+        next = `${next.slice(0, operation.start)}${operation.patch.text}${next.slice(operation.end)}`;
       }
 
-      return ts.visitEachChild(node, visit, transformContext);
-    };
+      if (operation.patch.type === "delete") {
+        const actual = next.slice(operation.start, operation.end);
+        if (operation.patch.expectedText !== undefined && actual !== operation.patch.expectedText) {
+          throw new Error("delete expectedText did not match source text during apply");
+        }
 
-    return (sourceFile) => ts.visitNode(sourceFile, visit) as ts.SourceFile;
+        next = `${next.slice(0, operation.start)}${next.slice(operation.end)}`;
+      }
+
+      if (operation.patch.type === "insert") {
+        next = `${next.slice(0, operation.start)}${operation.patch.text}${next.slice(operation.start)}`;
+      }
+
+      results.set(operation.patchId, {
+        patchId: operation.patchId,
+        success: true,
+      });
+    } catch (error) {
+      results.set(operation.patchId, {
+        patchId: operation.patchId,
+        success: false,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  for (let index = 0; index < patches.length; index += 1) {
+    const patch = patches[index];
+    const patchId = patchIdForIndex(index);
+
+    if (results.has(patchId)) {
+      continue;
+    }
+
+    if (!isTextPatch(patch)) {
+      results.set(patchId, {
+        patchId,
+        success: false,
+        error: `${patch.type} is not supported for in-memory AST round-trip`,
+      });
+      continue;
+    }
+
+    if (patch.location.file !== filePath) {
+      results.set(patchId, {
+        patchId,
+        success: false,
+        error: `Patch targets ${patch.location.file} but expected ${filePath}`,
+      });
+    }
+  }
+
+  return {
+    code: next,
+    results: [...results.values()].sort((left, right) => left.patchId.localeCompare(right.patchId)),
   };
-
-  const transformed = ts.transform(ast, [transformer]);
-  const nextAst = transformed.transformed[0] as ts.SourceFile;
-  transformed.dispose();
-  return nextAst;
 }
 
 export function compareASTStructure(before: NormalizedAST, after: NormalizedAST): StructureDiff {
@@ -132,7 +293,8 @@ export function applyPatchesWithRoundTrip(
   normalizedAst: NormalizedAST,
   patches: Patch[]
 ): PatchApplyResult {
-  const patchValidation = validatePatches(normalizedAst, patches);
+  const frozenPatches = deepFreeze([...patches]);
+  const patchValidation = validatePatches(normalizedAst, frozenPatches);
   if (!patchValidation.ok) {
     return {
       ast,
@@ -149,9 +311,8 @@ export function applyPatchesWithRoundTrip(
     };
   }
 
-  const transformedAst = applyPatches(ast, normalizedAst, patches);
-  const printer = ts.createPrinter({ newLine: ts.NewLineKind.LineFeed });
-  const emittedCode = printer.printFile(transformedAst);
+  const fileApply = applyTextPatchesToFile(ast.getFullText(), frozenPatches, normalizedAst.filePath);
+  const emittedCode = fileApply.code;
 
   const reparsed = ts.createSourceFile(
     ast.fileName,
@@ -162,16 +323,18 @@ export function applyPatchesWithRoundTrip(
 
   const normalizedReparsed = normalizeAST(reparsed, ast.fileName);
   const validation = validateNormalizedAST(normalizedReparsed);
+  const roundTripSafe = validation.ok && fileApply.results.every((result) => result.success);
 
   return {
     ast: reparsed,
     code: emittedCode,
     validation,
     patchValidation,
-    roundTripSafe: validation.ok,
+    roundTripSafe,
+    results: fileApply.results,
   };
 }
 
-export function generateFixes(_violations: Violation[]): Patch[] {
+export function generateFixes(_diagnostics: Diagnostic[]): Fix[] {
   return [];
 }

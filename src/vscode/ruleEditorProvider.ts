@@ -278,7 +278,7 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
       return {
         ok: true,
-        message: `DSL validated against ${validationRoot}. Violations: ${result.violations.length}. State: ${result.statePath}`,
+        message: `DSL validated against ${validationRoot}. Diagnostics: ${result.diagnostics.length}. State: ${result.statePath}`,
       };
     } catch (err: any) {
       return {

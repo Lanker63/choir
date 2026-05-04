@@ -3,7 +3,7 @@ import { ControlPlane } from "./schema.js";
 import { readControlPlane } from "./choirManager.js";
 import { buildWorkspaceSnapshot } from "./core/context.js";
 import { PipelineResult, runPipeline } from "./core/pipeline.js";
-import { publishDiagnostics } from "./vscode/diagnostics.js";
+import { publishDiagnostics, publishFixes } from "./vscode/diagnostics.js";
 
 export interface RunPipelineOptions {
   controlPlane?: ControlPlane;
@@ -32,7 +32,8 @@ export async function runPipelineForWorkspace(options: RunPipelineOptions = {}):
   });
 
   if (options.publishResultDiagnostics !== false) {
-    publishDiagnostics(result.violations);
+    publishDiagnostics(result.diagnostics);
+    publishFixes(result.fixes);
   }
 
   return result;

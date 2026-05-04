@@ -2,7 +2,8 @@ import ts from "typescript";
 import { DSLRule, ASTRule, RuleContext } from "./types.js";
 import { RuleRegistry } from "../rules/registry.js";
 import { ControlPlane } from "../schema.js";
-import { Violation } from "../core/types.js";
+import { Diagnostic, normalizeDiagnosticSeverity } from "../core/types.js";
+import { makeDiagnosticId, sourceLocationFromOffsets } from "../core/diagnostics.js";
 import { visitDepthFirst } from "../ast/visitor.js";
 
 export type Rule = ASTRule;
@@ -65,7 +66,7 @@ function deriveIntentRules(control: ControlPlane): DSLRule[] {
           type: "forbid",
         },
         message: "Intent violation: console.log usage is forbidden",
-        severity: "warn",
+        severity: "warning",
       });
       continue;
     }
@@ -101,7 +102,7 @@ function deriveIntentRules(control: ControlPlane): DSLRule[] {
         type: "forbid"
       },
       message: `Goal violation: secure goal disallows eval-style execution (${goal})`,
-      severity: "warn"
+      severity: "warning"
     });
   }
 
@@ -135,8 +136,28 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
     priority: rule.priority ?? 100,
 
     evaluate(context: RuleContext) {
-      const violations: Violation[] = [];
+      const diagnostics: Diagnostic[] = [];
       const { filePath, sourceFile } = context;
+
+      let diagnosticIndex = 0;
+
+      const emitDiagnostic = (node: ts.Node, message: string) => {
+        const start = node.getStart(sourceFile);
+        const end = node.getEnd();
+        const location = sourceLocationFromOffsets(sourceFile, filePath, start, end);
+
+        diagnostics.push({
+          id: makeDiagnosticId([rule.id, filePath, location.start.line, location.start.character, diagnosticIndex]),
+          ruleId: rule.id,
+          message,
+          severity: normalizeDiagnosticSeverity(rule.severity ?? "error"),
+          location,
+          category: "AST",
+          traceId: context.traceId,
+        });
+
+        diagnosticIndex += 1;
+      };
 
       visitDepthFirst(sourceFile, (node) => {
         const nodeId = context.resolveNodeId(node);
@@ -151,14 +172,7 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
           );
 
           if (matched && rule.constraint.type === "forbid") {
-            violations.push({
-              ruleId: rule.id,
-              message: rule.message,
-              file: filePath,
-              start: node.getStart(),
-              end: node.getEnd(),
-              severity: rule.severity ?? "error",
-            });
+            emitDiagnostic(node, rule.message);
           }
         }
 
@@ -175,20 +189,13 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
             rule.constraint.type === "forbid"
           ) {
             const typeInfo = nodeType ? ` (type: ${context.semanticGraph.getType(nodeId!)?.flags ?? "unknown"})` : "";
-            violations.push({
-              ruleId: rule.id,
-              message: `${rule.message}${typeInfo}`,
-              file: filePath,
-              start: node.getStart(),
-              end: node.getEnd(),
-              severity: rule.severity ?? "error",
-            });
+            emitDiagnostic(node, `${rule.message}${typeInfo}`);
           }
         }
       });
 
       return {
-        violations,
+        diagnostics,
       };
     },
   };
