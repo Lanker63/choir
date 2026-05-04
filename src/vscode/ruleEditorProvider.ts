@@ -63,6 +63,15 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     return path.join(firstWorkspace, ".choir", "rules.yaml");
   }
 
+  private parseYamlRuleArray(rawContent: string): any[] {
+    try {
+      const parsed = yaml.parse(rawContent);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
   private async saveDSL(dslText: string) {
     const rulesPath = resolveRulesPath() ?? this.getDefaultRulesPath();
     if (!rulesPath) {
@@ -88,23 +97,12 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     let mergedRules: any[] = incomingRawRules;
     let saveMode: "replace-one" | "append-one" | "replace-all" | "no-op" = "replace-all";
     if (incomingRules.length === 1) {
-      let existingRules: any[] = [];
-      if (fs.existsSync(rulesPath)) {
-        try {
-          const existingRawParsed = yaml.parse(previousContent);
-          existingRules = Array.isArray(existingRawParsed) ? existingRawParsed : [];
-        } catch {
-          try {
-            const fallbackParsed = yaml.parse(previousContent);
-            existingRules = Array.isArray(fallbackParsed) ? fallbackParsed : [];
-          } catch {
-            existingRules = [];
-          }
-        }
-      }
+      const existingRules = fs.existsSync(rulesPath)
+        ? this.parseYamlRuleArray(previousContent)
+        : [];
 
       const incomingRule = incomingRules[0];
-      const incomingRawRule = Array.isArray(incomingRawRules) ? incomingRawRules[0] : incomingRule;
+      const incomingRawRule = incomingRawRules[0] ?? incomingRule;
       const incomingId = typeof incomingRule?.id === "string" ? incomingRule.id : undefined;
       const selectedId = this.selectedRuleId;
 

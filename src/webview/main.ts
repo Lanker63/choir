@@ -15,6 +15,9 @@ if (!(editorRoot instanceof HTMLElement) || !(output instanceof HTMLElement)) {
   throw new Error("Rule editor webview is missing required DOM elements.");
 }
 
+const editorElement: HTMLElement = editorRoot;
+const outputElement: HTMLElement = output;
+
 let editor: monaco.editor.IStandaloneCodeEditor;
 
 function postMessageSafe(message: any) {
@@ -24,22 +27,6 @@ function postMessageSafe(message: any) {
   }
 
   vscode.postMessage(message);
-}
-
-function initEditor() {
-    console.log("editorRoot:", editorRoot);
-  editor = createRuleEditor(editorRoot!, "");
-    const debouncedValidate = debounce(() => {
-        postMessageSafe({
-            type: "validate",
-            dsl: editor.getValue(),
-        });
-    }, 400);
-
-    editor.onDidChangeModelContent(debouncedValidate);
-    setTimeout(() => {
-        editor.layout();
-    }, 0);
 }
 
 function debounce<T extends (...args: any[]) => void>(callback: T, waitMs = 300): (...args: Parameters<T>) => void {
@@ -54,6 +41,26 @@ function debounce<T extends (...args: any[]) => void>(callback: T, waitMs = 300)
       callback(...args);
     }, waitMs);
   };
+}
+
+function setOutputText(text: string) {
+  outputElement.textContent = text;
+}
+
+function initEditor() {
+  console.log("editorRoot:", editorRoot);
+  editor = createRuleEditor(editorElement, "");
+  const debouncedValidate = debounce(() => {
+    postMessageSafe({
+      type: "validate",
+      dsl: editor.getValue(),
+    });
+  }, 400);
+
+  editor.onDidChangeModelContent(debouncedValidate);
+  setTimeout(() => {
+    editor.layout();
+  }, 0);
 }
 
 export function wireSave() {
@@ -85,18 +92,18 @@ export function wireIncoming() {
 
     if (type === "result") {
       if (error) {
-        output!.textContent = "ERROR:\n" + error;
+        setOutputText("ERROR:\n" + error);
         return;
       }
 
-      output!.textContent = JSON.stringify(payload, null, 2);
+      setOutputText(JSON.stringify(payload, null, 2));
     }
 
     if (type === "saved") {
       const message = typeof payload?.message === "string" ? payload.message : "Rules saved";
       const mode = payload?.mode ? ` (${payload.mode})` : "";
       const path = payload?.path ? `\n${payload.path}` : "";
-      output!.textContent = `✅ ${message}${mode}${path}`;
+      setOutputText(`✅ ${message}${mode}${path}`);
     }
   });
 }

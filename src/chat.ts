@@ -4,14 +4,29 @@ import { readStrategy, writeStrategy } from "./choirManager.js";
 import { enforceStrategy, enforceCode } from "./enforcer.js";
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
 
-export function registerArchitect(context: vscode.ExtensionContext) {
-    if (!vscode.chat?.createChatParticipant) {
-        console.warn("Choir Architect chat participant API is unavailable");
+type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
+
+function registerParticipant(
+    context: vscode.ExtensionContext,
+    id: string,
+    displayName: string,
+    handler: ChatParticipantHandler
+) {
+    const createParticipant = vscode.chat?.createChatParticipant;
+    if (!createParticipant) {
+        console.warn(`${displayName} chat participant API is unavailable`);
         return;
     }
 
-    const architect = vscode.chat.createChatParticipant(
+    const participant = createParticipant(id, handler);
+    context.subscriptions.push(participant);
+}
+
+export function registerArchitect(context: vscode.ExtensionContext) {
+    registerParticipant(
+        context,
         "choir.architect",
+        "Choir Architect",
         async (request, ctx, stream) => {
             const raw = (request as any).prompt ?? "";
             const message = raw.toLowerCase();
@@ -69,17 +84,10 @@ Try:
             `);
         }
     );
-
-    context.subscriptions.push(architect);
 }
 
 export function registerEnforcer(context: vscode.ExtensionContext) {
-    if (!vscode.chat?.createChatParticipant) {
-        console.warn("Choir Enforcer chat participant API is unavailable");
-        return;
-    }
-
-    const enforcer = vscode.chat.createChatParticipant("choir.enforcer", async (request, context, stream) => {
+    registerParticipant(context, "choir.enforcer", "Choir Enforcer", async (request, context, stream) => {
         const userMessage = request.prompt;
         
         const result = enforceCode(userMessage);
@@ -99,17 +107,13 @@ export function registerEnforcer(context: vscode.ExtensionContext) {
         stream.markdown(results.length ? results.join("\n") : "✅ Clean");
         
     });
-    context.subscriptions.push(enforcer);
 }
 
 export function registerAnalyst(context: vscode.ExtensionContext) {
-    if (!vscode.chat?.createChatParticipant) {
-        console.warn("Choir Analyst chat participant API is unavailable");
-        return;
-    }
-
-    const analyst = vscode.chat.createChatParticipant(
+    registerParticipant(
+        context,
         "choir.analyst",
+        "Choir Analyst",
         async (request, ctx, stream) => {
             const message = ((request as any).prompt ?? "").toLowerCase();
 
@@ -155,6 +159,4 @@ Try:
             `);
         }
     );
-
-    context.subscriptions.push(analyst);
 }
