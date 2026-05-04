@@ -1,5 +1,5 @@
 import ts from "typescript";
-import { EnforcementContext } from "../core/context";
+import { EnforcementContext } from "../core/context.js";
 
 export function parseAST(context: EnforcementContext) {
   for (const file of context.files) {

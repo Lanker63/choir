@@ -1,4 +1,4 @@
-import { DSLRule } from "./types";
+import { DSLRule } from "./types.js";
 
 export function validateDSLStructure(rules: DSLRule[]) {
   const errors: string[] = [];

@@ -1,8 +1,8 @@
-import { EnforcementContext } from "../core/context";
-import { Violation } from "../core/types";
-import { parseAST } from "./parser";
+import { EnforcementContext } from "../core/context.js";
+import { Violation } from "../core/types.js";
+import { parseAST } from "./parser.js";
 import ts from "typescript";
-import { RuleRegistry } from "../rules/registry";
+import { RuleRegistry } from "../rules/registry.js";
 
 export function runAST(
   context: EnforcementContext,

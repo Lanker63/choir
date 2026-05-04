@@ -3,14 +3,25 @@ import * as fs from "fs";
 import * as vscode from "vscode";
 
 export class RuleEditorProvider implements vscode.WebviewViewProvider {
-  constructor(private context: vscode.ExtensionContext) {}
+  constructor(private context: vscode.ExtensionContext) {
+    console.log("RuleEditorProvider: constructed");
+  }
 
   resolveWebviewView(view: vscode.WebviewView) {
+    console.log("RuleEditorProvider: resolveWebviewView called for", view?.viewType ?? "unknown");
     view.webview.options = {
       enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.file(path.join(this.context.extensionPath, "media")),
+      ],
     };
 
-    view.webview.html = this.getHtml(view.webview);
+    try {
+      view.webview.html = this.getHtml(view.webview);
+    } catch (err) {
+      console.error("RuleEditorProvider: failed to set webview html", err);
+      view.webview.html = `<body><pre>Failed to load rule editor: ${err}</pre></body>`;
+    }
 
     view.webview.onDidReceiveMessage(async (msg) => {
       if (msg.type === "validate") {
@@ -30,10 +41,10 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       fs.writeFileSync(tempPath, dslText);
 
       const [{ runEnforcer }, { loadDSLRules }, { compileAndRegister }, { RuleRegistry }] = await Promise.all([
-        import("../core/pipeline"),
-        import("../dsl/loader"),
-        import("../dsl/compiler"),
-        import("../rules/registry"),
+        import("../core/pipeline.js"),
+        import("../dsl/loader.js"),
+        import("../dsl/compiler.js"),
+        import("../rules/registry.js"),
       ]);
 
       const registry = new RuleRegistry();
@@ -68,12 +79,22 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       vscode.Uri.file(path.join(mediaPath, "ruleEditor.css"))
     );
 
+    const monacoUri = webview.asWebviewUri(
+      vscode.Uri.file(path.join(mediaPath, "monaco"))
+    );
+
+    const monacoYamlEntryPath = path.join(mediaPath, "monaco-yaml", "index.js");
+    const hasMonacoYaml = fs.existsSync(monacoYamlEntryPath);
+
     const nonce = getNonce();
 
     html = html
       .replace(/__SCRIPT_URI__/g, scriptUri.toString())
       .replace(/__STYLE_URI__/g, styleUri.toString())
-      .replace(/__NONCE__/g, nonce);
+      .replace("__MONACO_BASE__", monacoUri.toString())
+      .replace("__HAS_MONACO_YAML__", hasMonacoYaml ? "true" : "false")
+      .replace(/__NONCE__/g, nonce)
+      .replace(/__CSP_SOURCE__/g, webview.cspSource);
 
     return html;
   }

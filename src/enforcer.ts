@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { Strategy } from "./schema";
+import { Strategy } from "./schema.js";
 import * as glob from "glob";
 import * as fs from "fs";
 import * as ts from "typescript";

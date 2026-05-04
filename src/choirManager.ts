@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
-import { StrategySchema, Strategy } from "./schema";
+import { StrategySchema, Strategy } from "./schema.js";
 import * as YAML from "yaml";
 
 function getWorkspaceRoot(): string | undefined {

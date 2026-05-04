@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { Violation } from "../core/types";
+import { Violation } from "../core/types.js";
 
 const collection = vscode.languages.createDiagnosticCollection("choir");
 

@@ -2,11 +2,21 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Run Extension",
+      "name": "Run Extension (No warnings)",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}"]
+      "args": ["--no-warnings", "--extensionDevelopmentPath=${workspaceFolder}"],
+    },
+    {
+      "name": "Run Extension (trace-deprecation + no-warnings)",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": ["--inspect=0", "--trace-deprecation", "--extensionDevelopmentPath=${workspaceFolder}"],
+      "env": {
+        "NODE_OPTIONS": "--trace-deprecation"
+      }
     }
   ]
 }

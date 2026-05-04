@@ -1,8 +1,8 @@
 import * as vscode from "vscode";
 import * as YAML from "yaml";
-import { readStrategy, writeStrategy } from "./choirManager";
-import { enforceStrategy, enforceCode } from "./enforcer";
-import { analyzeWorkspace, findHotspots } from "./analyst";
+import { readStrategy, writeStrategy } from "./choirManager.js";
+import { enforceStrategy, enforceCode } from "./enforcer.js";
+import { analyzeWorkspace, findHotspots } from "./analyst.js";
 
 export function registerArchitect(context: vscode.ExtensionContext) {
     if (!vscode.chat?.createChatParticipant) {

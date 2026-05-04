@@ -1,6 +1,6 @@
 import ts from "typescript";
-import { DSLRule, ASTRule } from "./types";
-import { RuleRegistry } from "../rules/registry";
+import { DSLRule, ASTRule } from "./types.js";
+import { RuleRegistry } from "../rules/registry.js";
 
 export function compileDSLRule(rule: DSLRule): ASTRule {
   return {

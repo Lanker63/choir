@@ -1,4 +1,4 @@
-import { ASTRule } from "../dsl/types";
+import { ASTRule } from "../dsl/types.js";
 
 export class RuleRegistry {
   private astRules: ASTRule[] = [];
