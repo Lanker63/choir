@@ -1,7 +1,7 @@
-import * as monaco from "monaco-editor";
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { configureMonacoYaml } from "monaco-yaml";
-import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker&inline";
-import yamlWorker from "monaco-yaml/yaml.worker?worker&inline";
+import editorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
+import yamlWorker from "monaco-yaml/yaml.worker?worker";
 import { dslSchema } from "./schema";
 
 type MonacoWorkerFactory = {

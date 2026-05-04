@@ -1,6 +1,6 @@
 /// <reference path="./global.d.ts" />
 
-import * as monaco from "monaco-editor";
+import type * as monaco from "monaco-editor/esm/vs/editor/editor.api";
 import { createRuleEditor } from "./editor";
 import "./styles.css";
 
