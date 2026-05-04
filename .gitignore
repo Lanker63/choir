@@ -1,2 +1,4 @@
 node_modules/
 out/
+.tmp.rules.yaml
+.tmp.rules.save.yaml
