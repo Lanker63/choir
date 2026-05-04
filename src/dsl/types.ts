@@ -1,25 +1,41 @@
-export interface DSLRule {
-  id: string;
-  description?: string;
+import { z } from "zod";
 
-  appliesTo?: {
-    files?: string[];        // glob patterns
-    language?: string;
-  };
+export const DSLSeverityValues = ["error", "warn", "info"] as const;
 
-  match: {
-    imports?: string[];
-    callExpressions?: string[];
-    functionNames?: string[];
-  };
+export const DSLRuleSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().optional(),
 
-  constraint: {
-    type: "forbid" | "require";
-  };
+  appliesTo: z
+    .object({
+      files: z.array(z.string()).optional(),
+      language: z.string().optional(),
+    })
+    .strict()
+    .optional(),
 
-  message: string;
-  severity?: "error" | "warn" | "info";
-}
+  match: z
+    .object({
+      imports: z.array(z.string()).optional(),
+      callExpressions: z.array(z.string()).optional(),
+      functionNames: z.array(z.string()).optional(),
+    })
+    .strict(),
+
+  constraint: z
+    .object({
+      type: z.enum(["forbid", "require"]),
+    })
+    .strict(),
+
+  message: z.string().min(1),
+  severity: z.enum(DSLSeverityValues).optional(),
+}).strict();
+
+export const DSLRulesSchema = z.array(DSLRuleSchema);
+export const dslSchema = z.toJSONSchema(DSLRulesSchema, { target: "draft-07" });
+
+export type DSLRule = z.infer<typeof DSLRuleSchema>;
 
 /**
  * Compiled AST rule

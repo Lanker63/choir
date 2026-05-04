@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; img-src __CSP_SOURCE__ https: data:; font-src __CSP_SOURCE__ data:; connect-src __CSP_SOURCE__; style-src __CSP_SOURCE__ 'unsafe-inline'; script-src 'nonce-__NONCE__' __CSP_SOURCE__; worker-src blob: __CSP_SOURCE__;"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Choir Rule Editor</title>
+    <link rel="stylesheet" href="__STYLE_URI__" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h3>Choir Rule Editor</h3>
+        <div class="header-actions">
+          <button id="saveBtn" type="button">Save</button>
+        </div>
+      </div>
+      <div id="editor"></div>
+      <div class="output">
+        <div class="output-header">Result</div>
+        <pre id="output"></pre>
+      </div>
+    </div>
+    <script nonce="__NONCE__">
+        const vscode = acquireVsCodeApi();
+        window.vscode = vscode;
+    </script>
+    <script type="module" nonce="__NONCE__" src="__SCRIPT_URI__"></script>
+  </body>
+</html>

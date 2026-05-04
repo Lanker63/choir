@@ -79,21 +79,33 @@
           "id": "choir.ruleList",
           "name": "Rules",
           "icon": "media/choir.png"
+        },
+        {
+          "type": "webview",
+          "id": "choir.ruleEditor",
+          "name": "Rule Editor",
+          "icon": "media/choir.png"
         }
       ]
     }
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "build": "npm run build:extension && npm run build:webview",
+    "build:extension": "tsc -p ./",
+    "build:webview": "vite build",
+    "watch": "npm run watch:extension",
+    "watch:extension": "tsc -watch -p ./",
+    "watch:webview": "vite build --watch",
+    "dev:webview": "vite"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",
     "@types/node": "^25.6.0",
     "@types/vscode": "^1.90.0",
     "ts-node": "^10.9.1",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vite": "^6.3.5"
   },
   "dependencies": {
     "glob": "^13.0.6",

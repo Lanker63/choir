@@ -1,13 +1,18 @@
 import * as vscode from "vscode";
 import { registerAnalyst, registerArchitect, registerEnforcer } from "../chat.js";
-import { RuleEditorProvider } from "./ruleEditorProvider.js";
-import { RuleTreeProvider } from "./ruleTreeProvider.js";
+import { RuleEditorProvider } from "./RuleEditorProvider.js";
+import { RuleTreeProvider } from "./RuleTreeProvider.js";
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("Choir Strategy extension active");
     
     try {
         const provider = new RuleEditorProvider(context);
+
+        // Register the sidebar webview view so resolveWebviewView is invoked.
+        context.subscriptions.push(
+            vscode.window.registerWebviewViewProvider("choir.ruleEditor", provider)
+        );
 
         // Register tree provider for the activity view that lists rules
         const tree = new RuleTreeProvider(context);
@@ -26,21 +31,13 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(
             vscode.commands.registerCommand("choir.openRuleEditorForRule", async (rule) => {
                 try {
-                    const panel = vscode.window.createWebviewPanel(
-                        "choir.ruleEditor.panel",
-                        `Rule Editor - ${rule.id}`,
-                        vscode.ViewColumn.One,
-                        { enableScripts: true }
-                    );
-
-                    panel.webview.html = provider.getHtml(panel.webview);
-
-                    // Send the rule content to the webview after a short delay so the script is ready
                     const yaml = await import("yaml");
                     const dslText = yaml.stringify([rule]);
-                    setTimeout(() => {
-                        panel.webview.postMessage({ type: "setDSL", dsl: dslText });
-                    }, 150);
+
+                    // Reuse the sidebar rule editor instead of opening a second panel.
+                    provider.setDslText(dslText);
+                    await vscode.commands.executeCommand("workbench.view.extension.choir");
+                    await vscode.commands.executeCommand("choir.ruleEditor.focus");
                 } catch (err) {
                     console.error("Choir: openRuleEditorForRule failed", err);
                 }
@@ -49,6 +46,7 @@ export function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(
             vscode.commands.registerCommand("choir.openRuleEditor", () => {
                 vscode.commands.executeCommand("workbench.view.extension.choir");
+                vscode.commands.executeCommand("choir.ruleEditor.focus");
             })
         );
         context.subscriptions.push(
