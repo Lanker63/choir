@@ -77,7 +77,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.4",
-      name: "no legacy strategy or rules YAML present",
+      name: "alpha-only control plane files are present",
       run: async () => {
         await withFixture("simple-project", async ({ root }) => {
           const files = listFiles(path.join(root, ".choir"));
