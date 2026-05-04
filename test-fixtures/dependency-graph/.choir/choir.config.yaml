@@ -1,4 +1,8 @@
 version: "1.0.0"
+mission: "Preserve dependency layering across the codebase"
+vision: "Dependency drift is detected early and corrected quickly"
+non-goals:
+  - "Do not replace dependency visualization tooling"
 intent:
   goals:
     - maintain layering

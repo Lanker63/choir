@@ -24,6 +24,9 @@ const goldenRoot = path.join(repoRoot, "src", "tests", "rules", "golden");
 function makeControlPlaneFixture(): ControlPlane {
   return {
     version: CONTROL_PLANE_VERSION,
+    mission: "Harden architecture policy checks",
+    vision: "Intent and policy remain explicit and enforceable",
+    "non-goals": ["Automate all architecture decisions"],
     intent: {
       goals: ["secure"],
       constraints: ["no direct db access", "no eval"],

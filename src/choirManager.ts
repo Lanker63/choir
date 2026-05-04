@@ -87,6 +87,9 @@ export function updateControlPlane(updater: (current: ControlPlane) => ControlPl
 export function createDefaultControlPlane(): ControlPlane {
     return {
         version: CONTROL_PLANE_VERSION,
+        mission: "",
+        vision: "",
+        "non-goals": [],
         intent: {
             goals: [],
             constraints: []

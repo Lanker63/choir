@@ -58,6 +58,9 @@ const pass1: TestPass = {
           const control = harness.loadControlPlane();
 
           assert.strictEqual(typeof control.version, "string");
+          assert.strictEqual(typeof control.mission, "string");
+          assert.strictEqual(typeof control.vision, "string");
+          assert.ok(Array.isArray(control["non-goals"]));
           assert.ok(Array.isArray(control.intent.goals));
           assert.ok(Array.isArray(control.intent.constraints));
           assert.ok(Array.isArray(control.policy.rules));
@@ -72,17 +75,6 @@ const pass1: TestPass = {
           const control = harness.loadControlPlane();
           const rules = compileControlPlaneToRules(control);
           assert.ok(rules.length > 0);
-        });
-      },
-    },
-    {
-      id: "1.4",
-      name: "alpha-only control plane files are present",
-      run: async () => {
-        await withFixture("simple-project", async ({ root }) => {
-          const files = listFiles(path.join(root, ".choir"));
-          assert.ok(!files.includes("strategy.yaml"));
-          assert.ok(!files.includes("rules.yaml"));
         });
       },
     },
@@ -137,6 +129,26 @@ const pass2: TestPass = {
         const enforcerPath = path.join(repoRoot, "src", "enforcer.ts");
         const code = fs.readFileSync(enforcerPath, "utf-8");
         assert.ok(!/request\.text/.test(code));
+      },
+    },
+    {
+      id: "2.5",
+      name: "plural chat directives split comma-delimited lists",
+      run: async () => {
+        await withFixture("simple-project", async ({ harness }) => {
+          harness.sendChat("add non-goals: Distributed app, authenticatoin, authorization");
+          harness.sendChat("add constraints: no database, no user adminitstration");
+          const control = harness.loadControlPlane();
+
+          assert.ok(control["non-goals"].includes("Distributed app"));
+          assert.ok(control["non-goals"].includes("authenticatoin"));
+          assert.ok(control["non-goals"].includes("authorization"));
+          assert.ok(!control["non-goals"].includes("Distributed app, authenticatoin, authorization"));
+
+          assert.ok(control.intent.constraints.includes("no database"));
+          assert.ok(control.intent.constraints.includes("no user adminitstration"));
+          assert.ok(!control.intent.constraints.includes("no database, no user adminitstration"));
+        });
       },
     },
   ],

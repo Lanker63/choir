@@ -1,4 +1,8 @@
 version: "1.0.0"
+mission: "Deliver a secure baseline policy set"
+vision: "Policy intent is explicit and enforceable in daily development"
+non-goals:
+  - "Do not model every architecture decision as a DSL rule"
 intent:
   goals:
     - baseline security

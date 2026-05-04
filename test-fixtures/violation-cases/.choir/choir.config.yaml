@@ -1,4 +1,8 @@
 version: "1.0.0"
+mission: "Continuously surface and prevent architecture violations"
+vision: "Violations become visible before code review"
+non-goals:
+  - "Do not fully automate remediation of all violations"
 intent:
   goals:
     - security hardening

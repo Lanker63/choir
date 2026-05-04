@@ -32,6 +32,9 @@ If the file does not exist, Choir creates a blank one the first time it activate
 
 ```yaml
 version: "1.0.0"
+mission: ""
+vision: ""
+non-goals: []
 intent:
   goals: []
   constraints: []
@@ -40,6 +43,16 @@ policy:
 ```
 
 Commit this file to version control so the whole team shares the same rules.
+
+### Overarching direction
+
+These top-level fields define project-wide direction that should remain stable over time.
+
+| Field | Type | Description |
+|---|---|---|
+| `mission` | `string` | The enduring mission statement for the solution. |
+| `vision` | `string` | The long-term target state this solution is moving toward. |
+| `non-goals` | `string[]` | Explicit boundaries describing what this solution is not trying to do. |
 
 ### `intent`
 
@@ -72,6 +85,11 @@ Explicit, file-scoped DSL rules evaluated on every save. Each rule has this shap
 
 ```yaml
 version: "1.0.0"
+mission: "Deliver secure, maintainable services with predictable behavior"
+vision: "A policy-aware engineering workflow where architecture intent stays enforceable"
+non-goals:
+  - "Not a replacement for human architecture review"
+  - "Not a generic low-code orchestration platform"
 intent:
   goals:
     - "Build a clean layered service architecture"
@@ -120,6 +138,10 @@ Reads and writes your control plane. Use it to evolve your policy through natura
 | Example prompt | Effect |
 |---|---|
 | `Show control plane` | Prints the current `.choir/choir.config.yaml` as YAML. |
+| `Set mission: ...` | Updates the top-level mission statement. |
+| `Set vision: ...` | Updates the top-level vision statement. |
+| `Add non-goal: ...` | Appends a non-goal if it does not already exist. |
+| `Remove non-goal: ...` | Removes the matching non-goal. |
 | `Add goal: Build auth system` | Appends an entry to `intent.goals`. |
 | `Add constraint: no direct db access` | Appends an entry to `intent.constraints`. |
 | `Remove goal: Build auth system` | Removes the matching goal. |

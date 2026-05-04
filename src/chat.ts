@@ -52,7 +52,14 @@ export function registerArchitect(context: vscode.ExtensionContext) {
 
 Try:
 - "Show control plane"
+- "Set mission: Deliver secure and maintainable services"
+- "Set vision: Platform-level policy by default"
+- "Add non-goal: Build a generic workflow engine"
+- "Add non-goals: Distributed app, authentication, authorization"
+- "Remove non-goal: Build a generic workflow engine"
 - "Add goal: Build auth system"
+- "Add goals: Build auth system, create user administration"
+- "Add constraints: no database, no user administration"
 - "Add constraint: no direct db access"
 - "Add layer: service"
 - "Remove goal: Build auth system"
