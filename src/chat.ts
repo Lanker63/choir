@@ -5,6 +5,7 @@ import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import { applyChatToControlPlane } from "./chatCompiler.js";
 import { runPipelineForWorkspace } from "./enforcer.js";
 import { approvePlan, executePlan, summarizePlanStatus, upsertDraftPlan } from "./conductor.js";
+import { parseConductorCommand } from "./conductorCommands.js";
 import { createEmptyStatePlane, readStatePlane } from "./core/state.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
@@ -179,7 +180,7 @@ export function registerConductor(context: vscode.ExtensionContext) {
         async (request, _ctx, stream) => {
             const raw = (request as any).prompt ?? "";
             const prompt = raw.trim();
-            const normalized = prompt.toLowerCase();
+            const command = parseConductorCommand(prompt);
 
             const controlPlane = readControlPlane();
             if (!controlPlane) {
@@ -187,17 +188,15 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 return;
             }
 
-            if (normalized.startsWith("plan")) {
+            if (command.kind === "plan") {
                 const root = getWorkspaceRoot();
                 if (!root) {
                     stream.markdown("No workspace folder found.");
                     return;
                 }
 
-                const goalMatch = prompt.match(/plan\s+for\s+goal\s*:\s*(.+)$/i);
-                const goal = goalMatch?.[1]?.trim();
                 const state = readStatePlane(root) ?? createEmptyStatePlane();
-                const { updatedControl, plan, replaced } = upsertDraftPlan(controlPlane, state, goal);
+                const { updatedControl, plan, replaced } = upsertDraftPlan(controlPlane, state, command.goal);
 
                 writeControlPlane(updatedControl);
 
@@ -215,16 +214,15 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 return;
             }
 
-            if (normalized.startsWith("approve ")) {
-                const planId = prompt.split(/\s+/)[1] ?? "";
-                if (planId.length === 0) {
+            if (command.kind === "approve") {
+                if (!command.planId) {
                     stream.markdown("Provide a plan id. Example: approve plan-abc123def456");
                     return;
                 }
 
-                const { updatedControl, plan } = approvePlan(controlPlane, planId);
+                const { updatedControl, plan } = approvePlan(controlPlane, command.planId);
                 if (!plan) {
-                    stream.markdown(`Plan not found: ${planId}`);
+                    stream.markdown(`Plan not found: ${command.planId}`);
                     return;
                 }
 
@@ -233,22 +231,21 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 return;
             }
 
-            if (normalized.startsWith("execute ")) {
+            if (command.kind === "execute") {
                 const root = getWorkspaceRoot();
                 if (!root) {
                     stream.markdown("No workspace folder found.");
                     return;
                 }
 
-                const planId = prompt.split(/\s+/)[1] ?? "";
-                if (planId.length === 0) {
+                if (!command.planId) {
                     stream.markdown("Provide a plan id. Example: execute plan-abc123def456");
                     return;
                 }
 
-                const plan = controlPlane.execution.plans.find((candidate) => candidate.id === planId);
+                const plan = controlPlane.execution.plans.find((candidate) => candidate.id === command.planId);
                 if (!plan) {
-                    stream.markdown(`Plan not found: ${planId}`);
+                    stream.markdown(`Plan not found: ${command.planId}`);
                     return;
                 }
 
@@ -274,7 +271,7 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 return;
             }
 
-            if (normalized === "status") {
+            if (command.kind === "status") {
                 const root = getWorkspaceRoot();
                 if (!root) {
                     stream.markdown("No workspace folder found.");

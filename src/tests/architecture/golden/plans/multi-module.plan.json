@@ -1,0 +1,68 @@
+{
+  "id": "plan-78c7b1a53cab",
+  "title": "Auto-generated enforcement plan",
+  "derivedFrom": "goal",
+  "goalRefs": [
+    "secure services"
+  ],
+  "tasks": [
+    {
+      "id": "t-analysis",
+      "title": "Analyze violations",
+      "description": "Enumerate relevant violations and establish deterministic remediation scope.",
+      "type": "analysis",
+      "dependsOn": [],
+      "successCriteria": [
+        "violations enumerated"
+      ]
+    },
+    {
+      "id": "t-refactor-1",
+      "title": "Fix intent-no-direct-db-access violations",
+      "description": "Resolve 1 violation(s) for rule intent-no-direct-db-access.",
+      "type": "refactor",
+      "scope": {
+        "files": [
+          "src/service/db.ts"
+        ]
+      },
+      "dependsOn": [
+        "t-analysis"
+      ],
+      "successCriteria": [
+        "no intent-no-direct-db-access violations remain"
+      ]
+    },
+    {
+      "id": "t-refactor-2",
+      "title": "Fix explicit-no-console violations",
+      "description": "Resolve 1 violation(s) for rule explicit-no-console.",
+      "type": "refactor",
+      "scope": {
+        "files": [
+          "src/index.ts"
+        ]
+      },
+      "dependsOn": [
+        "t-analysis"
+      ],
+      "successCriteria": [
+        "no explicit-no-console violations remain"
+      ]
+    },
+    {
+      "id": "t-validate",
+      "title": "Validate all constraints",
+      "description": "Run policy enforcement to verify that constraints are satisfied.",
+      "type": "enforce",
+      "dependsOn": [
+        "t-refactor-1",
+        "t-refactor-2"
+      ],
+      "successCriteria": [
+        "zero violations"
+      ]
+    }
+  ],
+  "status": "draft"
+}

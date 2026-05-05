@@ -15,7 +15,8 @@ import {
 import { runConflictResolutionEngine } from "../../fix/conflictEngine.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix } from "../../fix/types.js";
-import { generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
+import { parseConductorCommand } from "../../conductorCommands.js";
+import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
 import { createEmptyStatePlane } from "../../core/state.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema } from "../../schema.js";
 
@@ -57,6 +58,31 @@ type TestPass = {
   name: string;
   tests: TestCase[];
 };
+
+const planGoldenRoot = path.join(repoRoot, "src", "tests", "architecture", "golden", "plans");
+
+function normalizeLineEndings(input: string): string {
+  return input.replace(/\r\n/g, "\n").trim();
+}
+
+async function assertPlanGoldenForFixture(fixtureName: string, goldenFileName: string): Promise<void> {
+  await withFixture(fixtureName, async ({ harness }) => {
+    await harness.runPipeline();
+    const control = harness.loadControlPlane();
+    const state = harness.readState();
+    const plan = generatePlan(control, state);
+
+    const snapshotPath = path.join(planGoldenRoot, goldenFileName);
+    const expected = normalizeLineEndings(fs.readFileSync(snapshotPath, "utf-8"));
+    const actual = normalizeLineEndings(JSON.stringify(plan, null, 2));
+
+    assert.strictEqual(
+      actual,
+      expected,
+      `Generated plan snapshot mismatch for fixture ${fixtureName} at ${snapshotPath}`
+    );
+  });
+}
 
 async function withFixture(
   fixtureName: string,
@@ -266,6 +292,31 @@ const pass2: TestPass = {
         });
       },
     },
+    {
+      id: "2.6",
+      name: "conductor parser handles plan commands deterministically",
+      run: async () => {
+        assert.deepStrictEqual(
+          parseConductorCommand("plan for goal: enforce service boundaries"),
+          { kind: "plan", goal: "enforce service boundaries" }
+        );
+        assert.deepStrictEqual(
+          parseConductorCommand("PLAN"),
+          { kind: "plan" }
+        );
+      },
+    },
+    {
+      id: "2.7",
+      name: "conductor parser handles approve/execute/status/help",
+      run: async () => {
+        assert.deepStrictEqual(parseConductorCommand("approve plan-123"), { kind: "approve", planId: "plan-123" });
+        assert.deepStrictEqual(parseConductorCommand("approve"), { kind: "approve", planId: undefined });
+        assert.deepStrictEqual(parseConductorCommand("execute plan-123"), { kind: "execute", planId: "plan-123" });
+        assert.deepStrictEqual(parseConductorCommand("status"), { kind: "status" });
+        assert.deepStrictEqual(parseConductorCommand("something else"), { kind: "help" });
+      },
+    },
   ],
 };
 
@@ -342,7 +393,7 @@ const pass3: TestPass = {
         state.violations = [
           {
             id: "diag-1",
-            ruleId: "rule-a",
+            ruleId: "intent-no-direct-db-access",
             message: "violation A",
             severity: "error",
             category: "AST",
@@ -368,7 +419,88 @@ const pass3: TestPass = {
         assert.strictEqual(first.tasks[first.tasks.length - 1]?.type, "enforce");
 
         const refactors = first.tasks.filter((task) => task.type === "refactor");
-        assert.ok(refactors.length > 0);
+        assert.strictEqual(refactors.length, 1);
+        assert.ok(refactors[0]?.title.includes("intent-no-direct-db-access"));
+      },
+    },
+    {
+      id: "3.6",
+      name: "plan snapshot matches simple-project golden",
+      run: async () => {
+        await assertPlanGoldenForFixture("simple-project", "simple-project.plan.json");
+      },
+    },
+    {
+      id: "3.7",
+      name: "plan snapshot matches multi-module golden",
+      run: async () => {
+        await assertPlanGoldenForFixture("multi-module", "multi-module.plan.json");
+      },
+    },
+    {
+      id: "3.8",
+      name: "plan snapshot matches dependency-graph golden",
+      run: async () => {
+        await assertPlanGoldenForFixture("dependency-graph", "dependency-graph.plan.json");
+      },
+    },
+    {
+      id: "3.9",
+      name: "plan groups violations by rule into minimal refactor tasks",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["enforce service boundaries"];
+
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-shared",
+            message: "v1",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/a.ts", 1, 0, 1, 2),
+            traceId: "trace-1",
+          },
+          {
+            id: "diag-2",
+            ruleId: "rule-shared",
+            message: "v2",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/b.ts", 2, 0, 2, 2),
+            traceId: "trace-2",
+          },
+          {
+            id: "diag-3",
+            ruleId: "rule-other",
+            message: "v3",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/c.ts", 3, 0, 3, 2),
+            traceId: "trace-3",
+          },
+        ];
+
+        const plan = generatePlan(control, state);
+        const refactors = plan.tasks.filter((task) => task.type === "refactor");
+
+        assert.strictEqual(refactors.length, 2);
+        assert.ok(refactors.some((task) => task.title.includes("rule-shared")));
+        assert.ok(refactors.some((task) => task.title.includes("rule-other")));
+      },
+    },
+    {
+      id: "3.10",
+      name: "dependency layer computation detects cycles",
+      run: async () => {
+        assert.throws(
+          () => computeLayers(["src/a.ts", "src/b.ts"], {
+            "src/a.ts": ["./b"],
+            "src/b.ts": ["./a"],
+          }),
+          /Cycle detected in dependency graph/
+        );
       },
     },
   ],
@@ -441,9 +573,9 @@ const pass4: TestPass = {
         const plan = generatePlan(control, state);
 
         const firstExecutable = getExecutableTasks(plan, state).map((task) => task.id);
-        assert.deepStrictEqual(firstExecutable, ["analysis-violations"]);
+        assert.deepStrictEqual(firstExecutable, ["t-analysis"]);
 
-        state.execution.taskStatus[taskExecutionKey(plan.id, "analysis-violations")] = "complete";
+        state.execution.taskStatus[taskExecutionKey(plan.id, "t-analysis")] = "complete";
         const secondExecutable = getExecutableTasks(plan, state);
         assert.ok(secondExecutable.every((task) => task.type === "refactor"));
 
@@ -452,7 +584,7 @@ const pass4: TestPass = {
         }
 
         const thirdExecutable = getExecutableTasks(plan, state).map((task) => task.id);
-        assert.deepStrictEqual(thirdExecutable, ["enforce-policy"]);
+        assert.deepStrictEqual(thirdExecutable, ["t-validate"]);
       },
     },
   ],

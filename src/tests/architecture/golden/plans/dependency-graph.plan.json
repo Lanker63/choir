@@ -1,0 +1,52 @@
+{
+  "id": "plan-f4fd99a5ff26",
+  "title": "Auto-generated enforcement plan",
+  "derivedFrom": "goal",
+  "goalRefs": [
+    "maintain layering"
+  ],
+  "tasks": [
+    {
+      "id": "t-analysis",
+      "title": "Analyze violations",
+      "description": "Enumerate relevant violations and establish deterministic remediation scope.",
+      "type": "analysis",
+      "dependsOn": [],
+      "successCriteria": [
+        "violations enumerated"
+      ]
+    },
+    {
+      "id": "t-refactor-1",
+      "title": "Fix semantic-diagnostic violations",
+      "description": "Resolve 3 violation(s) for rule semantic-diagnostic.",
+      "type": "refactor",
+      "scope": {
+        "files": [
+          "src/index.ts",
+          "src/lib/a.ts",
+          "src/lib/b.ts"
+        ]
+      },
+      "dependsOn": [
+        "t-analysis"
+      ],
+      "successCriteria": [
+        "no semantic-diagnostic violations remain"
+      ]
+    },
+    {
+      "id": "t-validate",
+      "title": "Validate all constraints",
+      "description": "Run policy enforcement to verify that constraints are satisfied.",
+      "type": "enforce",
+      "dependsOn": [
+        "t-refactor-1"
+      ],
+      "successCriteria": [
+        "zero violations"
+      ]
+    }
+  ],
+  "status": "draft"
+}
