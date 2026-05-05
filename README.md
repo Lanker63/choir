@@ -442,7 +442,7 @@ Grammar:
 
 Compilation flow:
 
-`DSL -> AST -> compiler -> choir.config.yaml -> pipeline`
+`DSL -> Tokens -> AST -> Validation -> Rule Engine -> compiler -> choir.config.yaml -> pipeline`
 
 ### Choir DSL Editor Language Support (`.choir`)
 
@@ -490,8 +490,10 @@ Not directly user-addressable in DSL.
 
 The DSL compiler is transactional and deterministic:
 
-- Parses full command input first
-- Applies AST mutations in memory
+- Tokenizes and parses full command input first
+- Validates AST in deterministic phases (`structure -> semantics -> cross-node`)
+- Runs deterministic rule engine pass (stable `rule.id` ordering, conflict detection)
+- Applies AST mutations in memory only after validation/rule checks pass
 - Validates resulting config against schema
 - Writes `.choir/choir.config.yaml` once (or returns no-op)
 
@@ -538,7 +540,7 @@ Macro storage and model:
   - optional `parameters[]` (`name`, `required`, optional `default`)
   - `body[]` (templated DSL command lines)
 - Expansion pipeline is strict and deterministic:
-  - `Macro -> DSL -> AST -> YAML -> Pipeline`
+  - `Macro -> DSL -> AST -> Validation -> Rule Engine -> YAML -> Pipeline`
 - Macros never write YAML directly.
 - Macro body commands are validated with the same DSL parser used by runtime.
 - Macro steps execute sequentially through `compileDSLAndWrite`, so each step passes policy gates and diff/approval checks.
@@ -552,6 +554,8 @@ Mutation behavior:
 
 - `choir define mission|vision ...`: mutates top-level mission/vision in YAML via deterministic set
 - `choir define goal|constraint|non-goal ...`: mutates intent fields in YAML via deterministic upsert
+- Duplicate `define` values inside one command sequence are rejected during AST semantic validation
+- Re-defining an existing identical value in persisted YAML is treated as deterministic no-op (warning trace)
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
 - `choir plan approve <planId>`: marks an existing plan as approved in YAML via deterministic update
 - `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
@@ -620,7 +624,8 @@ policy repo-restrict-db-access {
 Idempotency guarantees:
 
 - Same input and same starting YAML produce identical output YAML
-- Duplicate intent entries are deduplicated and stably sorted
+- Repeating the same single `define` command against existing identical state is deterministic no-op
+- Duplicate `define` values in a single command sequence are rejected (no partial mutation)
 - Duplicate plan ids are not re-added
 - Macro expansion with identical inputs produces identical expanded commands
 - Lockfile-pinned macro library execution produces identical version resolution for identical `.choir/lock.yaml`

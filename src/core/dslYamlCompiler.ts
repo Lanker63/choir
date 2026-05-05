@@ -22,8 +22,13 @@ import {
   ActionNode,
   parse,
   tokenize,
-  validGrammar,
+  validateAST,
 } from "./choirRouter.js";
+import {
+  RuleResult,
+  ValidationTrace,
+  processAST,
+} from "./astValidation.js";
 import { MacroLibraryTrace } from "./macroLibraries.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
 import {
@@ -67,6 +72,8 @@ export type CompilationTrace = {
   input: string;
   ast: AST;
   changes: CompilationChange[];
+  validation: ValidationTrace;
+  ruleResults: RuleResult[];
 };
 
 export type CompilationDecision = "allow" | "deny" | "require-approval" | "no-change";
@@ -564,17 +571,18 @@ export function compileDSL(
 } {
   const tokens = tokenize(input);
   const ast = parse(tokens);
+  validateAST(ast);
 
-  if (!validGrammar(ast)) {
-    throw new Error("Invalid Choir DSL command");
-  }
+  const processed = processAST(ast, {
+    controlPlane,
+  });
 
   const baseConfig = controlPlaneToChoirConfig(controlPlane);
   const state = options?.workspaceRoot
     ? (readStatePlane(options.workspaceRoot) ?? createEmptyStatePlane())
     : createEmptyStatePlane();
 
-  const compiled = compileASTToYAML(ast, baseConfig, { state });
+  const compiled = compileASTToYAML(processed.ast, baseConfig, { state });
   const updatedControl = validateSchema(compiled.config);
 
   const beforeHash = hashConfig(baseConfig);
@@ -585,8 +593,10 @@ export function compileDSL(
     changed: beforeHash !== afterHash,
     trace: {
       input,
-      ast,
+      ast: processed.ast,
       changes: compiled.changes,
+      validation: processed.trace,
+      ruleResults: processed.results,
     },
   };
 }

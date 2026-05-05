@@ -55,6 +55,7 @@ import {
   validatePlanStillApplies,
 } from "../../core/strategyMemory.js";
 import {
+  AST,
   CHOIR_DSL_GRAMMAR,
   ChoirAgent,
   compile,
@@ -67,6 +68,17 @@ import {
   validateAST,
   validGrammar,
 } from "../../core/choirRouter.js";
+import {
+  Rule,
+  applyFixes,
+  detectConflicts,
+  processAST,
+  runRules,
+  semanticEquivalent,
+  validateCrossNode,
+  validateSemantics,
+  validateStructure,
+} from "../../core/astValidation.js";
 import {
   approveDiff,
   canonicalizeConfig,
@@ -631,12 +643,195 @@ const pass2: TestPass = {
       },
     },
     {
+      id: "2.90",
+      name: "ast structure validation rejects malformed nodes deterministically",
+      run: async () => {
+        const malformed = {
+          type: "define",
+          defineType: "goal",
+        } as unknown as AST;
+
+        const structure = validateStructure(malformed);
+        assert.strictEqual(structure.valid, false);
+        assert.ok(structure.issues.some((entry) => entry.code === "define-value-missing"));
+      },
+    },
+    {
+      id: "2.91",
+      name: "ast semantic validation rejects duplicates and conflicts",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent["non-goals"] = ["no direct db access"];
+
+        const duplicateGoal = parseCommand('choir define goal "enforce boundaries" then define goal "enforce boundaries"').ast;
+        const duplicateResult = validateSemantics(duplicateGoal, { controlPlane: control });
+        assert.strictEqual(duplicateResult.valid, false);
+        assert.ok(duplicateResult.issues.some((entry) => entry.code === "duplicate-goal"));
+
+        const conflict = parseCommand('choir define constraint "no direct db access"').ast;
+        const conflictResult = validateSemantics(conflict, { controlPlane: control });
+        assert.strictEqual(conflictResult.valid, false);
+        assert.ok(conflictResult.issues.some((entry) => entry.code === "constraint-conflicts-non-goal"));
+      },
+    },
+    {
+      id: "2.92",
+      name: "cross-node validation enforces plan and execute preconditions",
+      run: async () => {
+        const control = makeControlPlane();
+
+        const executeOnly = parseCommand("choir execute").ast;
+        const executeResult = validateCrossNode(executeOnly, { controlPlane: control });
+        assert.strictEqual(executeResult.valid, false);
+        assert.ok(executeResult.issues.some((entry) => entry.code === "execute-without-plan"));
+
+        const planWithoutIntent = parseCommand("choir plan").ast;
+        const planWithoutIntentResult = validateCrossNode(planWithoutIntent, { controlPlane: control });
+        assert.strictEqual(planWithoutIntentResult.valid, false);
+        assert.ok(planWithoutIntentResult.issues.some((entry) => entry.code === "plan-without-intent"));
+
+        const validPipeline = parseCommand('choir define goal "A" then plan then execute').ast;
+        const validResult = validateCrossNode(validPipeline, { controlPlane: control });
+        assert.strictEqual(validResult.valid, true);
+      },
+    },
+    {
+      id: "2.93",
+      name: "rule engine execution order is deterministic and sorted by id",
+      run: async () => {
+        const ast = parseCommand('choir define goal "A"').ast;
+        const control = makeControlPlane();
+        const rules: Rule[] = [
+          {
+            id: "z-rule",
+            match: () => true,
+            validate: () => ({
+              ruleId: "z-rule",
+              severity: "warning",
+              message: "z",
+            }),
+          },
+          {
+            id: "a-rule",
+            match: () => true,
+            validate: () => ({
+              ruleId: "a-rule",
+              severity: "warning",
+              message: "a",
+            }),
+          },
+        ];
+
+        const results = runRules(ast, rules, { controlPlane: control });
+        assert.deepStrictEqual(results.map((entry) => entry.ruleId), ["a-rule", "z-rule"]);
+      },
+    },
+    {
+      id: "2.94",
+      name: "rule conflict detection catches contradictory decisions and fixes",
+      run: async () => {
+        const conflicts = detectConflicts([
+          {
+            ruleId: "allow-rule",
+            severity: "warning",
+            message: "allow",
+            decision: "allow",
+          },
+          {
+            ruleId: "deny-rule",
+            severity: "warning",
+            message: "deny",
+            decision: "deny",
+          },
+          {
+            ruleId: "fix-a",
+            severity: "warning",
+            message: "fix-a",
+            actionIndex: 0,
+            fix: { type: "define", defineType: "goal", value: "A" },
+          },
+          {
+            ruleId: "fix-b",
+            severity: "warning",
+            message: "fix-b",
+            actionIndex: 0,
+            fix: { type: "define", defineType: "goal", value: "B" },
+          },
+        ]);
+
+        assert.ok(conflicts.some((entry) => entry.includes("allow and deny")));
+        assert.ok(conflicts.some((entry) => entry.includes("Conflicting fixes")));
+      },
+    },
+    {
+      id: "2.95",
+      name: "fix engine preserves immutability and semantic equivalence",
+      run: async () => {
+        const ast = parseCommand('choir define goal "A"').ast;
+        const snapshot = JSON.parse(JSON.stringify(ast));
+
+        const fixed = applyFixes(ast, [
+          {
+            ruleId: "normalize-goal",
+            severity: "warning",
+            message: "normalize",
+            actionIndex: 0,
+            fix: { type: "define", defineType: "goal", value: "A" },
+          },
+        ]);
+
+        assert.deepStrictEqual(ast, snapshot);
+        assert.strictEqual(semanticEquivalent(ast, fixed), true);
+      },
+    },
+    {
+      id: "2.96",
+      name: "processAST validates before rules and emits deterministic trace",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["enforce boundaries"];
+
+        const ast = parseCommand('choir define mission "deterministic platform" then plan then execute').ast;
+        const processed = processAST(ast, { controlPlane: control });
+        assert.strictEqual(processed.trace.validationPassed, true);
+        assert.deepStrictEqual(processed.trace.rulesTriggered, ["warn-execute-without-plan-ref"]);
+
+        let rulesCalled = 0;
+        const invalid = {
+          type: "define",
+          defineType: "goal",
+        } as unknown as AST;
+
+        const rules: Rule[] = [
+          {
+            id: "should-not-run",
+            match: () => true,
+            validate: () => {
+              rulesCalled += 1;
+              return {
+                ruleId: "should-not-run",
+                severity: "warning",
+                message: "unexpected",
+              };
+            },
+          },
+        ];
+
+        assert.throws(() => processAST(invalid, { controlPlane: control }, rules), /AST structure validation failed/);
+        assert.strictEqual(rulesCalled, 0);
+      },
+    },
+    {
       id: "2.11",
       name: "dsl compiler mutates yaml intent deterministically",
       run: async () => {
         const control = makeControlPlane();
         const first = compileDSL("choir define goal \"enforce service boundaries\"", control);
         const second = compileDSL("choir define goal \"enforce service boundaries\"", first.updatedControlPlane);
+        assert.throws(
+          () => compileDSL("choir define goal \"enforce service boundaries\" then define goal \"enforce service boundaries\"", control),
+          /duplicate-goal/i
+        );
 
         assert.strictEqual(first.changed, true);
         assert.strictEqual(second.changed, false);
@@ -668,6 +863,7 @@ const pass2: TestPass = {
       name: "dsl compiler plan upsert is deterministic and duplicate-safe",
       run: async () => {
         const control = makeControlPlane();
+        control.intent.goals = ["enforce boundaries"];
         const first = compileDSL("choir plan", control);
         const second = compileDSL("choir plan", first.updatedControlPlane);
 
@@ -677,12 +873,16 @@ const pass2: TestPass = {
     },
     {
       id: "2.14",
-      name: "dsl compiler keeps execute as non-mutating in yaml mode",
+      name: "dsl compiler execute requires an available plan",
       run: async () => {
         const control = makeControlPlane();
-        const compiled = compileDSL("choir execute", control);
+        assert.throws(() => compileDSL("choir execute", control), /Cannot execute without plan/);
+
+        const withPlan = makeControlPlane();
+        withPlan.execution.plans = [makePlan("plan-alpha", [makeTask("analyze", "analysis")])];
+        const compiled = compileDSL("choir execute", withPlan);
         assert.strictEqual(compiled.changed, false);
-        assert.deepStrictEqual(compiled.updatedControlPlane, control);
+        assert.deepStrictEqual(compiled.updatedControlPlane, withPlan);
       },
     },
     {
@@ -691,7 +891,7 @@ const pass2: TestPass = {
       run: async () => {
         const control = makeControlPlane();
         assert.throws(() => compileDSL("choir define goal enforce boundaries", control), /Expected quoted string/);
-        assert.throws(() => compileDSL("choir define constraint \"\"", control), /Invalid Choir DSL command/);
+        assert.throws(() => compileDSL("choir define constraint \"\"", control), /Invalid Choir DSL command|AST semantic validation failed/);
       },
     },
     {
@@ -1353,6 +1553,7 @@ const pass2: TestPass = {
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
+        control.intent.goals = ["enforce boundaries"];
         writePoliciesDSL(root, [
           "policy deny-plan-prod {",
           "  when diff.path = \"execution.plans\" and environment = production then deny",
@@ -1587,7 +1788,9 @@ const pass2: TestPass = {
         ].join("\n"));
 
         await withTemporaryEnv({ NODE_ENV: "production", CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
-          const result = compileDSLAndWrite("choir plan", makeControlPlane(), prodControlPath, { workspaceRoot: prodRoot });
+          const control = makeControlPlane();
+          control.intent.goals = ["enforce boundaries"];
+          const result = compileDSLAndWrite("choir plan", control, prodControlPath, { workspaceRoot: prodRoot });
           assert.strictEqual(result.decision, "deny");
           assert.strictEqual(result.policyTrace?.environment, "production");
         });
@@ -1610,7 +1813,9 @@ const pass2: TestPass = {
         ].join("\n"));
 
         await withTemporaryEnv({ NODE_ENV: undefined, CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
-          const result = compileDSLAndWrite("choir plan", makeControlPlane(), localControlPath, { workspaceRoot: localRoot });
+          const control = makeControlPlane();
+          control.intent.goals = ["enforce boundaries"];
+          const result = compileDSLAndWrite("choir plan", control, localControlPath, { workspaceRoot: localRoot });
           assert.strictEqual(result.decision, "allow");
         });
       },

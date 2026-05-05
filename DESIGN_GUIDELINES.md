@@ -82,7 +82,7 @@ Internal roles remain isolated modules:
 
 Compiler model:
 
-`User -> @choir -> DSL tokenizer/parser -> AST validator -> compiler -> choir.config.yaml -> pipeline`
+`User -> @choir -> DSL -> Tokens -> AST -> Validation -> Rule Engine -> Compiler -> choir.config.yaml -> pipeline`
 
 ### Interactive Init Wizard Contract (`@choir init`)
 
@@ -169,6 +169,18 @@ Router constraints:
 - Compiler maps AST nodes directly to YAML mutations.
 - No direct runtime mutation outside YAML during DSL compilation.
 - Config is validated before write; write is single-step (no partial updates).
+
+AST correctness and rule engine contract:
+
+- Deterministic compile pipeline is fixed: `DSL -> Tokens -> AST -> VALIDATION -> RULE ENGINE -> OUTPUT`.
+- Validation is fail-fast and ordered: structural -> semantic -> cross-node.
+- Semantic duplicate handling is strict by command scope:
+  - Duplicate `define` values within one command sequence are rejected.
+  - `define` values that already exist in persisted control plane are warnings and compile as deterministic no-op.
+- Cross-node preconditions are enforced before mutation (for example: `execute` requires available plan).
+- Rule evaluation order is deterministic and sorted by `rule.id`.
+- Conflicting rule decisions/fixes are rejected before output.
+- Rule fixes apply on cloned AST only and must preserve semantic equivalence.
 
 Macro constraints:
 
@@ -278,7 +290,7 @@ Macro execution contract:
 - Library source root: `.choir/libraries/<library>/<version>/macros.yaml`.
 - Resolved library versions are pinned in `.choir/lock.yaml`.
 - Macros define reusable DSL command bodies with optional parameter templates (`{{name}}`).
-- Runtime flow: `Macro -> DSL -> AST -> YAML -> Pipeline`.
+- Runtime flow: `Macro -> DSL -> AST -> Validation -> Rule Engine -> YAML -> Pipeline`.
 - Each expanded command is compiled sequentially through existing `compileDSLAndWrite` behavior.
 - Every expanded command remains subject to policy decision (`allow | require-approval | deny`).
 - Execution trace records expanded commands, step count, and per-step decisions.
@@ -290,6 +302,8 @@ Mutation contract:
 
 - `define mission|vision` mutates top-level `mission|vision` via deterministic set.
 - `define goal|constraint|non-goal` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
+- Duplicate `define` values in the same command sequence are invalid and must fail validation.
+- Re-defining an already persisted identical value is deterministic no-op (warning trace, no mutation).
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
 - `plan approve` updates `execution.plans[*].status` to `approved` deterministically.
 - `analyze|preview|execute|status|ci|audit|import|library|<abstraction-id>` are non-mutating in YAML compiler mode.
