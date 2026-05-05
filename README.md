@@ -102,6 +102,7 @@ Choir includes a deterministic orchestration layer that supports:
 - State → plan synthesis with stable ordering and deterministic ids
 - Cost-based plan scoring and pre-execution selection
 - Deterministic multi-strategy plan shaping before task execution
+- User-visible execution previews derived from simulation
 - Multi-plan optimization through global DAG merge and conflict-aware batching
 - Parallel-safe scheduling by dependency layer
 - Speculative transactional batch execution (`simulate → validate → commit/rollback`)
@@ -167,6 +168,29 @@ Execution rules:
   - selected strategy id
   - deterministic decision reason
 
+### Execution Preview and Approval Gate
+
+Conductor supports deterministic execution previews so you can inspect exact file diffs before execution.
+
+Preview guarantees:
+
+- Preview runs through simulation logic and does not write real files
+- Preview diffs are derived from proposed patches + virtual FS after-state
+- Preview output is deterministic for identical inputs
+- Preview hash binds approval to exact `fileChanges`
+
+Approval gate:
+
+- Execution requires a preview hash (`previewId`)
+- Choir stores the last approved preview metadata in state (`execution.lastPreview`)
+- On execute, Choir recomputes preview and rejects if hash differs
+
+Deterministic hash:
+
+```text
+hash = sha256(JSON.stringify(preview.fileChanges))
+```
+
 ---
 
 ## Chat Participants
@@ -211,14 +235,16 @@ Supported commands:
 - `plan`
 - `plan for goal: <goal>`
 - `approve <planId>`
-- `execute`
-- `execute <planId>`
+- `preview [planId]`
+- `execute <previewHash>`
+- `execute <planId> <previewHash>`
 - `status`
 
 Execution behavior:
 
-- `execute`: score all approved plans, select optimal plan set, evaluate strategy variants, execute selected strategy plans
-- `execute <planId>`: execute only that approved plan (still cost-scored, strategy-evaluated, and traced)
+- `preview [planId]`: score/select plans, evaluate strategies, and render exact simulation-derived file diffs + preview hash
+- `execute <previewHash>`: execute selected plan(s) only if recomputed preview hash matches
+- `execute <planId> <previewHash>`: execute that approved plan only if recomputed preview hash matches
 
 ---
 
@@ -245,7 +271,7 @@ Derived system state is written to `.choir/state.json`, including:
 
 - AST and symbol/dependency metadata
 - diagnostics and metrics
-- execution runtime state (task status, task results, history)
+- execution runtime state (task status, task results, history, preview approvals)
 
 `state.json` is derived and reproducible from workspace + control plane.
 

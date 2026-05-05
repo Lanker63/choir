@@ -17,6 +17,12 @@ export type Graph = Record<string, string[]>;
 
 export type TaskExecutionStatus = "pending" | "in-progress" | "complete" | "failed";
 
+export type PreviewApproval = {
+  hash: string;
+  planId: string;
+  strategyId?: string;
+};
+
 export type ExecutionEvent = {
   planId: string;
   taskId?: string;
@@ -29,6 +35,7 @@ export type ExecutionState = {
   taskStatus: Record<string, TaskExecutionStatus>;
   taskResults: Record<string, unknown>;
   history: ExecutionEvent[];
+  lastPreview?: PreviewApproval;
 };
 
 export type StatePlane = {
@@ -158,11 +165,31 @@ function materializeExecutionState(input?: Partial<ExecutionState>): ExecutionSt
     } satisfies ExecutionEvent];
   });
 
+  const rawPreview = isRecord(input?.lastPreview) ? input.lastPreview : undefined;
+  const previewHash = typeof rawPreview?.hash === "string" && rawPreview.hash.trim().length > 0
+    ? rawPreview.hash
+    : undefined;
+  const previewPlanId = typeof rawPreview?.planId === "string" && rawPreview.planId.trim().length > 0
+    ? rawPreview.planId
+    : undefined;
+  const previewStrategyId = typeof rawPreview?.strategyId === "string" && rawPreview.strategyId.trim().length > 0
+    ? rawPreview.strategyId
+    : undefined;
+
+  const lastPreview = previewHash && previewPlanId
+    ? {
+      hash: previewHash,
+      planId: previewPlanId,
+      ...(previewStrategyId ? { strategyId: previewStrategyId } : {}),
+    } satisfies PreviewApproval
+    : undefined;
+
   return {
     ...(activePlanId ? { activePlanId } : {}),
     taskStatus,
     taskResults,
     history,
+    ...(lastPreview ? { lastPreview } : {}),
   };
 }
 

@@ -31,8 +31,14 @@ import {
   aggressiveStrategy,
   selectBestStrategy,
 } from "../../core/strategyPlanner.js";
+import {
+  ExecutionPreview,
+  generateDiff,
+  groupPatchesByFile,
+  hashPreview,
+} from "../../core/executionPreview.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
-import { Fix } from "../../fix/types.js";
+import { Fix, Patch } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
 import {
@@ -365,10 +371,15 @@ const pass2: TestPass = {
     },
     {
       id: "2.7",
-      name: "conductor parser handles approve/execute/status/help",
+      name: "conductor parser handles approve/preview/execute/status/help",
       run: async () => {
         assert.deepStrictEqual(parseConductorCommand("approve plan-123"), { kind: "approve", planId: "plan-123" });
         assert.deepStrictEqual(parseConductorCommand("approve"), { kind: "approve", planId: undefined });
+        assert.deepStrictEqual(parseConductorCommand("preview plan-123"), { kind: "preview", planId: "plan-123" });
+        assert.deepStrictEqual(parseConductorCommand("preview"), { kind: "preview", planId: undefined });
+        const previewHash = "a".repeat(64);
+        assert.deepStrictEqual(parseConductorCommand(`execute ${previewHash}`), { kind: "execute", previewId: previewHash });
+        assert.deepStrictEqual(parseConductorCommand(`execute plan-123 ${previewHash}`), { kind: "execute", planId: "plan-123", previewId: previewHash });
         assert.deepStrictEqual(parseConductorCommand("execute plan-123"), { kind: "execute", planId: "plan-123" });
         assert.deepStrictEqual(parseConductorCommand("status"), { kind: "status" });
         assert.deepStrictEqual(parseConductorCommand("something else"), { kind: "help" });
@@ -943,6 +954,70 @@ const pass4: TestPass = {
 
         const tieWinner = selectBestStrategy(tied);
         assert.strictEqual(tieWinner.strategyId, "s-alpha");
+      },
+    },
+    {
+      id: "4.20",
+      name: "preview patch grouping and hash are deterministic",
+      run: async () => {
+        const patches: Patch[] = [
+          {
+            type: "replace",
+            location: testLocation("src/a.ts", 1, 0, 1, 3),
+            text: "next",
+          },
+          {
+            type: "create-file",
+            file: "src/b.ts",
+            content: "export const value = 1;\n",
+          },
+        ];
+
+        const grouped = groupPatchesByFile(patches);
+        assert.deepStrictEqual([...grouped.keys()], ["src/a.ts", "src/b.ts"]);
+
+        const before = "const value = 1;\n";
+        const after = "const value = 2;\n";
+        const firstDiff = generateDiff("src/a.ts", before, after);
+        const secondDiff = generateDiff("src/a.ts", before, after);
+        assert.strictEqual(firstDiff, secondDiff);
+
+        const preview: ExecutionPreview = {
+          previewId: "",
+          hash: "",
+          planId: "plan-preview",
+          summary: {
+            totalFilesChanged: 2,
+            totalPatches: patches.length,
+            totalDiagnosticsResolved: 1,
+          },
+          fileChanges: [
+            {
+              file: "src/a.ts",
+              patches: grouped.get("src/a.ts") ?? [],
+              before,
+              after,
+              diff: firstDiff,
+            },
+            {
+              file: "src/b.ts",
+              patches: grouped.get("src/b.ts") ?? [],
+              before: "",
+              after: "export const value = 1;\n",
+              diff: generateDiff("src/b.ts", "", "export const value = 1;\n"),
+            },
+          ],
+          diagnostics: [],
+          strategy: {
+            strategyId: "s-layered",
+            cost: 10,
+          },
+        };
+
+        const hashA = hashPreview(preview);
+        const hashB = hashPreview(preview);
+        assert.strictEqual(hashA, hashB);
+        assert.strictEqual(hashA.length, 64);
       },
     },
     {

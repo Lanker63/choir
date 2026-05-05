@@ -1,13 +1,18 @@
 export type ConductorCommand =
   | { kind: "plan"; goal?: string }
   | { kind: "approve"; planId?: string }
-  | { kind: "execute"; planId?: string }
+  | { kind: "preview"; planId?: string }
+  | { kind: "execute"; planId?: string; previewId?: string }
   | { kind: "status" }
   | { kind: "help" };
 
 function clean(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   return trimmed && trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isPreviewHash(value: string): boolean {
+  return /^[a-f0-9]{64}$/i.test(value.trim());
 }
 
 export function parseConductorCommand(input: string): ConductorCommand {
@@ -33,11 +38,35 @@ export function parseConductorCommand(input: string): ConductorCommand {
     };
   }
 
+  const previewMatch = prompt.match(/^preview(?:\s+(.+))?$/i);
+  if (previewMatch) {
+    return {
+      kind: "preview",
+      planId: clean(previewMatch[1]),
+    };
+  }
+
   const executeMatch = prompt.match(/^execute(?:\s+(.+))?$/i);
   if (executeMatch) {
+    const value = clean(executeMatch[1]);
+    if (!value) {
+      return {
+        kind: "execute",
+      };
+    }
+
+    const parts = value.split(/\s+/).filter((part) => part.length > 0);
+
+    if (parts.length === 1) {
+      return isPreviewHash(parts[0])
+        ? { kind: "execute", previewId: clean(parts[0])?.toLowerCase() }
+        : { kind: "execute", planId: clean(parts[0]) };
+    }
+
     return {
       kind: "execute",
-      planId: clean(executeMatch[1]),
+      planId: clean(parts[0]),
+      previewId: clean(parts[1])?.toLowerCase(),
     };
   }
 

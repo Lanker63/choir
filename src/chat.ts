@@ -4,7 +4,13 @@ import { readControlPlane, writeControlPlane } from "./choirManager.js";
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import { applyChatToControlPlane } from "./chatCompiler.js";
 import { runPipelineForWorkspace } from "./enforcer.js";
-import { approvePlan, executeSelectedPlansWithCost, summarizePlanStatus, upsertDraftPlan } from "./conductor.js";
+import {
+    approvePlan,
+    executeSelectedPlansWithPreviewGuard,
+    generateSelectedPlanPreview,
+    summarizePlanStatus,
+    upsertDraftPlan,
+} from "./conductor.js";
 import { parseConductorCommand } from "./conductorCommands.js";
 import { createEmptyStatePlane, readStatePlane } from "./core/state.js";
 
@@ -238,10 +244,16 @@ export function registerConductor(context: vscode.ExtensionContext) {
                     return;
                 }
 
+                if (!command.previewId) {
+                    stream.markdown("Execution requires a preview hash. Run `@choir.conductor preview [planId]`, then `@choir.conductor execute [planId] <previewHash>`." );
+                    return;
+                }
+
                 try {
-                    const result = await executeSelectedPlansWithCost(controlPlane, {
+                    const result = await executeSelectedPlansWithPreviewGuard(controlPlane, {
                         root,
                         requestedPlanId: command.planId,
+                        previewId: command.previewId,
                     });
 
                     const selected = result.selectedPlans.map((plan) => plan.id).join(", ");
@@ -277,6 +289,7 @@ export function registerConductor(context: vscode.ExtensionContext) {
                     stream.markdown([
                         "▶️ Cost-based plan execution complete",
                         "",
+                        `- Preview hash verified: ${result.previewHash}`,
                         `- Selected plans: ${selected}`,
                         `- Decision: ${result.costTrace.decision}`,
                         "",
@@ -290,6 +303,60 @@ export function registerConductor(context: vscode.ExtensionContext) {
                         executionSummary,
                         "",
                         "Use @choir.conductor status for current execution state.",
+                    ].join("\n"));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    stream.markdown(message);
+                }
+                return;
+            }
+
+            if (command.kind === "preview") {
+                const root = getWorkspaceRoot();
+                if (!root) {
+                    stream.markdown("No workspace folder found.");
+                    return;
+                }
+
+                try {
+                    const result = await generateSelectedPlanPreview(controlPlane, {
+                        root,
+                        requestedPlanId: command.planId,
+                    });
+
+                    const preview = result.preview;
+                    const changeSummary = preview.fileChanges
+                        .map((change) => [
+                            `--- ${change.file}`,
+                            "```diff",
+                            change.diff,
+                            "```",
+                        ].join("\n"))
+                        .join("\n\n");
+
+                    const diagnostics = preview.diagnostics
+                        .slice(0, 20)
+                        .map((diagnostic) => `- [${diagnostic.ruleId}] ${diagnostic.message} (${diagnostic.location.file})`)
+                        .join("\n");
+
+                    stream.markdown([
+                        `Plan: ${preview.planId}`,
+                        `Strategy: ${preview.strategy?.strategyId ?? "n/a"} (cost: ${(preview.strategy?.cost ?? 0).toFixed(2)})`,
+                        `Preview Hash: ${preview.hash}`,
+                        "",
+                        "Summary:",
+                        `- ${preview.summary.totalFilesChanged} files will change`,
+                        `- ${preview.summary.totalPatches} patches applied`,
+                        `- ${preview.summary.totalDiagnosticsResolved} diagnostics resolved`,
+                        "",
+                        "Changes:",
+                        changeSummary.length > 0 ? changeSummary : "- No file mutations proposed by simulation.",
+                        "",
+                        "Post-simulation diagnostics:",
+                        diagnostics.length > 0 ? diagnostics : "- None",
+                        "",
+                        "Execute this exact preview:",
+                        `- @choir.conductor execute ${command.planId ?? preview.planId} ${preview.hash}`,
                     ].join("\n"));
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
@@ -336,7 +403,8 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 "- plan",
                 "- plan for goal: <goal>",
                 "- approve <planId>",
-                "- execute [planId]",
+                "- preview [planId]",
+                "- execute [planId] <previewHash>",
                 "- status",
             ].join("\n"));
         }

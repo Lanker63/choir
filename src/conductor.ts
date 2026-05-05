@@ -10,11 +10,13 @@ import {
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
 import {
   MAX_STRATEGIES,
+  StrategyResult,
   StrategyTrace,
   buildStrategyTrace,
   evaluateStrategies,
   selectBestStrategy,
 } from "./core/strategyPlanner.js";
+import { ExecutionPreview, generateExecutionPreview } from "./core/executionPreview.js";
 import {
   createEmptyStatePlane,
   ExecutionState,
@@ -61,8 +63,35 @@ export type CostBasedExecutionResult = {
   state: StatePlane;
 };
 
+export type PreviewSelectionResult = {
+  preview: ExecutionPreview;
+  costTrace: CostTrace;
+  selectedPlan: Plan;
+  basePlanId: string;
+  strategyTrace: StrategyTrace;
+};
+
+type SelectedStrategyPlan = {
+  basePlan: Plan;
+  selected: StrategyResult;
+  trace: StrategyTrace;
+};
+
 function sortedPlans(plans: Plan[]): Plan[] {
   return [...plans].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function normalizePreviewHash(input: string | undefined): string | undefined {
+  if (!input) {
+    return undefined;
+  }
+
+  const trimmed = input.trim().toLowerCase();
+  if (/^[a-f0-9]{64}$/.test(trimmed)) {
+    return trimmed;
+  }
+
+  return undefined;
 }
 
 export function getApprovedPlans(control: ControlPlane): Plan[] {
@@ -415,13 +444,11 @@ export async function executeSelectedPlansWithCost(
     options.requestedPlanId
   );
 
-  const strategyTraces: CostBasedExecutionResult["strategyTraces"] = [];
-  const executionTraces: ExecutionTrace[] = [];
-  const executablePlans: Plan[] = [];
+  const planned: SelectedStrategyPlan[] = [];
 
-  for (const plan of sortedPlans(selectedPlans)) {
-    const baseCost = scorePlan(plan, state).totalCost;
-    const strategyResults = await evaluateStrategies(plan, state, {
+  for (const basePlan of sortedPlans(selectedPlans)) {
+    const baseCost = scorePlan(basePlan, state).totalCost;
+    const strategyResults = await evaluateStrategies(basePlan, state, {
       controlPlane: control,
       maxStrategies: MAX_STRATEGIES,
       costThreshold: baseCost * 4,
@@ -430,20 +457,32 @@ export async function executeSelectedPlansWithCost(
     const selectedStrategy = selectBestStrategy(strategyResults);
     const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
 
-    strategyTraces.push({
-      basePlanId: plan.id,
-      selectedStrategyId: selectedStrategy.strategyId,
+    planned.push({
+      basePlan,
+      selected: selectedStrategy,
       trace: strategyTrace,
     });
+  }
 
-    const executed = await executePlan(selectedStrategy.plan, {
+  const strategyTraces: CostBasedExecutionResult["strategyTraces"] = [];
+  const executionTraces: ExecutionTrace[] = [];
+  const executablePlans: Plan[] = [];
+
+  for (const plan of planned) {
+    strategyTraces.push({
+      basePlanId: plan.basePlan.id,
+      selectedStrategyId: plan.selected.strategyId,
+      trace: plan.trace,
+    });
+
+    const executed = await executePlan(plan.selected.plan, {
       controlPlane: control,
       root: options.root,
     });
 
     state = executed.state;
     executionTraces.push(executed.trace);
-    executablePlans.push(selectedStrategy.plan);
+    executablePlans.push(plan.selected.plan);
   }
 
   return {
@@ -452,6 +491,101 @@ export async function executeSelectedPlansWithCost(
     strategyTraces,
     executionTraces,
     state,
+  };
+}
+
+export async function generateSelectedPlanPreview(
+  control: ControlPlane,
+  options: {
+    root: string;
+    requestedPlanId?: string;
+  }
+): Promise<PreviewSelectionResult> {
+  const state = readStatePlane(options.root) ?? createEmptyStatePlane();
+  const { selectedPlans, costTrace } = selectApprovedPlansForExecution(control, state, options.requestedPlanId);
+
+  const basePlan = sortedPlans(selectedPlans)[0];
+  if (!basePlan) {
+    throw new Error("No approved plans available for preview.");
+  }
+
+  const baseCost = scorePlan(basePlan, state).totalCost;
+  const strategyResults = await evaluateStrategies(basePlan, state, {
+    controlPlane: control,
+    maxStrategies: MAX_STRATEGIES,
+    costThreshold: baseCost * 4,
+  });
+  const selectedStrategy = selectBestStrategy(strategyResults);
+  const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
+
+  const preview = await generateExecutionPreview(selectedStrategy.plan, {
+    root: options.root,
+    controlPlane: control,
+    state,
+    strategy: {
+      strategyId: selectedStrategy.strategyId,
+      cost: selectedStrategy.cost.totalCost,
+    },
+  });
+
+  updateExecutionState(options.root, (current) => ({
+    ...current,
+    lastPreview: {
+      hash: preview.hash,
+      planId: basePlan.id,
+      strategyId: selectedStrategy.strategyId,
+    },
+  }));
+
+  return {
+    preview,
+    costTrace,
+    selectedPlan: selectedStrategy.plan,
+    basePlanId: basePlan.id,
+    strategyTrace,
+  };
+}
+
+export async function executeSelectedPlansWithPreviewGuard(
+  control: ControlPlane,
+  options: {
+    root: string;
+    previewId?: string;
+    requestedPlanId?: string;
+  }
+): Promise<CostBasedExecutionResult & { previewHash: string }> {
+  const expectedHash = normalizePreviewHash(options.previewId);
+  if (!expectedHash) {
+    throw new Error("Execution requires a preview hash. Run: @choir.conductor preview [planId], then execute <planId> <previewHash>.");
+  }
+
+  const state = readStatePlane(options.root) ?? createEmptyStatePlane();
+  const lastPreview = state.execution.lastPreview;
+  if (!lastPreview || normalizePreviewHash(lastPreview.hash) !== expectedHash) {
+    throw new Error("Preview hash is not approved in state. Generate a fresh preview before execution.");
+  }
+
+  if (options.requestedPlanId && lastPreview.planId !== options.requestedPlanId) {
+    throw new Error(`Preview hash was generated for ${lastPreview.planId}. Generate preview for ${options.requestedPlanId} before execution.`);
+  }
+
+  const recomputed = await generateSelectedPlanPreview(control, {
+    root: options.root,
+    requestedPlanId: options.requestedPlanId,
+  });
+
+  if (normalizePreviewHash(recomputed.preview.hash) !== expectedHash) {
+    throw new Error("Preview hash mismatch. Workspace or control plane changed; re-run preview before execution.");
+  }
+
+  const executed = await executeSelectedPlansWithCost(control, {
+    root: options.root,
+    requestedPlanId: options.requestedPlanId,
+  });
+
+  return {
+    ...executed,
+    previewHash: expectedHash,
   };
 }
 

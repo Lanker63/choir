@@ -35,7 +35,7 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
   - Symbol/dependency graphs
   - Diagnostics
   - Metrics
-  - Execution runtime state (task status, task results, history)
+  - Execution runtime state (task status, task results, history, preview approvals)
 - Required properties:
   - Fully reproducible from workspace + control plane
   - Not user-authored
@@ -65,6 +65,8 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 - Select optimal plan set before execution
 - Evaluate deterministic strategy variants per selected plan
 - Select best validated strategy before execution
+- Generate exact execution preview from simulation
+- Enforce preview-hash approval gate before execution
 - Approve and execute plans
 - Report plan/task execution status
 - Preserve deterministic task ordering and dependency semantics
@@ -74,8 +76,9 @@ Supported command surface:
 - `plan`
 - `plan for goal: <goal>`
 - `approve <planId>`
-- `execute`
-- `execute <planId>`
+- `preview [planId]`
+- `execute <previewHash>`
+- `execute <planId> <previewHash>`
 - `status`
 
 ## Deterministic State → Plan Synthesis
@@ -185,6 +188,79 @@ After cost-based plan-set selection, each selected plan enters a deterministic s
 
 ---
 
+# Execution Preview (Deterministic, Simulation-Derived)
+
+Before execution, Conductor can produce a user-visible preview that shows exactly what will change.
+
+## Preview contract
+
+- Preview is derived from the execution simulation path, not a separate approximation.
+- Preview never mutates real workspace files.
+- Preview output is deterministic for identical inputs.
+- Preview must match what execution would apply for the same selected strategy plan.
+
+## Preview model
+
+```ts
+type ExecutionPreview = {
+  previewId: string;
+  hash: string;
+  planId: string;
+
+  summary: {
+    totalFilesChanged: number;
+    totalPatches: number;
+    totalDiagnosticsResolved: number;
+  };
+
+  fileChanges: Array<{
+    file: string;
+    patches: Patch[];
+    diff: string;
+    before: string;
+    after: string;
+  }>;
+
+  diagnostics: Diagnostic[];
+
+  strategy?: {
+    strategyId: string;
+    cost: number;
+  };
+};
+```
+
+## Preview pipeline
+
+1. Select approved plan(s) by deterministic cost policy.
+2. Select best strategy by deterministic multi-strategy policy.
+3. Execute selected strategy plan through simulation-only transaction flow.
+4. Collect proposed patches and virtual-FS after-state.
+5. Build grouped file changes and unified diffs.
+6. Compute deterministic hash from preview file changes.
+
+If preview and execution diverge, the execution pipeline is considered incorrect and must be fixed.
+
+## Approval gate
+
+- Execution requires an explicit preview hash.
+- Stored approval metadata in state (`execution.lastPreview`) includes:
+  - `hash`
+  - `planId`
+  - optional `strategyId`
+- Before execution, preview is recomputed and hash-compared.
+- Hash mismatch rejects execution and requires a fresh preview.
+
+## Hash rule
+
+```ts
+hash = sha256(JSON.stringify(preview.fileChanges));
+```
+
+This binds approval to exact file-level change content.
+
+---
+
 # Multi-Plan Optimization
 
 Execution planning across multiple plans follows a global optimization pass.
@@ -252,6 +328,7 @@ For identical inputs, Choir must produce identical:
 - Plan ids and task ordering
 - Plan scores and selected plan sets
 - Strategy variants and selected strategy ids
+- Preview file changes and preview hash
 - Execution graph/layers/batches
 - Conflict decisions
 - Transaction outcomes
@@ -262,6 +339,7 @@ Non-negotiable safeguards:
 2. All code mutation decisions flow through Enforcer logic
 3. Control plane and state plane authority boundaries remain strict
 4. Scheduler decisions are stable and auditable
+5. Execution is blocked unless preview hash is explicitly approved and revalidated
 
 ---
 
