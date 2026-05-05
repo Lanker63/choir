@@ -1,0 +1,12 @@
+- id: validate-request
+  description: Ensure request validation is performed
+  appliesTo:
+    files:
+      - "**"
+  match:
+    callExpressions:
+      - validateRequest
+  constraint:
+    type: require
+  message: All request handlers must call validateRequest
+  severity: warning

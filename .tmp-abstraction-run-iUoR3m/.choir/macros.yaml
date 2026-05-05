@@ -1,8 +1,0 @@
-macros:
-  - id: create-service
-    version: 1.0.0
-    parameters:
-      - name: name
-        required: true
-    body:
-      - choir define goal "create {{name}} service"
