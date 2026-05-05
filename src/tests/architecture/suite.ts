@@ -2232,6 +2232,56 @@ const pass2: TestPass = {
         assert.strictEqual(described.id, "invalid-macro-reference");
       },
     },
+    {
+      id: "2.64",
+      name: "dsl plan approval command mutates plan status deterministically",
+      run: async () => {
+        assert.deepStrictEqual(
+          parseCommand("choir plan approve plan-alpha").ast,
+          {
+            type: "plan-approve",
+            planId: "plan-alpha",
+          }
+        );
+
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-plan-approve-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+
+        const control = makeControlPlane();
+        control.execution.plans = [
+          {
+            id: "plan-alpha",
+            title: "alpha",
+            derivedFrom: "manual",
+            tasks: [
+              {
+                id: "task-1",
+                title: "task-1",
+                type: "analysis",
+                dependsOn: [],
+                successCriteria: ["ok"],
+              },
+            ],
+            status: "draft",
+          },
+        ];
+
+        fs.writeFileSync(controlPath, YAML.stringify(control), "utf-8");
+
+        const compiled = compileDSLAndWrite("choir plan approve plan-alpha", control, controlPath, {
+          workspaceRoot: root,
+          actorId: "test-runner",
+        });
+
+        assert.strictEqual(compiled.decision, "allow");
+        assert.strictEqual(compiled.changed, true);
+        assert.strictEqual(
+          compiled.updatedControlPlane.execution.plans.find((plan) => plan.id === "plan-alpha")?.status,
+          "approved"
+        );
+      },
+    },
   ],
 };
 

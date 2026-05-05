@@ -1,0 +1,5 @@
+macros:
+  - id: ci-only-macro
+    version: 1.0.0
+    body:
+      - choir define goal "ci-only-goal"

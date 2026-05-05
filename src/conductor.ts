@@ -295,6 +295,41 @@ export function selectApprovedPlansForExecution(
   };
 }
 
+function selectPlansForPreview(
+  control: ControlPlane,
+  state: StatePlane,
+  requestedPlanId?: string
+): { selectedPlans: Plan[]; costTrace: CostTrace } {
+  const allPlans = sortedPlans(control.execution.plans);
+
+  if (requestedPlanId) {
+    const requested = allPlans.find((plan) => plan.id === requestedPlanId);
+    if (!requested) {
+      throw new Error(`Plan not found: ${requestedPlanId}`);
+    }
+
+    const scored = scorePlans([requested], state);
+    const selectedPlans = selectPlanSet([requested], state);
+    const costTrace = buildCostTrace(selectedPlans[0]!.id, scored);
+    return { selectedPlans, costTrace };
+  }
+
+  if (allPlans.length === 0) {
+    throw new Error("No plans available for preview.");
+  }
+
+  const approvedPlans = getApprovedPlans(control);
+  const candidates = approvedPlans.length > 0 ? approvedPlans : allPlans;
+  const scored = scorePlans(candidates, state);
+  const selectedPlans = selectPlanSet(candidates, state);
+  const costTrace = buildCostTrace(selectedPlans[0]!.id, scored);
+
+  return {
+    selectedPlans,
+    costTrace,
+  };
+}
+
 export function upsertDraftPlan(
   control: ControlPlane,
   state: StatePlane,
@@ -746,7 +781,7 @@ export async function generateSelectedPlanPreview(
   }
 ): Promise<PreviewSelectionResult> {
   const state = readStatePlane(options.root) ?? createEmptyStatePlane();
-  const { selectedPlans, costTrace } = selectApprovedPlansForExecution(control, state, options.requestedPlanId);
+  const { selectedPlans, costTrace } = selectPlansForPreview(control, state, options.requestedPlanId);
 
   const basePlan = sortedPlans(selectedPlans)[0];
   if (!basePlan) {

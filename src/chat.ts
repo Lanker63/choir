@@ -104,6 +104,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"enforce service boundaries\"",
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
+        "- choir plan approve <planId>",
         "- choir export dsl",
         "- choir export dsl intent",
         "- choir macro list",

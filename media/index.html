@@ -7,21 +7,47 @@
       content="default-src 'none'; img-src __CSP_SOURCE__ https: data:; font-src __CSP_SOURCE__ data:; connect-src __CSP_SOURCE__; style-src __CSP_SOURCE__ 'unsafe-inline'; script-src 'nonce-__NONCE__' __CSP_SOURCE__; worker-src blob: __CSP_SOURCE__;"
     />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Choir Rule Editor</title>
+    <title>Choir Control Center</title>
     <link rel="stylesheet" href="__STYLE_URI__" />
   </head>
   <body>
-    <div class="container">
-      <div class="header">
-        <h3>Choir Rule Editor</h3>
-        <div class="header-actions">
-          <button id="saveBtn" type="button">Save</button>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Choir Product UX</div>
+          <h1>Control Center</h1>
         </div>
-      </div>
-      <div id="editor"></div>
-      <div class="output">
-        <div class="output-header">Result</div>
-        <pre id="output"></pre>
+        <div class="topbar-actions">
+          <button id="refreshBtn" type="button">Refresh</button>
+        </div>
+      </header>
+
+      <section class="toolbar">
+        <div class="field role-field">
+          <label for="roleSelect">Role</label>
+          <select id="roleSelect">
+            <option value="conductor" selected>conductor</option>
+            <option value="architect">architect</option>
+            <option value="analyst">analyst</option>
+            <option value="enforcer">enforcer</option>
+          </select>
+        </div>
+        <div class="field dsl-field">
+          <label for="dslInput">Explicit DSL Action</label>
+          <div class="dsl-row">
+            <input id="dslInput" type="text" placeholder="choir plan" />
+            <button id="runDslBtn" type="button">Run</button>
+          </div>
+        </div>
+      </section>
+
+      <nav id="surfaceTabs" class="surface-tabs" aria-label="UI Surfaces"></nav>
+
+      <main id="surfaceContainer" class="surface-container"></main>
+
+      <section class="console">
+        <div class="console-header">Action Log</div>
+        <pre id="consoleOutput"></pre>
       </div>
     </div>
     <script nonce="__NONCE__">

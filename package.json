@@ -25,7 +25,7 @@
     "commands": [
       {
         "command": "choir.openRuleEditor",
-        "title": "Choir: Open Rule Editor",
+        "title": "Choir: Open Control Center",
         "category": "Choir"
       },
       {
@@ -35,12 +35,12 @@
       },
       {
         "command": "choir.openRuleEditorPanel",
-        "title": "Choir: Open Rule Editor (Panel)",
+        "title": "Choir: Open Control Center (Panel)",
         "category": "Choir"
       },
       {
         "command": "choir.openRuleEditorPanelResolve",
-        "title": "Choir: Open Rule Editor (Panel Resolve)",
+        "title": "Choir: Open Control Center (Panel Resolve)",
         "category": "Choir"
       },
       {
@@ -129,7 +129,7 @@
         {
           "type": "webview",
           "id": "choir.ruleEditor",
-          "name": "Rule Editor",
+          "name": "Control Center",
           "icon": "media/choir.png"
         }
       ]

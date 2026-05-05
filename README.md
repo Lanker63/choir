@@ -364,6 +364,7 @@ Grammar:
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
 <plan> ::= "plan" ["for" <string>]
+         | "plan" "approve" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
@@ -464,6 +465,7 @@ Supported commands:
 
 - `choir plan`
 - `choir plan for "service boundaries"`
+- `choir plan approve <planId>`
 - `choir preview`
 - `choir preview plan <planId>`
 - `choir execute`
@@ -516,6 +518,7 @@ Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
+- `choir plan approve <planId>`: marks an existing plan as approved in YAML via deterministic update
 - `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
 
 YAML -> DSL projection behavior:

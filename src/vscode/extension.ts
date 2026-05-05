@@ -57,13 +57,13 @@ export function activate(context: vscode.ExtensionContext) {
             void triggerPipeline();
         }));
 
-        // Command to open a selected rule in the webview panel
+        // Command to focus the Control Center webview.
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorForRule", async (rule) => {
             try {
                 const yaml = await import("yaml");
                 const dslText = yaml.stringify([rule]);
 
-                // Reuse the sidebar rule editor instead of opening a second panel.
+                // Reuse the sidebar control center instead of opening a second panel.
                 provider.setDslText(dslText);
                 await vscode.commands.executeCommand("workbench.view.extension.choir");
                 await vscode.commands.executeCommand("choir.ruleEditor.focus");
@@ -81,7 +81,7 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 const panel = vscode.window.createWebviewPanel(
                     "choir.ruleEditor.panel",
-                    "Rule Editor (Panel)",
+                    "Choir Control Center (Panel)",
                     vscode.ViewColumn.One,
                     { enableScripts: true }
                 );
@@ -101,14 +101,14 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 const panel = vscode.window.createWebviewPanel(
                     "choir.ruleEditor.panel.resolve",
-                    "Rule Editor (Panel Resolve)",
+                    "Choir Control Center (Panel Resolve)",
                     vscode.ViewColumn.One,
                     { enableScripts: true }
                 );
 
                 const fakeView: any = {
                     viewType: "choir.ruleEditor",
-                    title: "Rule Editor",
+                    title: "Control Center",
                     webview: panel.webview,
                     show: (_preserveFocus?: boolean) => {},
                 };

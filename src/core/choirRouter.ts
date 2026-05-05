@@ -27,6 +27,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <analyze-target> ::= "workspace" | "violations" | "hotspots"
 
 <plan> ::= "plan" ["for" <string>]
+         | "plan" "approve" <identifier>
 
 <preview> ::= "preview" [<plan-ref>]
 
@@ -164,6 +165,11 @@ export type PlanNode = {
   target?: string;
 };
 
+export type PlanApproveNode = {
+  type: "plan-approve";
+  planId: string;
+};
+
 export type PreviewNode = {
   type: "preview";
   planRef?: PlanRef;
@@ -275,6 +281,7 @@ export type ActionNode =
   | DefineNode
   | AnalyzeNode
   | PlanNode
+  | PlanApproveNode
   | PreviewNode
   | ExecuteNode
   | StatusNode
@@ -627,8 +634,15 @@ class Parser {
     };
   }
 
-  private parsePlan(): PlanNode {
+  private parsePlan(): PlanNode | PlanApproveNode {
     this.expectKeyword("plan");
+    if (this.consumeKeyword("approve")) {
+      return {
+        type: "plan-approve",
+        planId: this.expectIdentifier(),
+      };
+    }
+
     if (this.consumeKeyword("for")) {
       return {
         type: "plan",
@@ -998,6 +1012,10 @@ function validateActionNode(node: ActionNode): boolean {
     return node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
   }
 
+  if (node.type === "plan-approve") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.planId);
+  }
+
   if (node.type === "preview" || node.type === "execute") {
     return node.planRef === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.planRef.identifier);
   }
@@ -1126,6 +1144,11 @@ async function compileAction<TContext>(
       trace.rolesInvoked.push("conductor");
       trace.steps.push("conductor.plan");
       trace.compiledActions.push("conductor.plan");
+      return;
+
+    case "plan-approve":
+      trace.steps.push("system.plan.approve");
+      trace.compiledActions.push("system.plan.approve");
       return;
 
     case "preview":

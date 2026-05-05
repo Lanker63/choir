@@ -83,6 +83,7 @@ DSL command grammar:
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
 <plan> ::= "plan" ["for" <string>]
+         | "plan" "approve" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
@@ -207,6 +208,7 @@ Supported command surface (via `@choir`):
 - `choir define goal|constraint|non-goal "..."`
 - `choir analyze workspace|violations|hotspots`
 - `choir plan [for "..."]`
+- `choir plan approve <planId>`
 - `choir preview [plan <planId>]`
 - `choir execute [plan <planId>]`
 - `choir status`
@@ -246,6 +248,7 @@ Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
+- `plan approve` updates `execution.plans[*].status` to `approved` deterministically.
 - `analyze|preview|execute|status|ci|audit|import|library|<abstraction-id>` are non-mutating in YAML compiler mode.
 
 Projection contract:

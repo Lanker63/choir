@@ -1,0 +1,6 @@
+abstractions:
+  - id: invalid-macro-reference
+    version: 1.0.0
+    description: invalid
+    expandsTo:
+      - choir macro missing.library-macro

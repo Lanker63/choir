@@ -103,5 +103,12 @@
       "choir bootstrap-service name=\"$1\""
     ],
     "description": "Run a high-level abstraction command"
+  },
+  "Approve Plan": {
+    "prefix": "plan-approve",
+    "body": [
+      "choir plan approve $1"
+    ],
+    "description": "Approve a draft execution plan"
   }
 }

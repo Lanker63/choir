@@ -85,6 +85,10 @@ function capabilitiesForAction(action: ActionNode): PolicyAction[] {
     return ["plan"];
   }
 
+  if (action.type === "plan-approve") {
+    return ["plan"];
+  }
+
   if (action.type === "ci-run") {
     return ["plan"];
   }
@@ -110,7 +114,7 @@ function inferRoleFromAST(ast: AST): Role {
     for (const action of ast.actions) {
       if (action.type === "define") {
         roles.add("architect");
-      } else if (action.type === "plan" || action.type === "preview" || action.type === "ci-run" || action.type === "abstraction-run") {
+      } else if (action.type === "plan" || action.type === "plan-approve" || action.type === "preview" || action.type === "ci-run" || action.type === "abstraction-run") {
         roles.add("conductor");
       } else if (action.type === "execute") {
         roles.add("enforcer");
@@ -130,7 +134,7 @@ function inferRoleFromAST(ast: AST): Role {
     return "architect";
   }
 
-  if (ast.type === "plan" || ast.type === "preview" || ast.type === "ci-run" || ast.type === "abstraction-run") {
+  if (ast.type === "plan" || ast.type === "plan-approve" || ast.type === "preview" || ast.type === "ci-run" || ast.type === "abstraction-run") {
     return "conductor";
   }
 
@@ -408,6 +412,33 @@ function compileActionToYAML(
     const before = next.execution.plans;
     const after = upsertPlan(before, draftPlan);
     trackChange(changes, "execution.plans", before.map((plan) => plan.id), after.map((plan) => plan.id));
+
+    return {
+      ...next,
+      execution: {
+        ...next.execution,
+        plans: after,
+      },
+    };
+  }
+
+  if (action.type === "plan-approve") {
+    const before = next.execution.plans;
+    const target = before.find((plan) => plan.id === action.planId);
+    if (!target) {
+      return next;
+    }
+
+    const after = before
+      .map((plan) => (plan.id === action.planId ? { ...plan, status: "approved" as const } : plan))
+      .sort((left, right) => left.id.localeCompare(right.id));
+
+    trackChange(
+      changes,
+      "execution.plans",
+      before.map((plan) => `${plan.id}:${plan.status}`),
+      after.map((plan) => `${plan.id}:${plan.status}`)
+    );
 
     return {
       ...next,

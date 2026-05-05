@@ -1,119 +1,690 @@
 /// <reference path="./global.d.ts" />
 
-import type * as monaco from "monaco-editor/esm/vs/editor/editor.api";
-import { createRuleEditor } from "./editor";
+import type {
+  ProductActionRequest,
+  ProductActionResult,
+  ProductSnapshot,
+  UISurface,
+  WorkflowStep,
+  WebviewOutboundMessage,
+} from "../ui/contracts.js";
 import "./styles.css";
 
-const vscode = (window as any).vscode;
+type Role = "architect" | "analyst" | "conductor" | "enforcer";
+
+const WORKFLOW_PERMISSIONS: Record<Role, WorkflowStep[]> = {
+  architect: ["define-intent", "approve", "audit"],
+  analyst: ["audit"],
+  conductor: ["define-intent", "plan", "preview", "approve", "audit"],
+  enforcer: ["execute", "audit"],
+};
+
+const SURFACE_LABELS: Record<UISurface, string> = {
+  dashboard: "Dashboard",
+  workspace: "Workspace",
+  "plan-view": "Plan View",
+  "policy-view": "Policy View",
+  "audit-view": "Audit View",
+  "macro-library": "Macro/Abstraction",
+};
+
+const vscode = (window as { vscode?: { postMessage: (message: unknown) => void } }).vscode;
 if (!vscode) {
-  console.warn("VSCode API not available — running outside webview?");
-}
-const editorRoot = document.getElementById("editor");
-const output = document.getElementById("output");
-
-if (!(editorRoot instanceof HTMLElement) || !(output instanceof HTMLElement)) {
-  throw new Error("Rule editor webview is missing required DOM elements.");
+  throw new Error("VSCode API not available in webview context.");
 }
 
-const editorElement: HTMLElement = editorRoot;
-const outputElement: HTMLElement = output;
+const roleSelect = document.getElementById("roleSelect");
+const dslInput = document.getElementById("dslInput");
+const runDslBtn = document.getElementById("runDslBtn");
+const refreshBtn = document.getElementById("refreshBtn");
+const surfaceTabs = document.getElementById("surfaceTabs");
+const surfaceContainer = document.getElementById("surfaceContainer");
+const consoleOutput = document.getElementById("consoleOutput");
 
-let editor: monaco.editor.IStandaloneCodeEditor;
+if (!(roleSelect instanceof HTMLSelectElement)
+  || !(dslInput instanceof HTMLInputElement)
+  || !(runDslBtn instanceof HTMLButtonElement)
+  || !(refreshBtn instanceof HTMLButtonElement)
+  || !(surfaceTabs instanceof HTMLElement)
+  || !(surfaceContainer instanceof HTMLElement)
+  || !(consoleOutput instanceof HTMLElement)
+) {
+  throw new Error("Choir Control Center webview is missing required elements.");
+}
 
-function postMessageSafe(message: any) {
-  if (!vscode) {
-    console.warn("Skipping postMessage (no VSCode API)", message);
+let snapshot: ProductSnapshot | null = null;
+let activeSurface: UISurface = "dashboard";
+let auditFilters: { role?: string; environment?: string } = {};
+
+function getActiveRole(): Role {
+  const value = roleSelect.value;
+  if (value === "architect" || value === "analyst" || value === "conductor" || value === "enforcer") {
+    return value;
+  }
+
+  return "conductor";
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function appendLog(line: string): void {
+  const timestamp = new Date().toISOString();
+  const existing = consoleOutput.textContent ?? "";
+  consoleOutput.textContent = `[${timestamp}] ${line}\n${existing}`;
+}
+
+function postAction(payload: ProductActionRequest): void {
+  vscode.postMessage({
+    type: "action",
+    payload,
+  });
+}
+
+function canRunStep(role: Role, step: WorkflowStep): boolean {
+  return WORKFLOW_PERMISSIONS[role].includes(step);
+}
+
+function statusChip(value: string): string {
+  if (value === "stable" || value === "allow") {
+    return `<span class="chip success">${escapeHtml(value)}</span>`;
+  }
+
+  if (value === "needs-attention" || value === "deny") {
+    return `<span class="chip danger">${escapeHtml(value)}</span>`;
+  }
+
+  return `<span class="chip warn">${escapeHtml(value)}</span>`;
+}
+
+function renderTabs(): void {
+  if (!snapshot) {
+    surfaceTabs.innerHTML = "";
     return;
   }
 
-  vscode.postMessage(message);
-}
+  const available = snapshot.availableSurfaces;
+  if (!available.includes(activeSurface)) {
+    activeSurface = available[0] ?? "dashboard";
+  }
 
-function debounce<T extends (...args: any[]) => void>(callback: T, waitMs = 300): (...args: Parameters<T>) => void {
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  surfaceTabs.innerHTML = available
+    .map((surface) => {
+      const isActive = surface === activeSurface;
+      return `<button type="button" class="surface-tab ${isActive ? "active" : ""}" data-surface="${surface}">${SURFACE_LABELS[surface]}</button>`;
+    })
+    .join("");
 
-  return (...args: Parameters<T>) => {
-    if (timer) {
-      clearTimeout(timer);
-    }
+  surfaceTabs.querySelectorAll<HTMLButtonElement>(".surface-tab").forEach((button) => {
+    button.addEventListener("click", () => {
+      const surface = button.dataset.surface as UISurface | undefined;
+      if (!surface) {
+        return;
+      }
 
-    timer = setTimeout(() => {
-      callback(...args);
-    }, waitMs);
-  };
-}
-
-function setOutputText(text: string) {
-  outputElement.textContent = text;
-}
-
-function initEditor() {
-  console.log("editorRoot:", editorRoot);
-  editor = createRuleEditor(editorElement, "");
-  const debouncedValidate = debounce(() => {
-    postMessageSafe({
-      type: "validate",
-      dsl: editor.getValue(),
-    });
-  }, 400);
-
-  editor.onDidChangeModelContent(debouncedValidate);
-  setTimeout(() => {
-    editor.layout();
-  }, 0);
-}
-
-export function wireSave() {
-  const btn = document.getElementById("saveBtn");
-
-  btn?.addEventListener("click", () => {
-    if (!editor) return;
-
-    postMessageSafe({
-      type: "save",
-      dsl: editor.getValue(),
+      activeSurface = surface;
+      renderSurface();
     });
   });
 }
 
-export function wireIncoming() {
-  window.addEventListener("message", (event) => {
-    const { type, payload, error } = event.data;
+function renderDashboard(): string {
+  if (!snapshot) {
+    return "";
+  }
 
-    if (type === "setDSL") {
-      if (!editor) {
-        console.warn("Editor not ready yet");
+  const recommendations = snapshot.dashboard.recommendations.length > 0
+    ? snapshot.dashboard.recommendations.map((entry) => `<li>${escapeHtml(entry)}</li>`).join("")
+    : "<li>No recommendations. System is aligned.</li>";
+
+  const recent = snapshot.dashboard.recentActions.length > 0
+    ? snapshot.dashboard.recentActions.map((entry) => `<li><span class="mono">${escapeHtml(entry.timestamp)}</span> ${escapeHtml(entry.action)} (${escapeHtml(entry.result)})</li>`).join("")
+    : "<li>No audit events yet.</li>";
+
+  return `
+    <section class="grid">
+      <article class="card">
+        <div class="muted">System Health</div>
+        <div class="kpi">${statusChip(snapshot.dashboard.systemHealth)}</div>
+      </article>
+      <article class="card">
+        <div class="muted">Active Plans</div>
+        <div class="kpi">${snapshot.dashboard.activePlans}</div>
+      </article>
+      <article class="card">
+        <div class="muted">Policy Violations</div>
+        <div class="kpi">${snapshot.dashboard.policyViolations}</div>
+      </article>
+      <article class="card wide">
+        <div class="muted">Recommended Next Actions</div>
+        <ul class="list">${recommendations}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Recent Actions</div>
+        <ul class="list">${recent}</ul>
+      </article>
+    </section>
+  `;
+}
+
+function renderWorkflowControls(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const role = getActiveRole();
+  const stepMarkup = ["define-intent", "plan", "preview", "approve", "execute", "audit"].map((step) => {
+    const workflowStep = step as WorkflowStep;
+    const isCurrent = snapshot?.workflow.current === workflowStep;
+    const isDone = snapshot?.workflow.completed.includes(workflowStep);
+    return `<span class="step ${isCurrent ? "current" : ""} ${isDone ? "done" : ""}">${escapeHtml(step)}</span>`;
+  }).join("");
+
+  return `
+    <article class="card full">
+      <div class="muted">Guided Workflow</div>
+      <div class="workflow">${stepMarkup}</div>
+      <p class="muted">Current step: ${escapeHtml(snapshot.workflow.current)}</p>
+      <div class="grid">
+        <div class="card">
+          <label for="intentInput">Define Intent</label>
+          <input id="intentInput" type="text" placeholder="create safer service boundaries" />
+          <div style="display:flex;gap:8px;margin-top:8px;">
+            <button id="runDefineBtn" ${canRunStep(role, "define-intent") ? "" : "disabled"}>Run</button>
+          </div>
+        </div>
+        <div class="card">
+          <label for="planGoalInput">Generate Plan</label>
+          <input id="planGoalInput" type="text" placeholder="optional goal override" />
+          <button id="runPlanBtn" style="margin-top:8px;" ${canRunStep(role, "plan") ? "" : "disabled"}>Run</button>
+        </div>
+        <div class="card">
+          <label for="previewPlanInput">Preview Plan ID (optional)</label>
+          <input id="previewPlanInput" type="text" placeholder="plan-abc123" />
+          <button id="runPreviewBtn" style="margin-top:8px;" ${canRunStep(role, "preview") ? "" : "disabled"}>Run</button>
+        </div>
+        <div class="card">
+          <label for="approveInput">Approve Diff ID or Plan ID</label>
+          <input id="approveInput" type="text" placeholder="diff-... or plan-..." />
+          <button id="runApproveBtn" style="margin-top:8px;" ${canRunStep(role, "approve") ? "" : "disabled"}>Run</button>
+        </div>
+        <div class="card">
+          <label for="executePlanInput">Execute Plan ID (optional)</label>
+          <input id="executePlanInput" type="text" placeholder="plan-abc123" />
+          <button id="runExecuteBtn" style="margin-top:8px;" ${canRunStep(role, "execute") ? "" : "disabled"}>Run</button>
+        </div>
+        <div class="card">
+          <label>Audit</label>
+          <p class="muted">Fetch current immutable audit timeline.</p>
+          <button id="runAuditBtn" ${canRunStep(role, "audit") ? "" : "disabled"}>Run</button>
+        </div>
+      </div>
+    </article>
+  `;
+}
+
+function renderPlanView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const rows = snapshot.planView.length > 0
+    ? snapshot.planView.map((plan) => `
+      <tr>
+        <td class="mono">${escapeHtml(plan.planId)}</td>
+        <td>${escapeHtml(plan.tasks.join(", "))}</td>
+        <td class="mono">${escapeHtml(plan.affectedFiles.join(", "))}</td>
+        <td>${plan.estimatedImpact}</td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="4" class="muted">No plans yet.</td></tr>`;
+
+  const diffBlocks = snapshot.diffView.length > 0
+    ? snapshot.diffView.map((diff) => `
+        <article class="card full">
+          <div class="mono">${escapeHtml(diff.file)}</div>
+          <div class="diff">
+            <pre>${escapeHtml(diff.before)}</pre>
+            <pre>${escapeHtml(diff.after)}</pre>
+          </div>
+        </article>
+      `).join("")
+    : `<article class="card full"><div class="muted">No preview diff loaded yet. Run Preview.</div></article>`;
+
+  return `
+    <section class="grid">
+      ${renderWorkflowControls()}
+      <article class="card full">
+        <div class="muted">Plan Summary</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Plan</th>
+              <th>Tasks</th>
+              <th>Affected Files</th>
+              <th>Impact</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </article>
+      ${diffBlocks}
+    </section>
+  `;
+}
+
+function renderPolicyView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const rows = snapshot.policyView.map((entry) => `
+    <tr>
+      <td>${statusChip(entry.decision)}</td>
+      <td>${escapeHtml(entry.rulesMatched.join(", ")) || "none"}</td>
+      <td>${escapeHtml(entry.source)}</td>
+    </tr>
+  `).join("");
+
+  const pendingRows = snapshot.pendingApprovals.length > 0
+    ? snapshot.pendingApprovals.map((entry) => `<li><span class="mono">${escapeHtml(entry.id)}</span> ${escapeHtml(entry.command)}</li>`).join("")
+    : "<li>No pending approvals.</li>";
+
+  return `
+    <section class="grid">
+      <article class="card full">
+        <div class="muted">Policy Decision Trace</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Decision</th>
+              <th>Rules Matched</th>
+              <th>Source Layer</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </article>
+      <article class="card full">
+        <div class="muted">Pending Approvals</div>
+        <ul class="list">${pendingRows}</ul>
+      </article>
+    </section>
+  `;
+}
+
+function renderAuditView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const rows = snapshot.auditView.events.length > 0
+    ? snapshot.auditView.events.map((event) => `
+      <tr>
+        <td class="mono">${escapeHtml(event.timestamp)}</td>
+        <td>${escapeHtml(event.actor.role)}</td>
+        <td>${escapeHtml(event.action)}</td>
+        <td>${escapeHtml(event.result)}</td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="4" class="muted">No events for current filters.</td></tr>`;
+
+  return `
+    <section class="grid">
+      <article class="card full">
+        <div style="display:flex;gap:8px;align-items:end;">
+          <div>
+            <label for="auditRoleFilter">Role Filter</label>
+            <input id="auditRoleFilter" type="text" placeholder="architect|analyst|conductor|enforcer" value="${escapeHtml(auditFilters.role ?? "")}" />
+          </div>
+          <div>
+            <label for="auditEnvFilter">Environment Filter</label>
+            <input id="auditEnvFilter" type="text" placeholder="local|ci|staging|production" value="${escapeHtml(auditFilters.environment ?? "")}" />
+          </div>
+          <button id="applyAuditFilterBtn" class="ghost">Apply</button>
+        </div>
+      </article>
+      <article class="card full">
+        <div class="muted">Immutable Audit Timeline</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Role</th>
+              <th>Action</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </article>
+    </section>
+  `;
+}
+
+function renderMacroLibraryView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const libraries = snapshot.macroUI.libraries.length > 0
+    ? snapshot.macroUI.libraries.map((library) => `<li>${escapeHtml(library)}</li>`).join("")
+    : "<li>No libraries installed.</li>";
+
+  const macros = snapshot.macroUI.macros.length > 0
+    ? snapshot.macroUI.macros.map((macro) => `<li class="mono">${escapeHtml(macro)}</li>`).join("")
+    : "<li>No macros discovered.</li>";
+
+  const abstractions = snapshot.macroUI.abstractions.length > 0
+    ? snapshot.macroUI.abstractions.map((abstraction) => `<li class="mono">${escapeHtml(abstraction)}</li>`).join("")
+    : "<li>No abstractions discovered.</li>";
+
+  return `
+    <section class="grid">
+      <article class="card">
+        <div class="muted">Libraries</div>
+        <ul class="list">${libraries}</ul>
+      </article>
+      <article class="card">
+        <div class="muted">Macros</div>
+        <ul class="list">${macros}</ul>
+      </article>
+      <article class="card">
+        <div class="muted">Abstractions</div>
+        <ul class="list">${abstractions}</ul>
+      </article>
+      <article class="card full">
+        <label for="macroCommandInput">Macro/Abstraction Command</label>
+        <div class="dsl-row">
+          <input id="macroCommandInput" type="text" placeholder="choir macro local.id key='value'" />
+          <button id="runMacroCommandBtn" class="secondary">Run</button>
+        </div>
+      </article>
+    </section>
+  `;
+}
+
+function renderWorkspaceView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const traceRows = snapshot.traces.slice(0, 8).map((trace) => `
+      <tr>
+        <td>${escapeHtml(trace.action)}</td>
+        <td class="mono">${escapeHtml(trace.resultingDSL)}</td>
+      </tr>
+    `).join("");
+
+  return `
+    <section class="grid">
+      <article class="card full">
+        <div class="muted">Role View</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Role</th>
+              <th>Focus</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td>architect</td><td>${snapshot.roleView.architect.join(", ")}</td></tr>
+            <tr><td>analyst</td><td>${snapshot.roleView.analyst.join(", ")}</td></tr>
+            <tr><td>conductor</td><td>${snapshot.roleView.conductor.join(", ")}</td></tr>
+            <tr><td>enforcer</td><td>${snapshot.roleView.enforcer.join(", ")}</td></tr>
+          </tbody>
+        </table>
+      </article>
+      <article class="card full">
+        <div class="muted">Current Control Plane (Canonical Projection)</div>
+        <pre class="mono">${escapeHtml(JSON.stringify(snapshot.controlPlane, null, 2))}</pre>
+      </article>
+      <article class="card full">
+        <div class="muted">Recent UI Traceability</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Action</th>
+              <th>Resulting DSL</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${traceRows || `<tr><td colspan="2" class="muted">No UI traces yet.</td></tr>`}
+          </tbody>
+        </table>
+      </article>
+    </section>
+  `;
+}
+
+function wireSurfaceButtons(): void {
+  const runDefineBtn = document.getElementById("runDefineBtn");
+  const runPlanBtn = document.getElementById("runPlanBtn");
+  const runPreviewBtn = document.getElementById("runPreviewBtn");
+  const runApproveBtn = document.getElementById("runApproveBtn");
+  const runExecuteBtn = document.getElementById("runExecuteBtn");
+  const runAuditBtn = document.getElementById("runAuditBtn");
+  const applyAuditFilterBtn = document.getElementById("applyAuditFilterBtn");
+  const runMacroCommandBtn = document.getElementById("runMacroCommandBtn");
+
+  if (runDefineBtn instanceof HTMLButtonElement) {
+    runDefineBtn.addEventListener("click", () => {
+      const intentInput = document.getElementById("intentInput");
+      const intent = intentInput instanceof HTMLInputElement ? intentInput.value.trim() : "";
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "define-intent",
+        payload: { intent },
+      });
+    });
+  }
+
+  if (runPlanBtn instanceof HTMLButtonElement) {
+    runPlanBtn.addEventListener("click", () => {
+      const goalInput = document.getElementById("planGoalInput");
+      const goal = goalInput instanceof HTMLInputElement ? goalInput.value.trim() : "";
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "plan",
+        payload: goal.length > 0 ? { goal } : {},
+      });
+    });
+  }
+
+  if (runPreviewBtn instanceof HTMLButtonElement) {
+    runPreviewBtn.addEventListener("click", () => {
+      const planInput = document.getElementById("previewPlanInput");
+      const planId = planInput instanceof HTMLInputElement ? planInput.value.trim() : "";
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "preview",
+        payload: planId.length > 0 ? { planId } : {},
+      });
+    });
+  }
+
+  if (runApproveBtn instanceof HTMLButtonElement) {
+    runApproveBtn.addEventListener("click", () => {
+      const approveInput = document.getElementById("approveInput");
+      const value = approveInput instanceof HTMLInputElement ? approveInput.value.trim() : "";
+      if (!value) {
+        appendLog("Approve requires diff id or plan id.");
         return;
       }
 
-      editor.setValue(payload?.dsl ?? "");
-      return;
-    }
+      const payload = value.startsWith("diff-") ? { diffId: value } : { planId: value };
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "approve",
+        payload,
+      });
+    });
+  }
 
-    if (type === "result") {
-      if (error) {
-        setOutputText("ERROR:\n" + error);
+  if (runExecuteBtn instanceof HTMLButtonElement) {
+    runExecuteBtn.addEventListener("click", () => {
+      const executeInput = document.getElementById("executePlanInput");
+      const planId = executeInput instanceof HTMLInputElement ? executeInput.value.trim() : "";
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "execute",
+        payload: planId.length > 0 ? { planId } : {},
+      });
+    });
+  }
+
+  if (runAuditBtn instanceof HTMLButtonElement) {
+    runAuditBtn.addEventListener("click", () => {
+      postAction({
+        type: "run-workflow",
+        role: getActiveRole(),
+        step: "audit",
+      });
+    });
+  }
+
+  if (applyAuditFilterBtn instanceof HTMLButtonElement) {
+    applyAuditFilterBtn.addEventListener("click", () => {
+      const roleInput = document.getElementById("auditRoleFilter");
+      const envInput = document.getElementById("auditEnvFilter");
+
+      auditFilters = {
+        ...(roleInput instanceof HTMLInputElement && roleInput.value.trim().length > 0
+          ? { role: roleInput.value.trim() }
+          : {}),
+        ...(envInput instanceof HTMLInputElement && envInput.value.trim().length > 0
+          ? { environment: envInput.value.trim() }
+          : {}),
+      };
+
+      postAction({
+        type: "refresh",
+        role: getActiveRole(),
+        filters: auditFilters,
+      });
+    });
+  }
+
+  if (runMacroCommandBtn instanceof HTMLButtonElement) {
+    runMacroCommandBtn.addEventListener("click", () => {
+      const input = document.getElementById("macroCommandInput");
+      if (!(input instanceof HTMLInputElement)) {
         return;
       }
 
-      setOutputText(JSON.stringify(payload, null, 2));
-    }
+      const value = input.value.trim();
+      if (value.length === 0) {
+        return;
+      }
 
-    if (type === "saved") {
-      const message = typeof payload?.message === "string" ? payload.message : "Rules saved";
-      const mode = payload?.mode ? ` (${payload.mode})` : "";
-      const path = payload?.path ? `\n${payload.path}` : "";
-      setOutputText(`✅ ${message}${mode}${path}`);
-    }
+      postAction({
+        type: "run-dsl",
+        role: getActiveRole(),
+        dsl: value,
+      });
+    });
+  }
+}
+
+function renderSurface(): void {
+  if (!snapshot) {
+    surfaceContainer.innerHTML = "";
+    return;
+  }
+
+  if (activeSurface === "dashboard") {
+    surfaceContainer.innerHTML = renderDashboard();
+  } else if (activeSurface === "workspace") {
+    surfaceContainer.innerHTML = renderWorkspaceView();
+  } else if (activeSurface === "plan-view") {
+    surfaceContainer.innerHTML = renderPlanView();
+  } else if (activeSurface === "policy-view") {
+    surfaceContainer.innerHTML = renderPolicyView();
+  } else if (activeSurface === "audit-view") {
+    surfaceContainer.innerHTML = renderAuditView();
+  } else {
+    surfaceContainer.innerHTML = renderMacroLibraryView();
+  }
+
+  wireSurfaceButtons();
+}
+
+function renderSnapshot(newSnapshot: ProductSnapshot): void {
+  snapshot = newSnapshot;
+  roleSelect.value = newSnapshot.activeRole;
+  renderTabs();
+  renderSurface();
+}
+
+function handleActionResult(result: ProductActionResult): void {
+  if (result.ok) {
+    appendLog(result.message);
+  } else {
+    appendLog(result.error ? `${result.error.source}: ${result.error.message}` : result.message);
+  }
+
+  renderSnapshot(result.snapshot);
+}
+
+window.addEventListener("message", (event: MessageEvent<WebviewOutboundMessage>) => {
+  const message = event.data;
+
+  if (message.type === "snapshot") {
+    renderSnapshot(message.payload);
+    return;
+  }
+
+  if (message.type === "action-result") {
+    handleActionResult(message.payload);
+  }
+});
+
+runDslBtn.addEventListener("click", () => {
+  const dsl = dslInput.value.trim();
+  if (dsl.length === 0) {
+    return;
+  }
+
+  postAction({
+    type: "run-dsl",
+    role: getActiveRole(),
+    dsl,
   });
-}
+});
 
-function bootstrap() {
-  initEditor();
-  wireSave();
-  wireIncoming();
+refreshBtn.addEventListener("click", () => {
+  postAction({
+    type: "refresh",
+    role: getActiveRole(),
+    filters: auditFilters,
+  });
+});
 
-  postMessageSafe({ type: "ready" });
-}
+roleSelect.addEventListener("change", () => {
+  postAction({
+    type: "refresh",
+    role: getActiveRole(),
+    filters: auditFilters,
+  });
+});
 
-bootstrap();
+setInterval(() => {
+  postAction({
+    type: "refresh",
+    role: getActiveRole(),
+    filters: auditFilters,
+  });
+}, 5000);
+
+vscode.postMessage({ type: "ready" });

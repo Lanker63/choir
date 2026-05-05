@@ -1,0 +1,31 @@
+{
+  "id": "plan-3adb73238a3d",
+  "title": "Auto-generated enforcement plan",
+  "derivedFrom": "constraint",
+  "goalRefs": [],
+  "tasks": [
+    {
+      "id": "t-analysis",
+      "title": "Analyze violations",
+      "description": "Enumerate relevant violations and establish deterministic remediation scope.",
+      "type": "analysis",
+      "dependsOn": [],
+      "successCriteria": [
+        "violations enumerated"
+      ]
+    },
+    {
+      "id": "t-validate",
+      "title": "Validate all constraints",
+      "description": "Run policy enforcement to verify that constraints are satisfied.",
+      "type": "enforce",
+      "dependsOn": [
+        "t-analysis"
+      ],
+      "successCriteria": [
+        "zero violations"
+      ]
+    }
+  ],
+  "status": "draft"
+}
