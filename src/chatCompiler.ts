@@ -43,7 +43,13 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
   if (addNonGoals) {
     return {
       ...control,
-      "non-goals": withUniqueItems([...(control["non-goals"] ?? []), ...parseCommaDelimitedItems(addNonGoals)]),
+      intent: {
+        ...control.intent,
+        "non-goals": withUniqueItems([
+          ...(control.intent["non-goals"] ?? []),
+          ...parseCommaDelimitedItems(addNonGoals),
+        ]),
+      },
     };
   }
 
@@ -51,7 +57,10 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
   if (addNonGoal) {
     return {
       ...control,
-      "non-goals": withUniqueItems([...(control["non-goals"] ?? []), addNonGoal]),
+      intent: {
+        ...control.intent,
+        "non-goals": withUniqueItems([...(control.intent["non-goals"] ?? []), addNonGoal]),
+      },
     };
   }
 
@@ -60,7 +69,10 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
     const toRemove = new Set(parseCommaDelimitedItems(removeNonGoals));
     return {
       ...control,
-      "non-goals": (control["non-goals"] ?? []).filter((nonGoal) => !toRemove.has(nonGoal)),
+      intent: {
+        ...control.intent,
+        "non-goals": (control.intent["non-goals"] ?? []).filter((nonGoal) => !toRemove.has(nonGoal)),
+      },
     };
   }
 
@@ -68,7 +80,10 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
   if (removeNonGoal) {
     return {
       ...control,
-      "non-goals": (control["non-goals"] ?? []).filter((nonGoal) => nonGoal !== removeNonGoal),
+      intent: {
+        ...control.intent,
+        "non-goals": (control.intent["non-goals"] ?? []).filter((nonGoal) => nonGoal !== removeNonGoal),
+      },
     };
   }
 

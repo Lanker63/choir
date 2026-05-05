@@ -1,13 +1,13 @@
 version: "1.0.0"
 mission: "Keep module boundaries clean and auditable"
 vision: "Large repos retain clear architectural contracts"
-non-goals:
-  - "Do not enforce naming conventions unrelated to architecture intent"
 intent:
   goals:
     - secure services
   constraints:
     - no direct db access
+  non-goals:
+    - "Do not enforce naming conventions unrelated to architecture intent"
 policy:
   rules:
     - id: explicit-no-console

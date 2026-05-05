@@ -34,10 +34,10 @@ If the file does not exist, Choir creates a blank one the first time it activate
 version: "1.0.0"
 mission: ""
 vision: ""
-non-goals: []
 intent:
   goals: []
   constraints: []
+  non-goals: []
 policy:
   rules: []
 ```
@@ -52,7 +52,6 @@ These top-level fields define project-wide direction that should remain stable o
 |---|---|---|
 | `mission` | `string` | The enduring mission statement for the solution. |
 | `vision` | `string` | The long-term target state this solution is moving toward. |
-| `non-goals` | `string[]` | Explicit boundaries describing what this solution is not trying to do. |
 
 ### `intent`
 
@@ -62,6 +61,7 @@ High-level goals and constraints written in plain English. Choir uses these to s
 |---|---|---|
 | `goals` | `string[]` | What the project is trying to achieve. |
 | `constraints` | `string[]` | Blanket prohibitions that apply everywhere (e.g. `"no direct db access"`). |
+| `non-goals` | `string[]` | Explicit boundaries describing what this solution is not trying to do. |
 
 ### `policy.rules`
 
@@ -87,15 +87,15 @@ Explicit, file-scoped DSL rules evaluated on every save. Each rule has this shap
 version: "1.0.0"
 mission: "Deliver secure, maintainable services with predictable behavior"
 vision: "A policy-aware engineering workflow where architecture intent stays enforceable"
-non-goals:
-  - "Not a replacement for human architecture review"
-  - "Not a generic low-code orchestration platform"
 intent:
   goals:
     - "Build a clean layered service architecture"
   constraints:
     - "no direct db access outside the repository layer"
     - "no console.log in production code"
+  non-goals:
+    - "Not a replacement for human architecture review"
+    - "Not a generic low-code orchestration platform"
 policy:
   rules:
     - id: no-db-in-controller

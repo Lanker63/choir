@@ -29,9 +29,26 @@ function normalizedVersion(input: UnknownRecord): string {
 
 function normalizeControlPlane(input: unknown): ControlPlane {
     const base = isRecord(input) ? input : {};
+    const normalizedBase: UnknownRecord = { ...base };
+
+    const legacyNonGoals = Array.isArray(base["non-goals"])
+        ? (base["non-goals"] as unknown[]).filter((item): item is string => typeof item === "string")
+        : [];
+
+    const intent = isRecord(base.intent) ? { ...base.intent } : {};
+    const intentNonGoals = Array.isArray(intent["non-goals"])
+        ? (intent["non-goals"] as unknown[]).filter((item): item is string => typeof item === "string")
+        : [];
+
+    normalizedBase.intent = {
+        ...intent,
+        "non-goals": intentNonGoals.length > 0 ? intentNonGoals : legacyNonGoals,
+    };
+
+    delete normalizedBase["non-goals"];
 
     return ControlPlaneSchema.parse({
-        ...base,
+        ...normalizedBase,
         version: normalizedVersion(base),
     });
 }
@@ -89,10 +106,10 @@ export function createDefaultControlPlane(): ControlPlane {
         version: CONTROL_PLANE_VERSION,
         mission: "",
         vision: "",
-        "non-goals": [],
         intent: {
             goals: [],
-            constraints: []
+            constraints: [],
+            "non-goals": []
         },
         policy: {
             rules: []

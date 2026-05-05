@@ -30,10 +30,10 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     version: CONTROL_PLANE_VERSION,
     mission: "",
     vision: "",
-    "non-goals": [],
     intent: {
       goals: [],
       constraints: [],
+      "non-goals": [],
     },
     policy: {
       rules: [],
@@ -89,7 +89,7 @@ const pass1: TestPass = {
           assert.strictEqual(typeof control.version, "string");
           assert.strictEqual(typeof control.mission, "string");
           assert.strictEqual(typeof control.vision, "string");
-          assert.ok(Array.isArray(control["non-goals"]));
+          assert.ok(Array.isArray(control.intent["non-goals"]));
           assert.ok(Array.isArray(control.intent.goals));
           assert.ok(Array.isArray(control.intent.constraints));
           assert.ok(Array.isArray(control.policy.rules));
@@ -169,10 +169,10 @@ const pass2: TestPass = {
           harness.sendChat("add constraints: no database, no user adminitstration");
           const control = harness.loadControlPlane();
 
-          assert.ok(control["non-goals"].includes("Distributed app"));
-          assert.ok(control["non-goals"].includes("authenticatoin"));
-          assert.ok(control["non-goals"].includes("authorization"));
-          assert.ok(!control["non-goals"].includes("Distributed app, authenticatoin, authorization"));
+          assert.ok(control.intent["non-goals"].includes("Distributed app"));
+          assert.ok(control.intent["non-goals"].includes("authenticatoin"));
+          assert.ok(control.intent["non-goals"].includes("authorization"));
+          assert.ok(!control.intent["non-goals"].includes("Distributed app, authenticatoin, authorization"));
 
           assert.ok(control.intent.constraints.includes("no database"));
           assert.ok(control.intent.constraints.includes("no user adminitstration"));
