@@ -71,8 +71,14 @@ import {
 import {
   Rule,
   applyFixes,
+  buildDependencyGraph,
+  buildRuleIndex,
+  createIncrementalRuleState,
   detectConflicts,
+  diffAST,
+  getAffectedNodes,
   processAST,
+  runIncrementalRules,
   runRules,
   semanticEquivalent,
   validateCrossNode,
@@ -819,6 +825,207 @@ const pass2: TestPass = {
 
         assert.throws(() => processAST(invalid, { controlPlane: control }, rules), /AST structure validation failed/);
         assert.strictEqual(rulesCalled, 0);
+      },
+    },
+    {
+      id: "2.97",
+      name: "dependency graph and impact analysis are deterministic",
+      run: async () => {
+        const before = parseCommand('choir define goal "A" then plan then execute').ast;
+        const after = parseCommand('choir define goal "B" then plan then execute').ast;
+
+        const graph = buildDependencyGraph(after);
+        assert.deepStrictEqual(Array.from(graph.nodes.keys()), ["action:0", "action:1", "action:2"]);
+        assert.deepStrictEqual(graph.edges.get("action:0"), ["action:1"]);
+        assert.deepStrictEqual(graph.edges.get("action:1"), ["action:2"]);
+        assert.deepStrictEqual(graph.edges.get("action:2"), []);
+
+        const diff = diffAST(before, after);
+        assert.deepStrictEqual(diff.changedNodes, ["action:0"]);
+
+        const affected = getAffectedNodes(diff, graph);
+        assert.deepStrictEqual(affected, ["action:0", "action:1", "action:2"]);
+      },
+    },
+    {
+      id: "2.98",
+      name: "rule indexing is stable and keyed by node type",
+      run: async () => {
+        const rules: Rule[] = [
+          {
+            id: "z-plan",
+            nodeTypes: ["plan"],
+            incrementalScope: "node",
+            match: () => true,
+            validate: () => null,
+          },
+          {
+            id: "a-define",
+            nodeTypes: ["define"],
+            incrementalScope: "node",
+            match: () => true,
+            validate: () => null,
+          },
+          {
+            id: "m-global",
+            incrementalScope: "global",
+            match: () => true,
+            validate: () => null,
+          },
+        ];
+
+        const index = buildRuleIndex(rules);
+        assert.deepStrictEqual((index.get("define") ?? []).map((entry) => entry.id), ["a-define"]);
+        assert.deepStrictEqual((index.get("plan") ?? []).map((entry) => entry.id), ["z-plan"]);
+        assert.deepStrictEqual((index.get("*") ?? []).map((entry) => entry.id), ["m-global"]);
+      },
+    },
+    {
+      id: "2.99",
+      name: "incremental engine executes only affected local rules",
+      run: async () => {
+        const state = createIncrementalRuleState();
+        const calls = {
+          define: 0,
+          plan: 0,
+          execute: 0,
+        };
+
+        const rules: Rule[] = [
+          {
+            id: "define-local",
+            nodeTypes: ["define"],
+            incrementalScope: "node",
+            match: (node) => node.type === "define",
+            validate: () => {
+              calls.define += 1;
+              return {
+                ruleId: "define-local",
+                severity: "warning",
+                message: "define",
+              };
+            },
+          },
+          {
+            id: "plan-local",
+            nodeTypes: ["plan"],
+            incrementalScope: "node",
+            match: (node) => node.type === "plan",
+            validate: () => {
+              calls.plan += 1;
+              return {
+                ruleId: "plan-local",
+                severity: "warning",
+                message: "plan",
+              };
+            },
+          },
+          {
+            id: "execute-local",
+            nodeTypes: ["execute"],
+            incrementalScope: "node",
+            match: (node) => node.type === "execute",
+            validate: () => {
+              calls.execute += 1;
+              return {
+                ruleId: "execute-local",
+                severity: "warning",
+                message: "execute",
+              };
+            },
+          },
+        ];
+
+        const control = makeControlPlane();
+        const firstAst = parseCommand('choir define goal "A" then plan then execute').ast;
+        const first = runIncrementalRules(firstAst, rules, { controlPlane: control }, { state });
+
+        assert.strictEqual(first.metrics.rulesExecuted, 3);
+        assert.deepStrictEqual(calls, { define: 1, plan: 1, execute: 1 });
+
+        const secondAst = parseCommand('choir define goal "A" then plan then execute plan selected').ast;
+        const second = runIncrementalRules(secondAst, rules, { controlPlane: control }, { state });
+
+        assert.deepStrictEqual(second.trace.changedNodes, ["action:2"]);
+        assert.deepStrictEqual(second.trace.affectedNodes, ["action:2"]);
+        assert.strictEqual(second.metrics.rulesExecuted, 1);
+        assert.deepStrictEqual(calls, { define: 1, plan: 1, execute: 2 });
+        assert.deepStrictEqual(second.results, runRules(secondAst, rules, { controlPlane: control }));
+      },
+    },
+    {
+      id: "2.100",
+      name: "incremental cache invalidates changed nodes and reuses unaffected entries",
+      run: async () => {
+        const state = createIncrementalRuleState();
+        let evaluated = 0;
+
+        const rules: Rule[] = [
+          {
+            id: "global-audit",
+            incrementalScope: "global",
+            match: () => true,
+            validate: (_node, context) => {
+              evaluated += 1;
+              return {
+                ruleId: "global-audit",
+                severity: "warning",
+                message: `index-${context.actionIndex}`,
+              };
+            },
+          },
+        ];
+
+        const control = makeControlPlane();
+        const firstAst = parseCommand('choir define goal "A" then plan then execute').ast;
+        const first = runIncrementalRules(firstAst, rules, { controlPlane: control }, { state });
+
+        assert.strictEqual(first.metrics.rulesExecuted, 3);
+        assert.strictEqual(first.metrics.cacheHits, 0);
+
+        const secondAst = parseCommand('choir define goal "A" then plan then execute plan selected').ast;
+        const second = runIncrementalRules(secondAst, rules, { controlPlane: control }, { state });
+
+        assert.deepStrictEqual(second.trace.changedNodes, ["action:2"]);
+        assert.deepStrictEqual(second.trace.affectedNodes, ["action:0", "action:1", "action:2"]);
+        assert.strictEqual(second.trace.cacheUsed, true);
+        assert.ok(second.metrics.cacheHits >= 2);
+        assert.strictEqual(second.metrics.rulesExecuted, 1);
+        assert.strictEqual(evaluated, 4);
+        assert.deepStrictEqual(second.results, runRules(secondAst, rules, { controlPlane: control }));
+      },
+    },
+    {
+      id: "2.101",
+      name: "consistency check detects divergence and falls back to full evaluation",
+      run: async () => {
+        const state = createIncrementalRuleState();
+        const control = makeControlPlane();
+
+        const rules: Rule[] = [
+          {
+            id: "define-root-sensitive",
+            nodeTypes: ["define"],
+            incrementalScope: "node",
+            match: (node) => node.type === "define",
+            validate: (_node, context) => {
+              return {
+                ruleId: "define-root-sensitive",
+                severity: "warning",
+                message: `root-size-${JSON.stringify(context.rootAst).length}`,
+              };
+            },
+          },
+        ];
+
+        const firstAst = parseCommand('choir define goal "A" then plan then execute').ast;
+        runIncrementalRules(firstAst, rules, { controlPlane: control }, { state, consistencyCheck: "always" });
+
+        const secondAst = parseCommand('choir define goal "A" then plan then execute plan selected').ast;
+        const second = runIncrementalRules(secondAst, rules, { controlPlane: control }, { state, consistencyCheck: "always" });
+
+        assert.strictEqual(second.trace.fallbackToFullEvaluation, true);
+        assert.deepStrictEqual(second.results, runRules(secondAst, rules, { controlPlane: control }));
       },
     },
     {

@@ -442,7 +442,7 @@ Grammar:
 
 Compilation flow:
 
-`DSL -> Tokens -> AST -> Validation -> Rule Engine -> compiler -> choir.config.yaml -> pipeline`
+`DSL -> Tokens -> AST -> Validation -> Incremental Rule Engine -> compiler -> choir.config.yaml -> pipeline`
 
 ### Choir DSL Editor Language Support (`.choir`)
 
@@ -492,10 +492,23 @@ The DSL compiler is transactional and deterministic:
 
 - Tokenizes and parses full command input first
 - Validates AST in deterministic phases (`structure -> semantics -> cross-node`)
-- Runs deterministic rule engine pass (stable `rule.id` ordering, conflict detection)
+- Runs deterministic incremental rule engine pass:
+  - builds AST dependency graph
+  - diffs previous/current AST
+  - computes affected nodes by change propagation
+  - executes indexed rules for affected nodes only
+  - reuses cached rule results for unaffected nodes
+  - invalidates cache entries for changed nodes
+- Supports bounded deterministic fixpoint iteration when rule fixes introduce downstream impact
+- Supports optional incremental-vs-full consistency verification with deterministic fallback to full evaluation on mismatch
 - Applies AST mutations in memory only after validation/rule checks pass
 - Validates resulting config against schema
 - Writes `.choir/choir.config.yaml` once (or returns no-op)
+
+Rule engine trace and performance data include:
+
+- Incremental trace: changed nodes, affected nodes, executed rules, cache usage, fallback status
+- Performance metrics: total candidate rules, rules executed, cache hits, execution time
 
 Supported commands:
 
@@ -556,6 +569,7 @@ Mutation behavior:
 - `choir define goal|constraint|non-goal ...`: mutates intent fields in YAML via deterministic upsert
 - Duplicate `define` values inside one command sequence are rejected during AST semantic validation
 - Re-defining an existing identical value in persisted YAML is treated as deterministic no-op (warning trace)
+- Incremental rule cache/state is runtime-only and never treated as authoritative control/state data
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
 - `choir plan approve <planId>`: marks an existing plan as approved in YAML via deterministic update
 - `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
@@ -626,6 +640,8 @@ Idempotency guarantees:
 - Same input and same starting YAML produce identical output YAML
 - Repeating the same single `define` command against existing identical state is deterministic no-op
 - Duplicate `define` values in a single command sequence are rejected (no partial mutation)
+- Incremental rule results are deterministic and equal full recomputation for identical inputs
+- Cache invalidation prevents stale rule outcomes from being reused after AST changes
 - Duplicate plan ids are not re-added
 - Macro expansion with identical inputs produces identical expanded commands
 - Lockfile-pinned macro library execution produces identical version resolution for identical `.choir/lock.yaml`

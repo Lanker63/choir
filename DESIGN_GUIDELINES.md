@@ -174,13 +174,26 @@ AST correctness and rule engine contract:
 
 - Deterministic compile pipeline is fixed: `DSL -> Tokens -> AST -> VALIDATION -> RULE ENGINE -> OUTPUT`.
 - Validation is fail-fast and ordered: structural -> semantic -> cross-node.
+- Rule execution is incremental by default:
+  - Build deterministic dependency graph over AST action nodes.
+  - Diff previous vs current AST to derive changed nodes.
+  - Propagate impact downstream to compute affected nodes.
+  - Execute indexed rules only for affected nodes.
 - Semantic duplicate handling is strict by command scope:
   - Duplicate `define` values within one command sequence are rejected.
   - `define` values that already exist in persisted control plane are warnings and compile as deterministic no-op.
 - Cross-node preconditions are enforced before mutation (for example: `execute` requires available plan).
 - Rule evaluation order is deterministic and sorted by `rule.id`.
+- Rule indexing and caching are deterministic:
+  - Rules are indexed by node type for selective lookup.
+  - Cache keys are derived from `(ruleId, nodeId, context signature, dependency signature)`.
+  - Cache invalidation is scoped to changed nodes and propagated affected nodes only.
+- Incremental execution supports bounded deterministic fixpoint iteration for rule-fix propagation.
+- Optional consistency check compares incremental results to full recomputation and falls back to full evaluation on mismatch.
 - Conflicting rule decisions/fixes are rejected before output.
 - Rule fixes apply on cloned AST only and must preserve semantic equivalence.
+- Rule engine trace captures changed/affected nodes, executed rules, cache usage, and fallback status.
+- Performance metrics capture total candidate rules, executed rules, cache hits, and execution time.
 
 Macro constraints:
 
@@ -304,6 +317,7 @@ Mutation contract:
 - `define goal|constraint|non-goal` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - Duplicate `define` values in the same command sequence are invalid and must fail validation.
 - Re-defining an already persisted identical value is deterministic no-op (warning trace, no mutation).
+- Incremental rule state (previous AST, per-node results, cache) is runtime-only and non-authoritative.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
 - `plan approve` updates `execution.plans[*].status` to `approved` deterministically.
 - `analyze|preview|execute|status|ci|audit|import|library|<abstraction-id>` are non-mutating in YAML compiler mode.
@@ -752,6 +766,7 @@ For identical inputs, Choir must produce identical:
 - Audit chain ordering and record hashes
 - Compliance report summaries for identical filter windows
 - Macro library version resolution and lockfile pinning outcomes
+- Incremental rule traces (changed/affected nodes, executed rule ids, cache-hit counts)
 
 Non-negotiable safeguards:
 
@@ -766,6 +781,8 @@ Non-negotiable safeguards:
 9. Macro library execution is lockfile-pinned and version-deterministic
 10. CI mode execution is restricted to `choir ci run` with runtime environment validation
 11. Intent-level abstractions must not bypass DSL, policy, execution, or audit layers
+12. Incremental rule execution must not return stale cache results; invalidation is required on changed nodes
+13. Incremental results must equal full recomputation; mismatch requires deterministic fallback to full evaluation
 
 ---
 

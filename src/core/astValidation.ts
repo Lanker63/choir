@@ -5,6 +5,7 @@ import {
   DefineType,
 } from "./choirRouter.js";
 import { ControlPlane } from "../schema.js";
+import { createHash } from "crypto";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -42,6 +43,8 @@ export type Rule = {
   match: (ast: ASTNode) => boolean;
   validate: (ast: ASTNode, context: RuleContext) => RuleResult | null;
   fix?: (ast: ASTNode) => ASTNode;
+  nodeTypes?: ReadonlyArray<ASTNode["type"]>;
+  incrementalScope?: "node" | "global";
 };
 
 export type SystemContext = {
@@ -53,12 +56,70 @@ export type ValidationTrace = {
   validationPassed: boolean;
   rulesTriggered: string[];
   conflicts: string[];
+  incremental?: IncrementalTrace;
+  performance?: PerformanceMetrics;
 };
 
 export type ProcessedAST = {
   ast: AST;
   results: RuleResult[];
   trace: ValidationTrace;
+};
+
+export type NodeId = string;
+
+export type DependencyGraph = {
+  nodes: Map<NodeId, ASTNode>;
+  edges: Map<NodeId, NodeId[]>;
+};
+
+export type ASTDiff = {
+  changedNodes: NodeId[];
+};
+
+export type RuleIndex = Map<string, Rule[]>;
+
+export type RuleCache = Map<string, RuleResult>;
+
+export type PerformanceMetrics = {
+  totalRules: number;
+  rulesExecuted: number;
+  cacheHits: number;
+  executionTime: number;
+};
+
+export type IncrementalTrace = {
+  changedNodes: NodeId[];
+  affectedNodes: NodeId[];
+  rulesExecuted: string[];
+  cacheUsed: boolean;
+  fallbackToFullEvaluation?: boolean;
+};
+
+export type IncrementalRuleState = {
+  previousAst?: AST;
+  previousResultsByNode: Map<NodeId, RuleResult[]>;
+  cache: RuleCache;
+  cacheKeysByNode: Map<NodeId, Set<string>>;
+  contextSignature?: string;
+  ruleSetSignature?: string;
+};
+
+export type IncrementalRunResult = {
+  results: RuleResult[];
+  trace: IncrementalTrace;
+  metrics: PerformanceMetrics;
+};
+
+export type IncrementalRunOptions = {
+  state?: IncrementalRuleState;
+  previousAst?: AST;
+  consistencyCheck?: "never" | "always";
+};
+
+export type ProcessASTOptions = {
+  incrementalState?: IncrementalRuleState;
+  consistencyCheck?: "never" | "always";
 };
 
 const DEFINE_TYPES = new Set<DefineType>([
@@ -68,6 +129,135 @@ const DEFINE_TYPES = new Set<DefineType>([
   "constraint",
   "non-goal",
 ]);
+
+const RULE_WILDCARD_KEY = "*";
+
+function actionNodeTypes(): ASTNode["type"][] {
+  return [
+    "define",
+    "analyze",
+    "plan",
+    "plan-approve",
+    "preview",
+    "execute",
+    "status",
+    "export",
+    "approve",
+    "reject",
+    "policy-status",
+    "import-library",
+    "library-list",
+    "library-install",
+    "library-update",
+    "library-lock",
+    "ci-run",
+    "audit-log",
+    "audit-report",
+    "audit-query",
+    "macro-list",
+    "macro-show",
+    "macro-run",
+    "abstraction-run",
+  ];
+}
+
+function nodeIdForIndex(index: number): NodeId {
+  return `action:${index}`;
+}
+
+function actionIndexFromNodeId(nodeId: NodeId): number {
+  const [, raw] = nodeId.split(":");
+  const parsed = Number.parseInt(raw ?? "", 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return parsed;
+}
+
+function sortNodeIds(nodeIds: Iterable<NodeId>): NodeId[] {
+  return Array.from(nodeIds).sort((left, right) => {
+    const leftIndex = actionIndexFromNodeId(left);
+    const rightIndex = actionIndexFromNodeId(right);
+    if (leftIndex !== rightIndex) {
+      return leftIndex - rightIndex;
+    }
+
+    return left.localeCompare(right);
+  });
+}
+
+function hashPayload(payload: unknown): string {
+  const text = typeof payload === "string" ? payload : JSON.stringify(payload);
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function createRuleSetSignature(rules: Rule[]): string {
+  const normalized = [...rules]
+    .map((rule) => ({
+      id: rule.id,
+      nodeTypes: (rule.nodeTypes ?? []).slice().sort((left, right) => left.localeCompare(right)),
+      incrementalScope: rule.incrementalScope ?? "global",
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return hashPayload(normalized);
+}
+
+function createContextSignature(context: SystemContext): string {
+  return hashPayload(context.controlPlane);
+}
+
+function cloneRuleResults(value: RuleResult[]): RuleResult[] {
+  return deepClone(value);
+}
+
+function clearIncrementalState(state: IncrementalRuleState): void {
+  state.previousAst = undefined;
+  state.previousResultsByNode.clear();
+  state.cache.clear();
+  state.cacheKeysByNode.clear();
+}
+
+function registerCacheKey(state: IncrementalRuleState, nodeId: NodeId, cacheKey: string): void {
+  const keys = state.cacheKeysByNode.get(nodeId) ?? new Set<string>();
+  keys.add(cacheKey);
+  state.cacheKeysByNode.set(nodeId, keys);
+}
+
+function invalidateCache(state: IncrementalRuleState, changedNodes: NodeId[]): void {
+  for (const nodeId of changedNodes) {
+    const keys = state.cacheKeysByNode.get(nodeId);
+    if (!keys) {
+      continue;
+    }
+
+    for (const key of keys) {
+      state.cache.delete(key);
+    }
+
+    state.cacheKeysByNode.delete(nodeId);
+  }
+}
+
+function pruneNodeState(state: IncrementalRuleState, activeNodeIds: Set<NodeId>): void {
+  for (const nodeId of state.previousResultsByNode.keys()) {
+    if (!activeNodeIds.has(nodeId)) {
+      state.previousResultsByNode.delete(nodeId);
+    }
+  }
+
+  for (const nodeId of state.cacheKeysByNode.keys()) {
+    if (!activeNodeIds.has(nodeId)) {
+      const keys = state.cacheKeysByNode.get(nodeId) ?? new Set<string>();
+      for (const key of keys) {
+        state.cache.delete(key);
+      }
+
+      state.cacheKeysByNode.delete(nodeId);
+    }
+  }
+}
 
 function asActions(ast: AST): ActionNode[] {
   return ast.type === "sequence" ? ast.actions : [ast];
@@ -467,9 +657,139 @@ export function validateCrossNode(ast: AST, context: SystemContext): ValidationR
   return resultFromIssues(issues);
 }
 
+export function buildDependencyGraph(ast: AST): DependencyGraph {
+  const actions = asActions(ast);
+  const nodes = new Map<NodeId, ASTNode>();
+  const edges = new Map<NodeId, NodeId[]>();
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const nodeId = nodeIdForIndex(index);
+    nodes.set(nodeId, actions[index]);
+    edges.set(nodeId, []);
+  }
+
+  // Sequence order is authoritative and deterministic for downstream impact.
+  for (let index = 0; index < actions.length - 1; index += 1) {
+    const from = nodeIdForIndex(index);
+    const to = nodeIdForIndex(index + 1);
+    const current = edges.get(from) ?? [];
+    current.push(to);
+    edges.set(from, current);
+  }
+
+  for (const [nodeId, next] of edges.entries()) {
+    const unique = Array.from(new Set(next));
+    edges.set(nodeId, sortNodeIds(unique));
+  }
+
+  return {
+    nodes,
+    edges,
+  };
+}
+
+export function diffAST(oldAST: AST | undefined, newAST: AST): ASTDiff {
+  const newActions = asActions(newAST);
+  if (!oldAST) {
+    return {
+      changedNodes: sortNodeIds(newActions.map((_, index) => nodeIdForIndex(index))),
+    };
+  }
+
+  const oldActions = asActions(oldAST);
+  if (oldActions.length !== newActions.length) {
+    return {
+      changedNodes: sortNodeIds(newActions.map((_, index) => nodeIdForIndex(index))),
+    };
+  }
+
+  const changed: NodeId[] = [];
+  for (let index = 0; index < newActions.length; index += 1) {
+    if (JSON.stringify(oldActions[index]) !== JSON.stringify(newActions[index])) {
+      changed.push(nodeIdForIndex(index));
+    }
+  }
+
+  return {
+    changedNodes: sortNodeIds(changed),
+  };
+}
+
+export function getAffectedNodes(diff: ASTDiff, graph: DependencyGraph): NodeId[] {
+  const queue = sortNodeIds(diff.changedNodes.filter((nodeId) => graph.nodes.has(nodeId)));
+  const visited = new Set<NodeId>(queue);
+
+  while (queue.length > 0) {
+    const nodeId = queue.shift();
+    if (!nodeId) {
+      continue;
+    }
+
+    const downstream = graph.edges.get(nodeId) ?? [];
+    for (const dependent of downstream) {
+      if (visited.has(dependent)) {
+        continue;
+      }
+
+      visited.add(dependent);
+      queue.push(dependent);
+    }
+  }
+
+  return sortNodeIds(visited);
+}
+
+export function buildRuleIndex(rules: Rule[]): RuleIndex {
+  const index: RuleIndex = new Map<string, Rule[]>();
+  const ordered = [...rules].sort((left, right) => left.id.localeCompare(right.id));
+
+  for (const rule of ordered) {
+    const targets = rule.nodeTypes && rule.nodeTypes.length > 0
+      ? Array.from(new Set(rule.nodeTypes))
+      : [RULE_WILDCARD_KEY];
+
+    for (const target of targets) {
+      const bucket = index.get(target) ?? [];
+      bucket.push(rule);
+      index.set(target, bucket);
+    }
+  }
+
+  return index;
+}
+
+export function createIncrementalRuleState(): IncrementalRuleState {
+  return {
+    previousAst: undefined,
+    previousResultsByNode: new Map<NodeId, RuleResult[]>(),
+    cache: new Map<string, RuleResult>(),
+    cacheKeysByNode: new Map<NodeId, Set<string>>(),
+  };
+}
+
+const defaultIncrementalRuleState = createIncrementalRuleState();
+
+function rulesForNode(node: ASTNode, index: RuleIndex): Rule[] {
+  const specific = index.get(node.type) ?? [];
+  const wildcard = index.get(RULE_WILDCARD_KEY) ?? [];
+
+  const merged = new Map<string, Rule>();
+  for (const rule of [...specific, ...wildcard]) {
+    merged.set(rule.id, rule);
+  }
+
+  return Array.from(merged.values()).sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function hasGlobalRules(rules: Rule[]): boolean {
+  return rules.some((rule) => (rule.incrementalScope ?? "global") === "global");
+}
+
 export const DEFAULT_RULES: Rule[] = [
   {
     id: "warn-execute-without-plan-ref",
+    nodeTypes: ["execute"],
+    incrementalScope: "node",
     match: (node) => node.type === "execute",
     validate: (node, context) => {
       if (node.type !== "execute") {
@@ -490,6 +810,8 @@ export const DEFAULT_RULES: Rule[] = [
   },
   {
     id: "warn-define-mission-short",
+    nodeTypes: ["define"],
+    incrementalScope: "node",
     match: (node) => node.type === "define" && node.defineType === "mission",
     validate: (node, context) => {
       if (node.type !== "define" || node.defineType !== "mission") {
@@ -510,19 +832,130 @@ export const DEFAULT_RULES: Rule[] = [
   },
 ];
 
-export function runRules(ast: AST, rules: Rule[], context: SystemContext): RuleResult[] {
-  const actions = asActions(ast);
-  const ordered = [...rules].sort((left, right) => left.id.localeCompare(right.id));
-  const results: RuleResult[] = [];
+type EvaluatedNodeBatch = {
+  resultsByNode: Map<NodeId, RuleResult[]>;
+  executedRuleIds: string[];
+  cacheHits: number;
+  rulesExecuted: number;
+  cacheUsed: boolean;
+};
 
-  for (let actionIndex = 0; actionIndex < actions.length; actionIndex += 1) {
-    const action = actions[actionIndex];
-    for (const rule of ordered) {
-      if (!rule.match(action)) {
+function serializeRuleResults(results: RuleResult[]): string {
+  return JSON.stringify(results);
+}
+
+function reverseGraph(graph: DependencyGraph): Map<NodeId, NodeId[]> {
+  const reversed = new Map<NodeId, NodeId[]>();
+
+  for (const nodeId of graph.nodes.keys()) {
+    reversed.set(nodeId, []);
+  }
+
+  for (const [from, downstream] of graph.edges.entries()) {
+    for (const to of downstream) {
+      const incoming = reversed.get(to) ?? [];
+      incoming.push(from);
+      reversed.set(to, incoming);
+    }
+  }
+
+  for (const [nodeId, incoming] of reversed.entries()) {
+    reversed.set(nodeId, sortNodeIds(incoming));
+  }
+
+  return reversed;
+}
+
+function dependencySignature(
+  nodeId: NodeId,
+  graph: DependencyGraph,
+  reversed: Map<NodeId, NodeId[]>,
+  memo: Map<NodeId, string>
+): string {
+  const existing = memo.get(nodeId);
+  if (existing) {
+    return existing;
+  }
+
+  const queue = [nodeId];
+  const upstream = new Set<NodeId>([nodeId]);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (!current) {
+      continue;
+    }
+
+    const incoming = reversed.get(current) ?? [];
+    for (const parent of incoming) {
+      if (upstream.has(parent)) {
         continue;
       }
 
-      const outcome = rule.validate(action, {
+      upstream.add(parent);
+      queue.push(parent);
+    }
+  }
+
+  const payload = sortNodeIds(upstream).map((id) => ({
+    id,
+    node: graph.nodes.get(id),
+  }));
+  const signature = hashPayload(payload);
+  memo.set(nodeId, signature);
+  return signature;
+}
+
+function ruleCacheKey(ruleId: string, nodeId: NodeId, contextSignature: string, dependencySig: string): string {
+  return `${ruleId}:${nodeId}:${contextSignature}:${dependencySig}`;
+}
+
+function evaluateNodeBatch(
+  ast: AST,
+  nodeIds: NodeId[],
+  graph: DependencyGraph,
+  ruleIndex: RuleIndex,
+  context: SystemContext,
+  state: IncrementalRuleState | undefined,
+  contextSignature: string
+): EvaluatedNodeBatch {
+  const reversed = reverseGraph(graph);
+  const depMemo = new Map<NodeId, string>();
+
+  const resultsByNode = new Map<NodeId, RuleResult[]>();
+  const executedRuleIds: string[] = [];
+  let cacheHits = 0;
+  let rulesExecuted = 0;
+  let cacheUsed = false;
+
+  for (const nodeId of sortNodeIds(nodeIds)) {
+    const node = graph.nodes.get(nodeId);
+    if (!node) {
+      continue;
+    }
+
+    const actionIndex = actionIndexFromNodeId(nodeId);
+    const nodeRules = rulesForNode(node, ruleIndex);
+    const nodeResults: RuleResult[] = [];
+
+    for (const rule of nodeRules) {
+      if (!rule.match(node)) {
+        continue;
+      }
+
+      const depSig = dependencySignature(nodeId, graph, reversed, depMemo);
+      const key = ruleCacheKey(rule.id, nodeId, contextSignature, depSig);
+      const cached = state?.cache.get(key);
+      if (cached) {
+        nodeResults.push(deepClone(cached));
+        cacheHits += 1;
+        cacheUsed = true;
+        continue;
+      }
+
+      rulesExecuted += 1;
+      executedRuleIds.push(rule.id);
+
+      const outcome = rule.validate(node, {
         system: context,
         rootAst: ast,
         actionIndex,
@@ -532,14 +965,262 @@ export function runRules(ast: AST, rules: Rule[], context: SystemContext): RuleR
         continue;
       }
 
-      results.push({
+      const normalized: RuleResult = {
         ...outcome,
         actionIndex,
-      });
+      };
+      nodeResults.push(normalized);
+
+      if (state) {
+        state.cache.set(key, deepClone(normalized));
+        registerCacheKey(state, nodeId, key);
+      }
+    }
+
+    nodeResults.sort((left, right) => left.ruleId.localeCompare(right.ruleId));
+    resultsByNode.set(nodeId, nodeResults);
+  }
+
+  return {
+    resultsByNode,
+    executedRuleIds,
+    cacheHits,
+    rulesExecuted,
+    cacheUsed,
+  };
+}
+
+function flattenResults(graph: DependencyGraph, byNode: Map<NodeId, RuleResult[]>): RuleResult[] {
+  const results: RuleResult[] = [];
+  for (const nodeId of sortNodeIds(graph.nodes.keys())) {
+    const nodeResults = byNode.get(nodeId) ?? [];
+    for (const result of nodeResults) {
+      results.push(result);
     }
   }
 
   return results;
+}
+
+function mapResultsByNode(results: RuleResult[], graph: DependencyGraph): Map<NodeId, RuleResult[]> {
+  const mapped = new Map<NodeId, RuleResult[]>();
+  for (const nodeId of graph.nodes.keys()) {
+    mapped.set(nodeId, []);
+  }
+
+  for (const result of results) {
+    if (result.actionIndex === undefined) {
+      continue;
+    }
+
+    const nodeId = nodeIdForIndex(result.actionIndex);
+    const nodeResults = mapped.get(nodeId) ?? [];
+    nodeResults.push(result);
+    mapped.set(nodeId, nodeResults);
+  }
+
+  for (const [nodeId, nodeResults] of mapped.entries()) {
+    nodeResults.sort((left, right) => left.ruleId.localeCompare(right.ruleId));
+    mapped.set(nodeId, nodeResults);
+  }
+
+  return mapped;
+}
+
+export function runRules(ast: AST, rules: Rule[], context: SystemContext): RuleResult[] {
+  const graph = buildDependencyGraph(ast);
+  const nodeIds = sortNodeIds(graph.nodes.keys());
+  const ruleIndex = buildRuleIndex(rules);
+  const contextSignature = createContextSignature(context);
+  const evaluated = evaluateNodeBatch(ast, nodeIds, graph, ruleIndex, context, undefined, contextSignature);
+  return flattenResults(graph, evaluated.resultsByNode);
+}
+
+export function runIncrementalRules(
+  ast: AST,
+  rules: Rule[],
+  context: SystemContext,
+  options?: IncrementalRunOptions
+): IncrementalRunResult {
+  const startedAt = Date.now();
+  const state = options?.state ?? createIncrementalRuleState();
+
+  const contextSignature = createContextSignature(context);
+  const ruleSetSignature = createRuleSetSignature(rules);
+  if (state.contextSignature !== contextSignature || state.ruleSetSignature !== ruleSetSignature) {
+    clearIncrementalState(state);
+    state.contextSignature = contextSignature;
+    state.ruleSetSignature = ruleSetSignature;
+  }
+
+  const graph = buildDependencyGraph(ast);
+  const allNodeIds = sortNodeIds(graph.nodes.keys());
+  const activeNodeSet = new Set<NodeId>(allNodeIds);
+  pruneNodeState(state, activeNodeSet);
+
+  const previousAst = options?.previousAst ?? state.previousAst;
+  const diff = diffAST(previousAst, ast);
+  let changedNodes = diff.changedNodes;
+  if (!previousAst && changedNodes.length === 0) {
+    changedNodes = [...allNodeIds];
+  }
+
+  if (changedNodes.length === 0) {
+    const reused = new Map<NodeId, RuleResult[]>();
+    for (const nodeId of allNodeIds) {
+      reused.set(nodeId, cloneRuleResults(state.previousResultsByNode.get(nodeId) ?? []));
+    }
+
+    const results = flattenResults(graph, reused);
+    state.previousAst = deepClone(ast);
+    state.previousResultsByNode = reused;
+
+    return {
+      results,
+      trace: {
+        changedNodes: [],
+        affectedNodes: [],
+        rulesExecuted: [],
+        cacheUsed: false,
+      },
+      metrics: {
+        totalRules: allNodeIds.length * rules.length,
+        rulesExecuted: 0,
+        cacheHits: 0,
+        executionTime: Date.now() - startedAt,
+      },
+    };
+  }
+
+  let affectedNodes = getAffectedNodes({ changedNodes }, graph);
+  if (hasGlobalRules(rules) && changedNodes.length > 0) {
+    affectedNodes = [...allNodeIds];
+  }
+
+  invalidateCache(state, changedNodes);
+
+  const affectedSet = new Set<NodeId>(affectedNodes);
+  const resultsByNode = new Map<NodeId, RuleResult[]>();
+  for (const nodeId of allNodeIds) {
+    if (affectedSet.has(nodeId)) {
+      continue;
+    }
+
+    const prior = state.previousResultsByNode.get(nodeId);
+    if (!prior) {
+      affectedSet.add(nodeId);
+      continue;
+    }
+
+    resultsByNode.set(nodeId, cloneRuleResults(prior));
+  }
+
+  affectedNodes = sortNodeIds(affectedSet);
+
+  const ruleIndex = buildRuleIndex(rules);
+  const executedRuleIds: string[] = [];
+  let cacheHits = 0;
+  let rulesExecuted = 0;
+  let cacheUsed = false;
+
+  let pending = [...affectedNodes];
+  const visited = new Set<NodeId>(pending);
+  const maxIterations = Math.max(1, allNodeIds.length + rules.length);
+  let iterations = 0;
+
+  while (pending.length > 0) {
+    iterations += 1;
+    if (iterations > maxIterations) {
+      throw new Error("Incremental rule execution exceeded deterministic fixpoint bounds");
+    }
+
+    const batch = sortNodeIds(new Set(pending));
+    pending = [];
+
+    const evaluated = evaluateNodeBatch(ast, batch, graph, ruleIndex, context, state, contextSignature);
+    for (const [nodeId, nodeResults] of evaluated.resultsByNode.entries()) {
+      resultsByNode.set(nodeId, nodeResults);
+    }
+
+    executedRuleIds.push(...evaluated.executedRuleIds);
+    cacheHits += evaluated.cacheHits;
+    rulesExecuted += evaluated.rulesExecuted;
+    cacheUsed = cacheUsed || evaluated.cacheUsed;
+
+    const fixTargets = new Set<NodeId>();
+    for (const nodeResults of evaluated.resultsByNode.values()) {
+      for (const result of nodeResults) {
+        if (!result.fix || result.actionIndex === undefined) {
+          continue;
+        }
+
+        const nodeId = nodeIdForIndex(result.actionIndex);
+        if (graph.nodes.has(nodeId)) {
+          fixTargets.add(nodeId);
+        }
+      }
+    }
+
+    if (fixTargets.size === 0) {
+      continue;
+    }
+
+    const propagated = getAffectedNodes({ changedNodes: sortNodeIds(fixTargets) }, graph);
+    for (const nodeId of propagated) {
+      if (visited.has(nodeId)) {
+        continue;
+      }
+
+      visited.add(nodeId);
+      pending.push(nodeId);
+    }
+  }
+
+  for (const nodeId of allNodeIds) {
+    if (!resultsByNode.has(nodeId)) {
+      resultsByNode.set(nodeId, []);
+    }
+  }
+
+  let finalResults = flattenResults(graph, resultsByNode);
+  let fallbackToFullEvaluation = false;
+
+  if ((options?.consistencyCheck ?? "never") === "always") {
+    const fullResults = runRules(ast, rules, context);
+    if (serializeRuleResults(fullResults) !== serializeRuleResults(finalResults)) {
+      fallbackToFullEvaluation = true;
+      finalResults = fullResults;
+      clearIncrementalState(state);
+      state.previousResultsByNode = mapResultsByNode(finalResults, graph);
+    }
+  }
+
+  if (!fallbackToFullEvaluation) {
+    state.previousResultsByNode = new Map(
+      Array.from(resultsByNode.entries()).map(([nodeId, nodeResults]) => [nodeId, cloneRuleResults(nodeResults)])
+    );
+  }
+
+  state.previousAst = deepClone(ast);
+  state.contextSignature = contextSignature;
+  state.ruleSetSignature = ruleSetSignature;
+
+  return {
+    results: finalResults,
+    trace: {
+      changedNodes,
+      affectedNodes,
+      rulesExecuted: Array.from(new Set(executedRuleIds)).sort((left, right) => left.localeCompare(right)),
+      cacheUsed,
+      fallbackToFullEvaluation,
+    },
+    metrics: {
+      totalRules: allNodeIds.length * rules.length,
+      rulesExecuted,
+      cacheHits,
+      executionTime: Date.now() - startedAt,
+    },
+  };
 }
 
 export function detectConflicts(results: RuleResult[]): string[] {
@@ -627,7 +1308,12 @@ function assertValidation(label: string, validation: ValidationResult): void {
   }
 }
 
-export function processAST(ast: AST, context: SystemContext, rules: Rule[] = DEFAULT_RULES): ProcessedAST {
+export function processAST(
+  ast: AST,
+  context: SystemContext,
+  rules: Rule[] = DEFAULT_RULES,
+  options?: ProcessASTOptions
+): ProcessedAST {
   const structure = validateStructure(ast);
   assertValidation("AST structure validation failed", structure);
 
@@ -637,7 +1323,12 @@ export function processAST(ast: AST, context: SystemContext, rules: Rule[] = DEF
   const crossNode = validateCrossNode(ast, context);
   assertValidation("AST cross-node validation failed", crossNode);
 
-  const results = runRules(ast, rules, context);
+  const incremental = runIncrementalRules(ast, rules, context, {
+    state: options?.incrementalState ?? defaultIncrementalRuleState,
+    consistencyCheck: options?.consistencyCheck ?? "never",
+  });
+
+  const results = incremental.results;
   const ruleErrors = results.filter((entry) => entry.severity === "error");
   if (ruleErrors.length > 0) {
     const mapped: ValidationIssue[] = ruleErrors.map((entry, index) => issue(
@@ -667,6 +1358,8 @@ export function processAST(ast: AST, context: SystemContext, rules: Rule[] = DEF
       validationPassed: true,
       rulesTriggered: Array.from(new Set(results.map((entry) => entry.ruleId))).sort((left, right) => left.localeCompare(right)),
       conflicts,
+      incremental: incremental.trace,
+      performance: incremental.metrics,
     },
   };
 }
