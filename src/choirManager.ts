@@ -135,9 +135,7 @@ export function readControlPlane(): ControlPlane | null {
     ensurePoliciesDSLFile();
 
     if (!fs.existsSync(controlPath)) {
-        const initial = createDefaultControlPlane();
-        writeControlPlane(initial);
-        return initial;
+        return null;
     }
 
     try {

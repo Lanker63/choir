@@ -56,6 +56,11 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 
 > Chat is an interface, not persisted policy or state.
 
+Exception for resumable interaction state:
+
+- Guided init session state may be persisted in `.choir/init-state.json` to support resume.
+- This file is interaction metadata only (non-authoritative) and must not be treated as control plane or state plane truth.
+
 ## Unified Agent Facade
 
 User-facing entry point is a single chat agent:
@@ -73,6 +78,36 @@ Compiler model:
 
 `User -> @choir -> DSL tokenizer/parser -> AST validator -> compiler -> choir.config.yaml -> pipeline`
 
+### Interactive Init Wizard Contract (`@choir init`)
+
+The init wizard is a chat interaction workflow, not a DSL grammar action.
+
+Wizard state machine:
+
+- Steps: `mission -> vision -> goals -> constraints -> non-goals -> review -> confirm`
+- State shape is deterministic and includes `currentStep` plus collected mission/vision/intent data.
+- Transition controls support `back`, `cancel`, and explicit terminal confirmation (`yes`/`no`).
+
+Wizard UX requirements:
+
+- Must render deterministic per-step prompts.
+- Must show progress (`Step N/6`).
+- Must validate required single-value steps (mission, vision).
+- Must normalize values and reject duplicate list entries deterministically.
+
+Wizard persistence requirements:
+
+- Session state is saved to `.choir/init-state.json` for resume support.
+- Dismissed input/selection pauses wizard and preserves state.
+- Explicit cancel/no clears saved state.
+
+Wizard apply requirements:
+
+- Wizard must not write YAML directly.
+- Wizard must generate DSL commands from final confirmed state.
+- Generated commands must be applied sequentially through existing DSL compiler + policy gate flow.
+- Deterministic output is required for identical wizard state.
+
 DSL command grammar:
 
 ```bnf
@@ -80,7 +115,7 @@ DSL command grammar:
 
 <action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
-<define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
+<define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
@@ -205,7 +240,8 @@ Editor trace contract:
 
 Supported command surface (via `@choir`):
 
-- `choir define goal|constraint|non-goal "..."`
+- `@choir init [--template backend|frontend]` (interactive shortcut; emits DSL then compiles)
+- `choir define mission|vision|goal|constraint|non-goal "..."`
 - `choir analyze workspace|violations|hotspots`
 - `choir plan [for "..."]`
 - `choir plan approve <planId>`
@@ -246,7 +282,8 @@ Macro execution contract:
 
 Mutation contract:
 
-- `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
+- `define mission|vision` mutates top-level `mission|vision` via deterministic set.
+- `define goal|constraint|non-goal` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
 - `plan approve` updates `execution.plans[*].status` to `approved` deterministically.
 - `analyze|preview|execute|status|ci|audit|import|library|<abstraction-id>` are non-mutating in YAML compiler mode.
@@ -718,6 +755,7 @@ Non-negotiable safeguards:
 YAML = intent + policy + execution plans (authoritative)
 JSON = computed facts + execution runtime state (derived)
 Chat = orchestration interface (non-authoritative)
+Init Session = resumable wizard interaction state (`.choir/init-state.json`, non-authoritative)
 Audit = immutable compliance evidence (append-only, hash-chained)
 Lock = resolved macro library versions for reproducible execution
 ```

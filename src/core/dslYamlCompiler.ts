@@ -359,6 +359,26 @@ function compileActionToYAML(
   const next = canonicalizeConfig(config);
 
   if (action.type === "define") {
+    if (action.defineType === "mission") {
+      const before = next.mission ?? "";
+      const after = action.value.trim();
+      trackChange(changes, "mission", before, after);
+      return {
+        ...next,
+        mission: after,
+      };
+    }
+
+    if (action.defineType === "vision") {
+      const before = next.vision ?? "";
+      const after = action.value.trim();
+      trackChange(changes, "vision", before, after);
+      return {
+        ...next,
+        vision: after,
+      };
+    }
+
     if (action.defineType === "goal") {
       const before = next.intent.goals;
       const after = upsert(before, action.value);

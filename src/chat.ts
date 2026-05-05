@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import fs from "fs";
 import path from "path";
-import { getControlPlanePath, readControlPlane } from "./choirManager.js";
+import { createDefaultControlPlane, getControlPlanePath, readControlPlane } from "./choirManager.js";
 import {
     exportReport,
     generateReport,
@@ -39,6 +39,21 @@ import {
     validateRoundTrip,
     writeDSL,
 } from "./core/yamlDslGenerator.js";
+import {
+    InitApplyMode,
+    InitTemplateName,
+    InitWizard,
+    InitWizardSession,
+    buildDSL,
+    clearInitSession,
+    createWizardState,
+    getInitStatePath,
+    loadInitSession,
+    renderProgress,
+    renderPrompt,
+    renderReview,
+    saveInitSession,
+} from "./core/initWizard.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
 
@@ -46,6 +61,21 @@ type AbstractionChatCommand =
     | { type: "list" }
     | { type: "describe"; id: string }
     | { type: "run"; id: string };
+
+type InitTrace = {
+    stepsCompleted: number;
+    commandsGenerated: string[];
+    result: "success" | "cancelled" | "paused";
+    resumed: boolean;
+    currentStep?: string;
+    statePath?: string;
+};
+
+type InitChatCommand = {
+    type: "init";
+    template?: InitTemplateName;
+    invalidTemplate?: string;
+};
 
 function registerParticipant(
     context: vscode.ExtensionContext,
@@ -101,6 +131,8 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         CHOIR_DSL_GRAMMAR,
         "```",
         "Examples:",
+        "- choir define mission \"build deterministic delivery\"",
+        "- choir define vision \"policy-native engineering platform\"",
         "- choir define goal \"enforce service boundaries\"",
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
@@ -125,10 +157,34 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir audit query role=architect",
         "",
         "Abstraction shortcuts:",
+        "- @choir init",
+        "- @choir init --template backend",
+        "- @choir init --template frontend",
         "- @choir list abstractions",
         "- @choir describe <abstraction>",
         "- @choir run <abstraction>",
     ].join("\n"));
+}
+
+function countCompletedInitSteps(step: string): number {
+    switch (step) {
+        case "mission":
+            return 0;
+        case "vision":
+            return 1;
+        case "goals":
+            return 2;
+        case "constraints":
+            return 3;
+        case "non-goals":
+            return 4;
+        case "review":
+            return 5;
+        case "confirm":
+            return 6;
+        default:
+            return 0;
+    }
 }
 
 function parseAbstractionChatCommand(input: string): AbstractionChatCommand | null {
@@ -151,6 +207,28 @@ function parseAbstractionChatCommand(input: string): AbstractionChatCommand | nu
     return null;
 }
 
+function parseInitChatCommand(input: string): InitChatCommand | null {
+    const normalized = input.trim();
+    const match = normalized.match(/^@choir\s+init(?:\s+--template\s+([a-zA-Z0-9._-]+))?\s*$/i);
+    if (!match) {
+        return null;
+    }
+
+    const templateValue = match[1]?.toLowerCase();
+    if (!templateValue) {
+        return { type: "init" };
+    }
+
+    if (templateValue === "backend" || templateValue === "frontend") {
+        return { type: "init", template: templateValue };
+    }
+
+    return {
+        type: "init",
+        invalidTemplate: templateValue,
+    };
+}
+
 export function registerChoir(context: vscode.ExtensionContext) {
     registerParticipant(
         context,
@@ -164,6 +242,323 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             const abstractionChatCommand = parseAbstractionChatCommand(raw);
+            const initChatCommand = parseInitChatCommand(raw);
+            if (initChatCommand) {
+                if (initChatCommand.invalidTemplate) {
+                    stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
+                    return;
+                }
+
+                const workspaceRoot = getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    stream.markdown("No workspace folder found.");
+                    return;
+                }
+
+                const controlPath = getControlPlanePath();
+                if (!controlPath) {
+                    stream.markdown("Unable to resolve .choir/choir.config.yaml.");
+                    return;
+                }
+
+                const statePath = getInitStatePath(workspaceRoot);
+                const existingSession = loadInitSession(workspaceRoot);
+                let resumed = false;
+                let session: InitWizardSession | null = null;
+
+                if (existingSession) {
+                    const resumeChoice = await vscode.window.showQuickPick([
+                        {
+                            label: "Resume",
+                            description: `Continue from ${renderProgress(existingSession.state.currentStep)}`,
+                            value: "resume" as const,
+                        },
+                        {
+                            label: "Start Over",
+                            description: "Discard saved wizard state and begin from mission",
+                            value: "restart" as const,
+                        },
+                        {
+                            label: "Cancel",
+                            description: "Exit without changing the saved state",
+                            value: "cancel" as const,
+                        },
+                    ], {
+                        title: "Saved Choir init wizard found",
+                        placeHolder: "Choose resume or restart",
+                        ignoreFocusOut: true,
+                    });
+
+                    if (!resumeChoice || resumeChoice.value === "cancel") {
+                        const trace: InitTrace = {
+                            stepsCompleted: countCompletedInitSteps(existingSession.state.currentStep),
+                            commandsGenerated: [],
+                            result: "cancelled",
+                            resumed: true,
+                            currentStep: existingSession.state.currentStep,
+                            statePath,
+                        };
+                        stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                        return;
+                    }
+
+                    if (resumeChoice.value === "resume") {
+                        session = existingSession;
+                        resumed = true;
+                    } else {
+                        clearInitSession(workspaceRoot);
+                    }
+                }
+
+                if (!session) {
+                    const configExists = fs.existsSync(controlPath);
+                    let mode: InitApplyMode = "overwrite";
+
+                    if (configExists) {
+                        const selected = await vscode.window.showQuickPick([
+                            {
+                                label: "Merge",
+                                description: "Upsert wizard values into existing control plane",
+                                mode: "merge" as const,
+                            },
+                            {
+                                label: "Overwrite",
+                                description: "Start from empty control plane and apply wizard DSL",
+                                mode: "overwrite" as const,
+                            },
+                        ], {
+                            title: "choir.config.yaml exists",
+                            placeHolder: "Choose merge or overwrite",
+                            ignoreFocusOut: true,
+                        });
+
+                        if (!selected) {
+                            const trace: InitTrace = {
+                                stepsCompleted: 0,
+                                commandsGenerated: [],
+                                result: "cancelled",
+                                resumed: false,
+                                currentStep: "mission",
+                                statePath,
+                            };
+                            stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                            return;
+                        }
+
+                        mode = selected.mode;
+                    }
+
+                    session = {
+                        version: 1,
+                        mode,
+                        state: createWizardState(initChatCommand.template),
+                    };
+                    saveInitSession(workspaceRoot, session);
+                }
+
+                const wizard = new InitWizard(session.state);
+
+                while (true) {
+                    const step = wizard.state.currentStep;
+                    const progress = renderProgress(step);
+
+                    if (step === "review") {
+                        stream.markdown([
+                            progress,
+                            "",
+                            "```text",
+                            renderReview(wizard.state.data),
+                            "```",
+                        ].join("\n"));
+                    }
+
+                    let input: string | undefined;
+
+                    if (step === "confirm") {
+                        const confirmSelection = await vscode.window.showQuickPick([
+                            { label: "yes", description: "Apply this configuration" },
+                            { label: "no", description: "Cancel and clear wizard state" },
+                            { label: "back", description: "Return to review" },
+                            { label: "cancel", description: "Cancel and clear wizard state" },
+                        ], {
+                            title: progress,
+                            placeHolder: renderPrompt(wizard.state),
+                            ignoreFocusOut: true,
+                        });
+
+                        if (!confirmSelection) {
+                            session.state = wizard.state;
+                            saveInitSession(workspaceRoot, session);
+                            const trace: InitTrace = {
+                                stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                                commandsGenerated: [],
+                                result: "paused",
+                                resumed,
+                                currentStep: wizard.state.currentStep,
+                                statePath,
+                            };
+                            stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                            return;
+                        }
+
+                        input = confirmSelection.label;
+                    } else {
+                        const stepInput = await vscode.window.showInputBox({
+                            title: progress,
+                            prompt: `${renderPrompt(wizard.state)} Type back to edit previous step or cancel to exit.`,
+                            placeHolder: step === "review" ? "continue | back | cancel" : "enter value",
+                            ignoreFocusOut: true,
+                        });
+
+                        if (stepInput === undefined) {
+                            session.state = wizard.state;
+                            saveInitSession(workspaceRoot, session);
+                            const trace: InitTrace = {
+                                stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                                commandsGenerated: [],
+                                result: "paused",
+                                resumed,
+                                currentStep: wizard.state.currentStep,
+                                statePath,
+                            };
+                            stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                            return;
+                        }
+
+                        input = stepInput;
+                    }
+
+                    const transition = wizard.next(input);
+                    session.state = transition.state;
+                    saveInitSession(workspaceRoot, session);
+
+                    if (transition.message) {
+                        stream.markdown(`Init wizard: ${transition.message}`);
+                    }
+
+                    if (transition.status === "active") {
+                        continue;
+                    }
+
+                    if (transition.status === "cancelled") {
+                        clearInitSession(workspaceRoot);
+                        const trace: InitTrace = {
+                            stepsCompleted: countCompletedInitSteps(transition.state.currentStep),
+                            commandsGenerated: [],
+                            result: "cancelled",
+                            resumed,
+                            currentStep: transition.state.currentStep,
+                            statePath,
+                        };
+                        stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                        return;
+                    }
+
+                    break;
+                }
+
+                const commands = buildDSL(wizard.state.data);
+                stream.markdown([
+                    "Preview configuration:",
+                    `- Mission: ${wizard.state.data.mission && wizard.state.data.mission.length > 0 ? wizard.state.data.mission : "(empty)"}`,
+                    `- Vision: ${wizard.state.data.vision && wizard.state.data.vision.length > 0 ? wizard.state.data.vision : "(empty)"}`,
+                    `- Goals: ${wizard.state.data.goals.length}`,
+                    `- Constraints: ${wizard.state.data.constraints.length}`,
+                    `- Non-goals: ${wizard.state.data.nonGoals.length}`,
+                    "",
+                    "Generated DSL:",
+                    "```text",
+                    ...(commands.length > 0 ? commands : ["# no commands generated"]),
+                    "```",
+                ].join("\n"));
+
+                if (commands.length === 0) {
+                    clearInitSession(workspaceRoot);
+                    const trace: InitTrace = {
+                        stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                        commandsGenerated: [],
+                        result: "cancelled",
+                        resumed,
+                        currentStep: wizard.state.currentStep,
+                        statePath,
+                    };
+                    stream.markdown(`Choir init cancelled: no DSL commands generated.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                    return;
+                }
+
+                let currentControl = session.mode === "merge"
+                    ? readControlPlane()
+                    : createDefaultControlPlane();
+
+                if (!currentControl) {
+                    currentControl = createDefaultControlPlane();
+                }
+
+                for (const command of commands) {
+                    const compiled = compileDSLAndWrite(command, currentControl, controlPath, {
+                        workspaceRoot,
+                        actorId: "chat-user",
+                    });
+
+                    if (compiled.decision === "deny") {
+                        session.state = wizard.state;
+                        saveInitSession(workspaceRoot, session);
+                        const trace: InitTrace = {
+                            stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                            commandsGenerated: commands,
+                            result: "paused",
+                            resumed,
+                            currentStep: wizard.state.currentStep,
+                            statePath,
+                        };
+                        stream.markdown(`Choir init stopped by policy deny on: ${command}\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                        return;
+                    }
+
+                    if (compiled.decision === "require-approval") {
+                        session.state = wizard.state;
+                        saveInitSession(workspaceRoot, session);
+                        const trace: InitTrace = {
+                            stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                            commandsGenerated: commands,
+                            result: "paused",
+                            resumed,
+                            currentStep: wizard.state.currentStep,
+                            statePath,
+                        };
+                        stream.markdown([
+                            `Choir init paused: approval required for command: ${command}`,
+                            compiled.pendingApprovalId ? `- diffId: ${compiled.pendingApprovalId}` : "",
+                            compiled.diffHash ? `- diffHash: ${compiled.diffHash}` : "",
+                            "",
+                            `Trace: ${JSON.stringify(trace, null, 2)}`,
+                        ].filter((line) => line.length > 0).join("\n"));
+                        return;
+                    }
+
+                    currentControl = compiled.updatedControlPlane;
+                }
+
+                clearInitSession(workspaceRoot);
+                const trace: InitTrace = {
+                    stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                    commandsGenerated: commands,
+                    result: "success",
+                    resumed,
+                    currentStep: wizard.state.currentStep,
+                    statePath,
+                };
+
+                stream.markdown([
+                    "Choir init completed.",
+                    `- mode: ${session.mode}`,
+                    `- commandsApplied: ${commands.length}`,
+                    "",
+                    `Trace: ${JSON.stringify(trace, null, 2)}`,
+                ].join("\n"));
+                return;
+            }
+
             if (abstractionChatCommand) {
                 const workspaceRoot = getWorkspaceRoot();
                 if (!workspaceRoot) {

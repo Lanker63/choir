@@ -28,7 +28,14 @@ The extension activates automatically when VS Code finishes loading and when Cho
 
 Choir reads one authoritative file: `.choir/choir.config.yaml` at the root of your workspace.
 
-If the file does not exist, Choir creates a blank one on first activation:
+Choir does not auto-create this file on activation.
+
+Create it by either:
+
+- Running `@choir init` (recommended guided flow)
+- Creating `.choir/choir.config.yaml` manually
+
+Initial template:
 
 ```yaml
 version: "1.0.0"
@@ -347,7 +354,31 @@ Primary interface from VS Code Chat:
 
 - `@choir`
 
-Choir commands are now a strict DSL (alpha mode, no natural-language command parsing).
+Control-plane mutation commands are strict DSL (alpha mode, no natural-language command parsing).
+
+### Interactive Init Wizard (`@choir init`)
+
+Choir includes a stateful guided initialization shortcut in chat:
+
+- `@choir init`
+- `@choir init --template backend`
+- `@choir init --template frontend`
+
+Wizard behavior:
+
+- Step-driven flow: mission -> vision -> goals -> constraints -> non-goals -> review -> confirm
+- Per-step progress is shown (for example: `Step 2/6 - Vision`)
+- `back` is supported to edit previous steps
+- `cancel` exits the wizard
+- Input dismiss (escape/close) pauses the wizard and keeps resumable state
+- Resume support uses `.choir/init-state.json`
+- Inputs are normalized and duplicate list entries are prevented
+
+Apply model:
+
+- Wizard does not write YAML directly
+- Wizard generates deterministic DSL commands at confirmation
+- Commands are applied sequentially through existing DSL compile + policy gate flow (`compileDSLAndWrite`)
 
 Grammar:
 
@@ -356,7 +387,7 @@ Grammar:
 
 <action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
-<define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
+<define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
@@ -439,6 +470,8 @@ Defines intent values in `.choir/choir.config.yaml`.
 
 Examples:
 
+- `choir define mission "deterministic engineering workflow"`
+- `choir define vision "policy-native delivery platform"`
 - `choir define goal "enforce service boundaries"`
 - `choir define constraint "no direct db access"`
 - `choir define non-goal "distributed app"`
@@ -511,7 +544,8 @@ Macro storage and model:
 
 Mutation behavior:
 
-- `choir define ...`: mutates intent fields in YAML via deterministic upsert
+- `choir define mission|vision ...`: mutates top-level mission/vision in YAML via deterministic set
+- `choir define goal|constraint|non-goal ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
 - `choir plan approve <planId>`: marks an existing plan as approved in YAML via deterministic update
 - `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
@@ -857,6 +891,8 @@ Compliance reports are exported to `.choir/reports/` when `choir audit report` i
 
 Strategy memory is persisted separately in `.choir/memory.json`.
 
+Interactive init wizard session state (resumable) is persisted in `.choir/init-state.json`.
+
 `state.json` is derived and reproducible from workspace + control plane.
 
 ---
@@ -865,8 +901,9 @@ Strategy memory is persisted separately in `.choir/memory.json`.
 
 | Symptom | Resolution |
 |---|---|
-| No diagnostics appear | Ensure a workspace is open and `.choir/choir.config.yaml` exists (or save once so Choir creates it). |
+| No diagnostics appear | Ensure a workspace is open and `.choir/choir.config.yaml` exists. If missing, run `@choir init` or create it manually. |
 | `choir.config.yaml` parse error | Check Problems for schema errors; ensure YAML matches documented schema and canonical severity values. |
 | Chat participants not responding | Confirm VS Code 1.90+ and extension enabled in the active workspace. |
 | Rule Editor appears blank | Open the Choir activity view, then run `Choir: Open Rule Editor` from Command Palette. |
 | No DSL completion/hover in `.choir` files | Confirm the file extension is `.choir`, language mode is `Choir DSL`, and the extension is enabled in the workspace. |
+| `@choir init` exits unexpectedly | Re-run `@choir init`; if state was paused, choose Resume from the saved wizard prompt. |

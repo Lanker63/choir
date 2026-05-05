@@ -123,6 +123,14 @@ import {
   runCI,
 } from "../../core/ci.js";
 import {
+  InitWizard,
+  buildDSL,
+  clearInitSession,
+  createWizardState,
+  loadInitSession,
+  saveInitSession,
+} from "../../core/initWizard.js";
+import {
   getAbstraction,
   listAbstractions,
   runAbstraction,
@@ -984,7 +992,7 @@ const pass2: TestPass = {
         ]);
 
         const defineTypes = getDeterministicCompletions("choir define ").map((item) => item.label);
-        assert.deepStrictEqual(defineTypes, ["goal", "constraint", "non-goal"]);
+        assert.deepStrictEqual(defineTypes, ["mission", "vision", "goal", "constraint", "non-goal"]);
 
         const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
         assert.deepStrictEqual(planTail, ["for", "then"]);
@@ -1025,6 +1033,81 @@ const pass2: TestPass = {
     },
     {
       id: "2.29",
+      name: "init wizard enforces step flow validation and deterministic dsl output",
+      run: async () => {
+        const wizard = new InitWizard(createWizardState());
+
+        const emptyMission = wizard.next("   ");
+        assert.strictEqual(emptyMission.status, "active");
+        assert.strictEqual(emptyMission.state.currentStep, "mission");
+
+        wizard.next("Deterministic delivery platform");
+        assert.strictEqual(wizard.state.currentStep, "vision");
+
+        wizard.next("Policy-native engineering workflow");
+        assert.strictEqual(wizard.state.currentStep, "goals");
+
+        wizard.next("enforce boundaries");
+        wizard.next("  enforce   boundaries  ");
+        assert.deepStrictEqual(wizard.state.data.goals, ["enforce boundaries"]);
+
+        wizard.next("done");
+        assert.strictEqual(wizard.state.currentStep, "constraints");
+
+        wizard.next("no direct db access");
+        wizard.next("done");
+        assert.strictEqual(wizard.state.currentStep, "non-goals");
+
+        wizard.next("distributed app");
+        wizard.next("done");
+        assert.strictEqual(wizard.state.currentStep, "review");
+
+        wizard.next("continue");
+        assert.strictEqual(wizard.state.currentStep, "confirm");
+
+        const commands = buildDSL(wizard.state.data);
+        assert.deepStrictEqual(commands, [
+          'choir define mission "Deterministic delivery platform"',
+          'choir define vision "Policy-native engineering workflow"',
+          'choir define goal "enforce boundaries"',
+          'choir define constraint "no direct db access"',
+          'choir define non-goal "distributed app"',
+        ]);
+
+        const confirmed = wizard.next("yes");
+        assert.strictEqual(confirmed.status, "confirmed");
+      },
+    },
+    {
+      id: "2.30",
+      name: "init wizard session persistence supports resume and clear",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-wizard-"));
+        try {
+          const wizard = new InitWizard(createWizardState("backend"));
+          wizard.next("Mission");
+
+          saveInitSession(root, {
+            version: 1,
+            mode: "merge",
+            state: wizard.state,
+          });
+
+          const loaded = loadInitSession(root);
+          assert.ok(loaded);
+          assert.strictEqual(loaded?.mode, "merge");
+          assert.strictEqual(loaded?.state.currentStep, "vision");
+          assert.deepStrictEqual(loaded?.state.data.goals, ["scalable service architecture"]);
+
+          clearInitSession(root);
+          assert.strictEqual(loadInitSession(root), null);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.31",
       name: "dsl parser supports macro command surface",
       run: async () => {
         assert.deepStrictEqual(parseCommand("choir macro list").ast, {
@@ -1050,7 +1133,7 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30",
+      id: "2.32",
       name: "macro expansion is deterministic with parameter defaults",
       run: async () => {
         const macro = getMacro(repoRoot, "enforce-service-boundaries");
@@ -1067,7 +1150,7 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.31",
+      id: "2.33",
       name: "macro execution compiles sequentially through yaml pipeline",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-run-"));

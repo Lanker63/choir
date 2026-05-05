@@ -20,7 +20,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <define> ::= "define" <define-type> <string>
 
-<define-type> ::= "goal" | "constraint" | "non-goal"
+<define-type> ::= "mission" | "vision" | "goal" | "constraint" | "non-goal"
 
 <analyze> ::= "analyze" <analyze-target>
 
@@ -115,7 +115,7 @@ export const CHOIR_LIBRARY_META_KEYWORDS = ["list", "install", "update", "lock"]
 export const CHOIR_CI_META_KEYWORDS = ["run"] as const;
 export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
 
-export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
+export const CHOIR_DEFINE_TYPE_KEYWORDS = ["mission", "vision", "goal", "constraint", "non-goal"] as const;
 export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "violations", "hotspots"] as const;
 export const CHOIR_EXPORT_SECTION_KEYWORDS = ["all", "intent", "policy", "plans"] as const;
 export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
@@ -141,7 +141,7 @@ const KEYWORDS = new Set<string>([
 
 export const CHOIR_IDENTIFIER_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
-export type DefineType = "goal" | "constraint" | "non-goal";
+export type DefineType = "mission" | "vision" | "goal" | "constraint" | "non-goal";
 export type AnalyzeTarget = "workspace" | "violations" | "hotspots";
 
 export type PlanRef = {
@@ -999,7 +999,13 @@ export function parse(tokens: Token[]): AST {
 
 function validateActionNode(node: ActionNode): boolean {
   if (node.type === "define") {
-    return (node.defineType === "goal" || node.defineType === "constraint" || node.defineType === "non-goal")
+    return (
+      node.defineType === "mission"
+      || node.defineType === "vision"
+      || node.defineType === "goal"
+      || node.defineType === "constraint"
+      || node.defineType === "non-goal"
+    )
       && typeof node.value === "string"
       && node.value.length > 0;
   }
