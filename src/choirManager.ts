@@ -113,6 +113,9 @@ export function createDefaultControlPlane(): ControlPlane {
         },
         policy: {
             rules: []
+        },
+        execution: {
+            plans: []
         }
     };
 }

@@ -221,6 +221,12 @@ function canonicalizeState(root: string, state: StatePlane): StatePlane {
     })),
     metrics: { ...state.metrics },
     dependencyGraph: relativizeRecord(root, state.dependencyGraph),
+    execution: {
+      ...(state.execution.activePlanId ? { activePlanId: state.execution.activePlanId } : {}),
+      taskStatus: { ...state.execution.taskStatus },
+      taskResults: { ...state.execution.taskResults },
+      history: state.execution.history.map((event) => ({ ...event })),
+    },
   };
 }
 

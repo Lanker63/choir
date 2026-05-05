@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { registerAnalyst, registerArchitect, registerEnforcer } from "../chat.js";
+import { registerAnalyst, registerArchitect, registerConductor, registerEnforcer } from "../chat.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
 import { runPipelineForWorkspace } from "../enforcer.js";
@@ -131,6 +131,7 @@ export function activate(context: vscode.ExtensionContext) {
         registerArchitect(context);
         registerAnalyst(context);
         registerEnforcer(context);
+        registerConductor(context);
         console.log("Choir chat participants registered successfully");
     } catch (error) {
         console.error("Choir chat participants failed to register", error);

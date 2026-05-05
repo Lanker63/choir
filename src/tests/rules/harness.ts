@@ -48,6 +48,9 @@ function makeControlPlaneFixture(): ControlPlane {
         },
       ],
     },
+    execution: {
+      plans: [],
+    },
   };
 }
 

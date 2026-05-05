@@ -47,6 +47,14 @@ export type Trace = {
   durationMs: number;
 };
 
+export type ExecutionTrace = {
+  planId: string;
+  tasksExecuted: string[];
+  tasksSucceeded: string[];
+  tasksFailed: string[];
+  decisions: string[];
+};
+
 export type LegacySeverity = "error" | "warn" | "warning" | "info" | "information" | "hint";
 
 export function normalizeDiagnosticSeverity(severity: LegacySeverity): DiagnosticSeverity {

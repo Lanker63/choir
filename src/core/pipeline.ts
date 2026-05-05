@@ -4,7 +4,7 @@ import { RuleRegistry } from "../rules/registry.js";
 import { compileControlPlaneToRules } from "../dsl/compiler.js";
 import { Diagnostic, Trace } from "./types.js";
 import { ControlPlane } from "../schema.js";
-import { persistStatePlane } from "./state.js";
+import { createEmptyExecutionState, persistStatePlane, readStatePlane } from "./state.js";
 import { runSemantic } from "../semantic/engine.js";
 import { runCode } from "../code/engine.js";
 import { runStrategy } from "../strategy/engine.js";
@@ -277,6 +277,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
   const triggeredRuleIds = Array.from(new Set(diagnostics.map((diagnostic) => diagnostic.ruleId))).sort((a, b) => a.localeCompare(b));
   const astOverrideApplied = executableRules.some((rule) => rule.priority < 100);
+  const previousState = readStatePlane(input.workspace.root);
 
   const statePath = persistStatePlane(input.workspace.root, {
     astIndex: astResult.astIndex,
@@ -295,6 +296,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       diagnostics: diagnostics.length,
     },
     dependencyGraph: astResult.dependencyGraph,
+    execution: previousState?.execution ?? createEmptyExecutionState(),
   });
 
   const trace: Trace = {

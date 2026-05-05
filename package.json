@@ -14,7 +14,8 @@
     "onStartupFinished",
     "onChatParticipant:choir.analyst",
     "onChatParticipant:choir.architect",
-    "onChatParticipant:choir.enforcer"
+    "onChatParticipant:choir.enforcer",
+    "onChatParticipant:choir.conductor"
   ],
   "main": "./out/vscode/extension.js",
   "contributes": {
@@ -60,6 +61,13 @@
         "name": "Choir-Enforcer",
         "fullName": "Choir Enforcer",
         "description": "Ensures that the project adheres to the defined strategy and architecture.",
+        "isSticky": true
+      },
+      {
+        "id": "choir.conductor",
+        "name": "Choir-Conductor",
+        "fullName": "Choir Conductor",
+        "description": "Builds deterministic plans and coordinates dependency-aware task execution through existing Choir agents.",
         "isSticky": true
       }
     ],

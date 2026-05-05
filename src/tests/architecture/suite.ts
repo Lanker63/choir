@@ -15,7 +15,9 @@ import {
 import { runConflictResolutionEngine } from "../../fix/conflictEngine.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix } from "../../fix/types.js";
-import { CONTROL_PLANE_VERSION, ControlPlane } from "../../schema.js";
+import { generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
+import { createEmptyStatePlane } from "../../core/state.js";
+import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
   return {
@@ -38,6 +40,9 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     policy: {
       rules: [],
       ...(overrides ? { priorityOverrides: overrides } : {}),
+    },
+    execution: {
+      plans: [],
     },
   };
 }
@@ -93,6 +98,7 @@ const pass1: TestPass = {
           assert.ok(Array.isArray(control.intent.goals));
           assert.ok(Array.isArray(control.intent.constraints));
           assert.ok(Array.isArray(control.policy.rules));
+          assert.ok(Array.isArray(control.execution.plans));
         });
       },
     },
@@ -105,6 +111,86 @@ const pass1: TestPass = {
           const rules = compileControlPlaneToRules(control);
           assert.ok(rules.length > 0);
         });
+      },
+    },
+    {
+      id: "1.4",
+      name: "control plane rejects duplicate plan ids",
+      run: async () => {
+        const invalid = {
+          ...makeControlPlane(),
+          execution: {
+            plans: [
+              {
+                id: "plan-duplicate",
+                title: "Plan A",
+                derivedFrom: "manual",
+                tasks: [
+                  {
+                    id: "task-a",
+                    title: "Task A",
+                    type: "analysis",
+                    successCriteria: ["analyze"],
+                  },
+                ],
+                status: "draft",
+              },
+              {
+                id: "plan-duplicate",
+                title: "Plan B",
+                derivedFrom: "manual",
+                tasks: [
+                  {
+                    id: "task-b",
+                    title: "Task B",
+                    type: "analysis",
+                    successCriteria: ["analyze"],
+                  },
+                ],
+                status: "draft",
+              },
+            ],
+          },
+        };
+
+        assert.throws(() => ControlPlaneSchema.parse(invalid), /Duplicate plan id/);
+      },
+    },
+    {
+      id: "1.5",
+      name: "control plane rejects circular task dependencies",
+      run: async () => {
+        const invalid = {
+          ...makeControlPlane(),
+          execution: {
+            plans: [
+              {
+                id: "plan-cycle",
+                title: "Cycle",
+                derivedFrom: "manual",
+                tasks: [
+                  {
+                    id: "task-1",
+                    title: "Task 1",
+                    type: "analysis",
+                    dependsOn: ["task-2"],
+                    successCriteria: ["one"],
+                  },
+                  {
+                    id: "task-2",
+                    title: "Task 2",
+                    type: "refactor",
+                    dependsOn: ["task-1"],
+                    successCriteria: ["two"],
+                  },
+                ],
+                status: "draft",
+              },
+            ],
+          },
+        };
+
+        assert.throws(() => ControlPlaneSchema.parse(invalid), /Circular task dependency detected/);
       },
     },
   ],
@@ -209,6 +295,10 @@ const pass3: TestPass = {
           assert.ok(Array.isArray(state.violations));
           assert.ok(typeof state.metrics === "object" && state.metrics !== null);
           assert.ok(typeof state.dependencyGraph === "object" && state.dependencyGraph !== null);
+          assert.ok(typeof state.execution === "object" && state.execution !== null);
+          assert.ok(typeof state.execution.taskStatus === "object" && state.execution.taskStatus !== null);
+          assert.ok(typeof state.execution.taskResults === "object" && state.execution.taskResults !== null);
+          assert.ok(Array.isArray(state.execution.history));
         });
       },
     },
@@ -238,6 +328,47 @@ const pass3: TestPass = {
 
           assert.strictEqual(await validateStateDeterminism(snapshot, state), true);
         });
+      },
+    },
+    {
+      id: "3.5",
+      name: "deterministic plan generation from goals and violations",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["enforce service boundaries"];
+        control.intent.constraints = ["no direct db access"];
+
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-a",
+            message: "violation A",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/services/user.ts", 1, 0, 1, 5),
+            traceId: "trace-1",
+          },
+          {
+            id: "diag-2",
+            ruleId: "rule-b",
+            message: "violation B",
+            severity: "warning",
+            category: "strategy",
+            location: testLocation("src/repositories/userRepo.ts", 2, 0, 2, 7),
+            traceId: "trace-2",
+          },
+        ];
+
+        const first = generatePlan(control, state);
+        const second = generatePlan(control, state);
+
+        assert.deepStrictEqual(first, second);
+        assert.strictEqual(first.tasks[0]?.type, "analysis");
+        assert.strictEqual(first.tasks[first.tasks.length - 1]?.type, "enforce");
+
+        const refactors = first.tasks.filter((task) => task.type === "refactor");
+        assert.ok(refactors.length > 0);
       },
     },
   ],
@@ -286,6 +417,42 @@ const pass4: TestPass = {
           const trace = (await harness.runPipeline()).trace;
           assert.deepStrictEqual(trace.phases, ["AST", "SEMANTIC", "CODE", "STRATEGY"]);
         });
+      },
+    },
+    {
+      id: "4.5",
+      name: "scheduler enforces dependency order",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["enforce service boundaries"];
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-a",
+            message: "violation",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/services/user.ts", 1, 0, 1, 5),
+            traceId: "trace-1",
+          },
+        ];
+
+        const plan = generatePlan(control, state);
+
+        const firstExecutable = getExecutableTasks(plan, state).map((task) => task.id);
+        assert.deepStrictEqual(firstExecutable, ["analysis-violations"]);
+
+        state.execution.taskStatus[taskExecutionKey(plan.id, "analysis-violations")] = "complete";
+        const secondExecutable = getExecutableTasks(plan, state);
+        assert.ok(secondExecutable.every((task) => task.type === "refactor"));
+
+        for (const task of secondExecutable) {
+          state.execution.taskStatus[taskExecutionKey(plan.id, task.id)] = "complete";
+        }
+
+        const thirdExecutable = getExecutableTasks(plan, state).map((task) => task.id);
+        assert.deepStrictEqual(thirdExecutable, ["enforce-policy"]);
       },
     },
   ],
