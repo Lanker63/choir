@@ -85,6 +85,10 @@ import {
   generateDSL,
   validateRoundTrip,
 } from "../../core/yamlDslGenerator.js";
+import {
+  getDeterministicCompletions,
+  validateChoirDocument,
+} from "../../core/choirLanguageModel.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -848,6 +852,52 @@ const pass2: TestPass = {
         assert.deepStrictEqual(parseCommand("choir policy status").ast, {
           type: "policy-status",
         });
+      },
+    },
+    {
+      id: "2.27",
+      name: "choir editor completions are deterministic and grammar-aligned",
+      run: async () => {
+        const root = getDeterministicCompletions("").map((item) => item.label);
+        assert.deepStrictEqual(root, ["choir"]);
+
+        const actions = getDeterministicCompletions("choir ").map((item) => item.label);
+        assert.deepStrictEqual(actions, [
+          "define",
+          "analyze",
+          "plan",
+          "preview",
+          "execute",
+          "status",
+          "export",
+          "approve",
+          "reject",
+          "policy",
+        ]);
+
+        const defineTypes = getDeterministicCompletions("choir define ").map((item) => item.label);
+        assert.deepStrictEqual(defineTypes, ["goal", "constraint", "non-goal"]);
+
+        const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
+        assert.deepStrictEqual(planTail, ["for", "then"]);
+
+        const policyTail = getDeterministicCompletions("choir policy ").map((item) => item.label);
+        assert.deepStrictEqual(policyTail, ["status"]);
+      },
+    },
+    {
+      id: "2.28",
+      name: "choir editor validation reuses parser behavior per command line",
+      run: async () => {
+        const diagnostics = validateChoirDocument([
+          "# comment only",
+          "choir define goal \"valid\"",
+          "choir define goal invalid",
+        ].join("\n"));
+
+        assert.strictEqual(diagnostics.length, 1);
+        assert.strictEqual(diagnostics[0].line, 2);
+        assert.ok(diagnostics[0].message.includes("Expected quoted string"));
       },
     },
   ],

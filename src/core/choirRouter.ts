@@ -49,34 +49,42 @@ export type Token =
   | { type: "string"; value: string }
   | { type: "identifier"; value: string };
 
-const KEYWORDS = new Set([
-  "choir",
+export const CHOIR_ROOT_KEYWORD = "choir" as const;
+
+export const CHOIR_ACTION_KEYWORDS = [
   "define",
-  "goal",
-  "constraint",
-  "non-goal",
   "analyze",
-  "workspace",
-  "violations",
-  "hotspots",
   "plan",
-  "for",
   "preview",
   "execute",
   "status",
   "export",
-  "dsl",
-  "all",
-  "intent",
-  "policy",
-  "plans",
   "approve",
   "reject",
   "policy",
-  "then",
+] as const;
+
+export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
+export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "violations", "hotspots"] as const;
+export const CHOIR_EXPORT_SECTION_KEYWORDS = ["all", "intent", "policy", "plans"] as const;
+export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
+export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
+export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
+export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
+export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
+
+const KEYWORDS = new Set<string>([
+  CHOIR_ROOT_KEYWORD,
+  ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_DEFINE_TYPE_KEYWORDS,
+  ...CHOIR_ANALYZE_TARGET_KEYWORDS,
+  CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_EXPORT_FORMAT_KEYWORD,
+  ...CHOIR_EXPORT_SECTION_KEYWORDS,
+  CHOIR_SEQUENCE_KEYWORD,
 ]);
 
-const IDENTIFIER_PATTERN = /^[a-zA-Z0-9-_]+$/;
+export const CHOIR_IDENTIFIER_PATTERN = /^[a-zA-Z0-9-_]+$/;
 
 export type DefineType = "goal" | "constraint" | "non-goal";
 export type AnalyzeTarget = "workspace" | "violations" | "hotspots";
@@ -341,7 +349,7 @@ class Parser {
 
   private parseDefine(): DefineNode {
     this.expectKeyword("define");
-    const defineType = this.expectOneOfKeywords(["goal", "constraint", "non-goal"]) as DefineType;
+    const defineType = this.expectOneOfKeywords([...CHOIR_DEFINE_TYPE_KEYWORDS]) as DefineType;
     const value = this.expectString();
 
     return {
@@ -353,7 +361,7 @@ class Parser {
 
   private parseAnalyze(): AnalyzeNode {
     this.expectKeyword("analyze");
-    const target = this.expectOneOfKeywords(["workspace", "violations", "hotspots"]) as AnalyzeTarget;
+    const target = this.expectOneOfKeywords([...CHOIR_ANALYZE_TARGET_KEYWORDS]) as AnalyzeTarget;
 
     return {
       type: "analyze",
@@ -436,7 +444,7 @@ class Parser {
       };
     }
 
-    const section = this.expectOneOfKeywords(["all", "intent", "policy", "plans"]) as ExportSection;
+    const section = this.expectOneOfKeywords([...CHOIR_EXPORT_SECTION_KEYWORDS]) as ExportSection;
     return {
       type: "export",
       format: "dsl",
@@ -501,7 +509,7 @@ class Parser {
       throw new Error(`Expected identifier, found ${found}`);
     }
 
-    if (!IDENTIFIER_PATTERN.test(token.value)) {
+    if (!CHOIR_IDENTIFIER_PATTERN.test(token.value)) {
       throw new Error(`Invalid identifier: ${token.value}`);
     }
 
@@ -558,7 +566,7 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "preview" || node.type === "execute") {
-    return node.planRef === undefined || IDENTIFIER_PATTERN.test(node.planRef.identifier);
+    return node.planRef === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.planRef.identifier);
   }
 
   if (node.type === "export") {
@@ -567,7 +575,7 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "approve" || node.type === "reject") {
-    return IDENTIFIER_PATTERN.test(node.diffId);
+    return CHOIR_IDENTIFIER_PATTERN.test(node.diffId);
   }
 
   if (node.type === "policy-status") {

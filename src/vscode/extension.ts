@@ -5,6 +5,7 @@ import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
 import { runPipelineForWorkspace } from "../enforcer.js";
 import { registerFixCodeActions } from "./diagnostics.js";
+import { registerChoirLanguageSupport } from "./choirLanguageSupport.js";
 
 function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Disposable) {
     context.subscriptions.push(disposable);
@@ -13,6 +14,7 @@ function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Di
 export function activate(context: vscode.ExtensionContext) {
     console.log("Choir extension active");
     registerFixCodeActions(context);
+    registerChoirLanguageSupport(context);
 
     const triggerPipeline = async () => {
         try {

@@ -1,0 +1,72 @@
+{
+  "Define Goal": {
+    "prefix": "goal",
+    "body": [
+      "choir define goal \"$1\""
+    ],
+    "description": "Define a goal"
+  },
+  "Define Constraint": {
+    "prefix": "constraint",
+    "body": [
+      "choir define constraint \"$1\""
+    ],
+    "description": "Define a constraint"
+  },
+  "Define Non-Goal": {
+    "prefix": "non-goal",
+    "body": [
+      "choir define non-goal \"$1\""
+    ],
+    "description": "Define a non-goal"
+  },
+  "Create Plan": {
+    "prefix": "plan",
+    "body": [
+      "choir plan for \"$1\""
+    ],
+    "description": "Create a plan for a goal"
+  },
+  "Preview Plan": {
+    "prefix": "preview",
+    "body": [
+      "choir preview plan $1"
+    ],
+    "description": "Preview an existing plan"
+  },
+  "Execute Plan": {
+    "prefix": "execute",
+    "body": [
+      "choir execute plan $1"
+    ],
+    "description": "Execute an existing plan"
+  },
+  "Export DSL": {
+    "prefix": "export",
+    "body": [
+      "choir export dsl ${1|all,intent,policy,plans|}"
+    ],
+    "description": "Export DSL from YAML"
+  },
+  "Approve Pending Diff": {
+    "prefix": "approve",
+    "body": [
+      "choir approve $1"
+    ],
+    "description": "Approve pending policy diff"
+  },
+  "Reject Pending Diff": {
+    "prefix": "reject",
+    "body": [
+      "choir reject $1"
+    ],
+    "description": "Reject pending policy diff"
+  },
+  "Policy Status": {
+    "prefix": "policy-status",
+    "body": [
+      "choir policy status"
+    ],
+    "description": "Show pending policy approvals"
+  }
+}

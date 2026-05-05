@@ -1,0 +1,23 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Choir DSL",
+  "scopeName": "source.choir",
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.choir",
+      "match": "#.*$"
+    },
+    {
+      "name": "string.quoted.double.choir",
+      "match": "\"(?:\\\\.|[^\"\\\\])*\""
+    },
+    {
+      "name": "keyword.control.choir",
+      "match": "\\b(choir|define|goal|constraint|non-goal|analyze|workspace|violations|hotspots|plan|for|preview|execute|status|export|dsl|all|intent|policy|plans|approve|reject|then)\\b"
+    },
+    {
+      "name": "variable.other.identifier.choir",
+      "match": "\\b[a-zA-Z0-9_-]+\\b"
+    }
+  ]
+}

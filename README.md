@@ -20,7 +20,7 @@ Install from the VS Code Marketplace (search **"Choir"**), or install the `.vsix
 Extensions panel → ··· menu → Install from VSIX…
 ```
 
-The extension activates automatically when VS Code finishes loading.
+The extension activates automatically when VS Code finishes loading and when Choir language features are used in `.choir` files.
 
 ---
 
@@ -40,6 +40,7 @@ intent:
   non-goals: []
 policy:
   rules: []
+  approvalRules: []
 execution:
   plans: []
 ```
@@ -289,6 +290,32 @@ Compilation flow:
 
 `DSL -> AST -> compiler -> choir.config.yaml -> pipeline`
 
+### Choir DSL Editor Language Support (`.choir`)
+
+Choir ships first-class VS Code language support for the DSL.
+
+- File recognition:
+  - `*.choir` is associated to language id `choir`.
+- Syntax highlighting:
+  - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
+  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `then`, and related terminals).
+- Language configuration:
+  - Line comments use `#`.
+  - Bracket pairs: `{}`, `()`.
+  - Auto-closing and surrounding pairs for `"`.
+- IntelliSense (deterministic):
+  - Completion suggestions are grammar-state driven (no LLM, no heuristics).
+  - Suggestions are context-aware and only include syntactically valid next tokens.
+  - Hover text is provided for DSL keywords.
+- Validation (parser-backed):
+  - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
+  - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
+- Snippets:
+  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, and `policy status`.
+- Editor trace:
+  - Command Palette: `Choir: Show DSL Editor Trace`
+  - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
+
 ### Internal Architect Role
 
 Defines intent values in `.choir/choir.config.yaml`.
@@ -421,3 +448,4 @@ Strategy memory is persisted separately in `.choir/memory.json`.
 | `choir.config.yaml` parse error | Check Problems for schema errors; ensure YAML matches documented schema and canonical severity values. |
 | Chat participants not responding | Confirm VS Code 1.90+ and extension enabled in the active workspace. |
 | Rule Editor appears blank | Open the Choir activity view, then run `Choir: Open Rule Editor` from Command Palette. |
+| No DSL completion/hover in `.choir` files | Confirm the file extension is `.choir`, language mode is `Choir DSL`, and the extension is enabled in the workspace. |

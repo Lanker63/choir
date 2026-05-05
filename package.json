@@ -39,8 +39,44 @@
         "command": "choir.openRuleEditorPanelResolve",
         "title": "Choir: Open Rule Editor (Panel Resolve)",
         "category": "Choir"
+      },
+      {
+        "command": "choir.showDslEditorTrace",
+        "title": "Choir: Show DSL Editor Trace",
+        "category": "Choir"
       }
     ],
+    "languages": [
+      {
+        "id": "choir",
+        "extensions": [
+          ".choir"
+        ],
+        "aliases": [
+          "Choir DSL",
+          "choir"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "choir",
+        "scopeName": "source.choir",
+        "path": "./syntaxes/choir.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "choir",
+        "path": "./snippets/choir.json"
+      }
+    ],
+    "configurationDefaults": {
+      "files.associations": {
+        "*.choir": "choir"
+      }
+    },
     "chatParticipants": [
       {
         "id": "choir.analyst",

@@ -99,6 +99,51 @@ Router constraints:
 - No direct runtime mutation outside YAML during DSL compilation.
 - Config is validated before write; write is single-step (no partial updates).
 
+## VS Code Language Support Contract (`.choir`)
+
+Choir provides first-class editor support for DSL authoring with strict alignment to the compiler grammar.
+
+Editor architecture:
+
+```text
+DSL file (.choir)
+  -> VS Code extension language contribution
+     -> TextMate grammar (syntax highlighting)
+     -> language configuration (comments/brackets/pairs)
+     -> completion + hover providers
+     -> parser-backed diagnostics
+```
+
+Editor determinism constraints:
+
+- `.choir` files map to language id `choir`.
+- Syntax tokenization uses a stable TextMate keyword list derived from current DSL terminals.
+- Completions are deterministic and grammar-state driven.
+- Editor suggestions must only include syntactically valid next tokens.
+- Validation must reuse parser behavior (`parseCommand`) and must not use heuristic parsing.
+- Hover content is deterministic and keyword-based.
+- No LLM features are used for completion or validation.
+
+Packaging contract:
+
+- `package.json` contributes:
+  - `languages` (`choir`, extension `.choir`)
+  - `grammars` (`source.choir`)
+  - `snippets` (`snippets/choir.json`)
+  - configuration default file association (`*.choir` -> `choir`)
+- Language assets:
+  - `syntaxes/choir.tmLanguage.json`
+  - `language-configuration.json`
+  - `snippets/choir.json`
+
+Editor trace contract:
+
+- Trace counters are maintained for:
+  - `completionsTriggered`
+  - `diagnosticsCount`
+  - `parseErrors`
+- Trace is user-visible through command: `Choir: Show DSL Editor Trace`.
+
 ---
 
 # Orchestration Layer
