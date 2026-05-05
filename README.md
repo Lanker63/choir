@@ -279,7 +279,11 @@ Grammar:
 <identifier> ::= [a-zA-Z0-9-_]+
 ```
 
-`@choir` parses commands into AST and compiles AST into deterministic internal role actions with capability boundaries.
+`@choir` parses commands into AST and compiles AST into deterministic YAML mutations.
+
+Compilation flow:
+
+`DSL -> AST -> compiler -> choir.config.yaml -> pipeline`
 
 ### Internal Architect Role
 
@@ -295,13 +299,14 @@ Examples:
 
 Not directly user-addressable in DSL.
 
-### Internal Analyst Role
+### YAML Compiler Behavior
 
-Provides deterministic analysis and status output.
+The DSL compiler is transactional and deterministic:
 
-### Internal Conductor Role
-
-Builds, previews, and executes plans from DSL commands.
+- Parses full command input first
+- Applies AST mutations in memory
+- Validates resulting config against schema
+- Writes `.choir/choir.config.yaml` once (or returns no-op)
 
 Supported commands:
 
@@ -313,11 +318,17 @@ Supported commands:
 - `choir execute plan <planId>`
 - `choir status`
 
-Execution behavior:
+Mutation behavior:
 
-- `choir plan`: synthesizes a deterministic plan and auto-approves it for DSL flow
-- `choir preview [plan <id>]`: scores/selects plans, evaluates strategies, and writes approved preview metadata to state
-- `choir execute [plan <id>]`: executes only when approved preview metadata in state matches recomputed preview hash
+- `choir define ...`: mutates intent fields in YAML via deterministic upsert
+- `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
+- `choir analyze|preview|execute|status`: accepted by grammar, non-mutating in YAML compiler mode
+
+Idempotency guarantees:
+
+- Same input and same starting YAML produce identical output YAML
+- Duplicate intent entries are deduplicated and stably sorted
+- Duplicate plan ids are not re-added
 
 ---
 

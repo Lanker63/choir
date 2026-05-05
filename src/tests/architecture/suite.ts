@@ -63,6 +63,13 @@ import {
   tokenize,
   validGrammar,
 } from "../../core/choirRouter.js";
+import {
+  canonicalizeConfig,
+  compileDSL,
+  controlPlaneToChoirConfig,
+  hashConfig,
+  serializeYAML,
+} from "../../core/dslYamlCompiler.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -492,6 +499,90 @@ const pass2: TestPass = {
         assert.throws(() => enforceCapabilities("architect", "schedule"), /Capability violation/);
         assert.throws(() => enforceCapabilities("analyst", "modify-yaml"), /Capability violation/);
         assert.throws(() => enforceCapabilities("conductor", "modify-yaml"), /Capability violation/);
+      },
+    },
+    {
+      id: "2.11",
+      name: "dsl compiler mutates yaml intent deterministically",
+      run: async () => {
+        const control = makeControlPlane();
+        const first = compileDSL("choir define goal \"enforce service boundaries\"", control);
+        const second = compileDSL("choir define goal \"enforce service boundaries\"", first.updatedControlPlane);
+
+        assert.strictEqual(first.changed, true);
+        assert.strictEqual(second.changed, false);
+        assert.ok(first.updatedControlPlane.intent.goals.includes("enforce service boundaries"));
+
+        const firstHash = hashConfig(controlPlaneToChoirConfig(first.updatedControlPlane));
+        const secondHash = hashConfig(controlPlaneToChoirConfig(second.updatedControlPlane));
+        assert.strictEqual(firstHash, secondHash);
+      },
+    },
+    {
+      id: "2.12",
+      name: "dsl compiler supports multi-command then pipeline",
+      run: async () => {
+        const control = makeControlPlane();
+        const compiled = compileDSL(
+          "choir define goal \"A\" then define constraint \"B\" then define non-goal \"C\"",
+          control
+        );
+
+        assert.strictEqual(compiled.changed, true);
+        assert.deepStrictEqual(compiled.updatedControlPlane.intent.goals, ["A"]);
+        assert.deepStrictEqual(compiled.updatedControlPlane.intent.constraints, ["B"]);
+        assert.deepStrictEqual(compiled.updatedControlPlane.intent["non-goals"], ["C"]);
+      },
+    },
+    {
+      id: "2.13",
+      name: "dsl compiler plan upsert is deterministic and duplicate-safe",
+      run: async () => {
+        const control = makeControlPlane();
+        const first = compileDSL("choir plan", control);
+        const second = compileDSL("choir plan", first.updatedControlPlane);
+
+        assert.strictEqual(first.updatedControlPlane.execution.plans.length >= 1, true);
+        assert.strictEqual(second.updatedControlPlane.execution.plans.length, first.updatedControlPlane.execution.plans.length);
+      },
+    },
+    {
+      id: "2.14",
+      name: "dsl compiler keeps execute as non-mutating in yaml mode",
+      run: async () => {
+        const control = makeControlPlane();
+        const compiled = compileDSL("choir execute", control);
+        assert.strictEqual(compiled.changed, false);
+        assert.deepStrictEqual(compiled.updatedControlPlane, control);
+      },
+    },
+    {
+      id: "2.15",
+      name: "dsl compiler rejects malformed and empty-value commands",
+      run: async () => {
+        const control = makeControlPlane();
+        assert.throws(() => compileDSL("choir define goal enforce boundaries", control), /Expected quoted string/);
+        assert.throws(() => compileDSL("choir define constraint \"\"", control), /Invalid Choir DSL command/);
+      },
+    },
+    {
+      id: "2.16",
+      name: "yaml serialization is canonical and reproducible",
+      run: async () => {
+        const control = makeControlPlane();
+        const compiled = compileDSL(
+          "choir define constraint \"z\" then define constraint \"a\" then define goal \"b\" then define goal \"a\"",
+          control
+        );
+
+        const cfg = canonicalizeConfig(controlPlaneToChoirConfig(compiled.updatedControlPlane));
+        const first = serializeYAML(cfg);
+        const second = serializeYAML(cfg);
+
+        assert.strictEqual(first, second);
+        assert.ok(first.includes("constraints:"));
+        assert.ok(first.includes("- a"));
+        assert.ok(first.includes("- z"));
       },
     },
   ],

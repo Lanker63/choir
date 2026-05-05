@@ -68,9 +68,9 @@ Internal roles remain isolated modules:
 - `choir.enforcer`
 - `choir.conductor`
 
-Router model:
+Compiler model:
 
-`User -> @choir -> DSL tokenizer/parser -> AST validator -> compiler -> internal role handler -> pipeline`
+`User -> @choir -> DSL tokenizer/parser -> AST validator -> compiler -> choir.config.yaml -> pipeline`
 
 DSL command grammar:
 
@@ -91,8 +91,9 @@ Router constraints:
 
 - No heuristic or natural-language intent classification.
 - Parser is strict and deterministic; invalid syntax is rejected.
-- Compiler maps AST nodes directly to role actions.
-- Capability boundaries are enforced before role handlers run.
+- Compiler maps AST nodes directly to YAML mutations.
+- No direct runtime mutation outside YAML during DSL compilation.
+- Config is validated before write; write is single-step (no partial updates).
 
 ---
 
@@ -119,6 +120,12 @@ Supported command surface (via `@choir`):
 - `choir preview [plan <planId>]`
 - `choir execute [plan <planId>]`
 - `choir status`
+
+Mutation contract:
+
+- `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
+- `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
+- `analyze|preview|execute|status` are non-mutating in YAML compiler mode.
 
 ## Deterministic State → Plan Synthesis
 
