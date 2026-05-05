@@ -1,10 +1,18 @@
 import * as vscode from "vscode";
+import path from "path";
 import { getControlPlanePath, readControlPlane } from "./choirManager.js";
 import {
     CompilationTrace,
     compileDSLAndWrite,
+    controlPlaneToChoirConfig,
 } from "./core/dslYamlCompiler.js";
-import { CHOIR_DSL_GRAMMAR } from "./core/choirRouter.js";
+import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
+import {
+    formatDSL,
+    generateDSL,
+    validateRoundTrip,
+    writeDSL,
+} from "./core/yamlDslGenerator.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
 
@@ -65,6 +73,8 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"enforce service boundaries\"",
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
+        "- choir export dsl",
+        "- choir export dsl intent",
     ].join("\n"));
 }
 
@@ -77,6 +87,29 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const raw = String((request as { prompt?: string }).prompt ?? "").trim();
             if (raw.length === 0) {
                 renderGrammarHelp(stream);
+                return;
+            }
+
+            let parsed;
+            try {
+                parsed = parseCommand(raw);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                stream.markdown([
+                    "Invalid Choir DSL command.",
+                    "",
+                    `Error: ${message}`,
+                    "",
+                    "Grammar:",
+                    "```bnf",
+                    CHOIR_DSL_GRAMMAR,
+                    "```",
+                ].join("\n"));
+                return;
+            }
+
+            if (parsed.ast.type === "sequence" && parsed.ast.actions.some((action) => action.type === "export")) {
+                stream.markdown("Invalid Choir DSL command. `export` cannot be chained with `then`.");
                 return;
             }
 
@@ -93,6 +126,40 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             try {
+                if (parsed.ast.type === "export") {
+                    const section = parsed.ast.section;
+                    const config = controlPlaneToChoirConfig(control);
+                    const generated = generateDSL(config, { section });
+                    const dslText = formatDSL(generated.script);
+                    const roundTrip = validateRoundTrip(config, { section });
+
+                    const root = path.dirname(controlPath);
+                    const fileName = section === "all" ? "choir.dsl" : `choir.${section}.dsl`;
+                    const outputPath = path.join(root, fileName);
+                    writeDSL(generated.script, outputPath);
+
+                    const warningLines = generated.trace.warnings.length === 0
+                        ? ["- none"]
+                        : generated.trace.warnings.map((warning) => `- ${warning}`);
+
+                    stream.markdown([
+                        `DSL exported to .choir/${fileName}`,
+                        "",
+                        "```text",
+                        dslText.length > 0 ? dslText : "",
+                        "```",
+                        "",
+                        "Export trace:",
+                        `- generatedCommands: ${generated.trace.generatedCommands}`,
+                        `- sections: ${generated.trace.sections.join(", ")}`,
+                        `- roundTripStable: ${roundTrip.stable}`,
+                        "- warnings:",
+                        ...warningLines,
+                    ].join("\n"));
+
+                    return;
+                }
+
                 const compiled = compileDSLAndWrite(raw, control, controlPath, {
                     workspaceRoot: getWorkspaceRoot() ?? undefined,
                 });

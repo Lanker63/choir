@@ -7,6 +7,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <preview>
   | <execute>
   | <status>
+  | <export>
 
 <define> ::= "define" <define-type> <string>
 
@@ -23,6 +24,10 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <execute> ::= "execute" [<plan-ref>]
 
 <status> ::= "status"
+
+<export> ::= "export" "dsl" [<export-section>]
+
+<export-section> ::= "all" | "intent" | "policy" | "plans"
 
 <plan-ref> ::= "plan" <identifier>
 
@@ -50,6 +55,12 @@ const KEYWORDS = new Set([
   "preview",
   "execute",
   "status",
+  "export",
+  "dsl",
+  "all",
+  "intent",
+  "policy",
+  "plans",
   "then",
 ]);
 
@@ -93,13 +104,22 @@ export type StatusNode = {
   type: "status";
 };
 
+export type ExportSection = "all" | "intent" | "policy" | "plans";
+
+export type ExportNode = {
+  type: "export";
+  format: "dsl";
+  section: ExportSection;
+};
+
 export type ActionNode =
   | DefineNode
   | AnalyzeNode
   | PlanNode
   | PreviewNode
   | ExecuteNode
-  | StatusNode;
+  | StatusNode
+  | ExportNode;
 
 export type SequenceNode = {
   type: "sequence";
@@ -277,6 +297,8 @@ class Parser {
         return this.parseExecute();
       case "status":
         return this.parseStatus();
+      case "export":
+        return this.parseExport();
       default:
         throw new Error(`Unsupported Choir DSL action: ${next.value}`);
     }
@@ -364,6 +386,27 @@ class Parser {
   private parseStatus(): StatusNode {
     this.expectKeyword("status");
     return { type: "status" };
+  }
+
+  private parseExport(): ExportNode {
+    this.expectKeyword("export");
+    this.expectKeyword("dsl");
+
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return {
+        type: "export",
+        format: "dsl",
+        section: "all",
+      };
+    }
+
+    const section = this.expectOneOfKeywords(["all", "intent", "policy", "plans"]) as ExportSection;
+    return {
+      type: "export",
+      format: "dsl",
+      section,
+    };
   }
 
   private expectKeyword(expected: string): void {
@@ -461,6 +504,11 @@ function validateActionNode(node: ActionNode): boolean {
     return node.planRef === undefined || IDENTIFIER_PATTERN.test(node.planRef.identifier);
   }
 
+  if (node.type === "export") {
+    return node.format === "dsl"
+      && (node.section === "all" || node.section === "intent" || node.section === "policy" || node.section === "plans");
+  }
+
   return node.type === "status";
 }
 
@@ -532,6 +580,11 @@ async function compileAction<TContext>(
       trace.rolesInvoked.push("analyst");
       trace.steps.push("analyst.status");
       trace.compiledActions.push("analyst.status");
+      return;
+
+    case "export":
+      trace.steps.push("system.export");
+      trace.compiledActions.push("system.export.dsl");
       return;
   }
 }

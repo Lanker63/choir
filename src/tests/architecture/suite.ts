@@ -70,6 +70,11 @@ import {
   hashConfig,
   serializeYAML,
 } from "../../core/dslYamlCompiler.js";
+import {
+  formatDSL,
+  generateDSL,
+  validateRoundTrip,
+} from "../../core/yamlDslGenerator.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -583,6 +588,100 @@ const pass2: TestPass = {
         assert.ok(first.includes("constraints:"));
         assert.ok(first.includes("- a"));
         assert.ok(first.includes("- z"));
+      },
+    },
+    {
+      id: "2.17",
+      name: "dsl parser supports export dsl command",
+      run: async () => {
+        const parsed = parseCommand("choir export dsl intent");
+        assert.deepStrictEqual(parsed.ast, {
+          type: "export",
+          format: "dsl",
+          section: "intent",
+        });
+
+        const compiled = compileDSL("choir export dsl", makeControlPlane());
+        assert.strictEqual(compiled.changed, false);
+      },
+    },
+    {
+      id: "2.18",
+      name: "yaml to dsl projection is deterministic and diff-friendly",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["B", "A"];
+        control.intent.constraints = ["z", "a"];
+        control.intent["non-goals"] = ["n2", "n1"];
+
+        const generated = generateDSL(controlPlaneToChoirConfig(control));
+        const text = formatDSL(generated.script);
+
+        assert.strictEqual(text, [
+          'choir define goal "A"',
+          'choir define goal "B"',
+          'choir define constraint "a"',
+          'choir define constraint "z"',
+          'choir define non-goal "n1"',
+          'choir define non-goal "n2"',
+        ].join("\n"));
+      },
+    },
+    {
+      id: "2.19",
+      name: "yaml to dsl round-trip is stable",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["enforce boundaries"];
+        control.intent.constraints = ["no direct db access"];
+        control.intent["non-goals"] = ["distributed app"];
+
+        const roundTrip = validateRoundTrip(controlPlaneToChoirConfig(control));
+        assert.strictEqual(roundTrip.stable, true);
+      },
+    },
+    {
+      id: "2.20",
+      name: "yaml to dsl partial projection supports intent section",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["A"];
+        control.policy.rules = [
+          {
+            id: "rule.one",
+            match: { imports: ["x"] },
+            constraint: { type: "forbid" },
+            message: "x",
+          },
+        ];
+
+        const generated = generateDSL(controlPlaneToChoirConfig(control), { section: "intent" });
+        const text = formatDSL(generated.script);
+        assert.strictEqual(text, 'choir define goal "A"');
+        assert.strictEqual(generated.trace.sections.includes("intent"), true);
+        assert.strictEqual(generated.trace.sections.includes("policy"), false);
+      },
+    },
+    {
+      id: "2.21",
+      name: "yaml to dsl warns for unrepresentable policy and plans",
+      run: async () => {
+        const control = makeControlPlane();
+        control.policy.rules = [
+          {
+            id: "rule.alpha",
+            match: { imports: ["alpha"] },
+            constraint: { type: "forbid" },
+            message: "alpha",
+          },
+        ];
+        control.execution.plans = [
+          makePlan("plan-alpha", [makeTask("t1", "analysis")]),
+        ];
+
+        const generated = generateDSL(controlPlaneToChoirConfig(control));
+        assert.ok(generated.trace.warnings.some((warning) => warning.includes("policy.rules.rule.alpha")));
+        assert.ok(generated.trace.warnings.some((warning) => warning.includes("execution.plans.plan-alpha")));
       },
     },
   ],

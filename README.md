@@ -266,7 +266,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -274,6 +274,7 @@ Grammar:
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
+<export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
 
 <string> ::= QUOTED_STRING
 <identifier> ::= [a-zA-Z0-9-_]+
@@ -317,12 +318,23 @@ Supported commands:
 - `choir execute`
 - `choir execute plan <planId>`
 - `choir status`
+- `choir export dsl`
+- `choir export dsl intent`
+- `choir export dsl policy`
+- `choir export dsl plans`
 
 Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
 - `choir analyze|preview|execute|status`: accepted by grammar, non-mutating in YAML compiler mode
+
+YAML -> DSL projection behavior:
+
+- `choir export dsl` generates one command per line in deterministic order
+- Command ordering is stable: goals, constraints, non-goals, policy, plans
+- Export output is written to `.choir/choir.dsl` (or section-specific `.choir/choir.<section>.dsl`)
+- Unrepresentable YAML sections are skipped with warnings (no synthetic DSL is invented)
 
 Idempotency guarantees:
 

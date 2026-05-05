@@ -77,7 +77,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -85,6 +85,7 @@ DSL command grammar:
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
+<export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
 ```
 
 Router constraints:
@@ -120,12 +121,19 @@ Supported command surface (via `@choir`):
 - `choir preview [plan <planId>]`
 - `choir execute [plan <planId>]`
 - `choir status`
+- `choir export dsl [all|intent|policy|plans]`
 
 Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
 - `analyze|preview|execute|status` are non-mutating in YAML compiler mode.
+
+Projection contract:
+
+- `export dsl` is non-mutating and projects authoritative YAML into deterministic DSL text.
+- Projection ordering is stable and diff-friendly.
+- Unsupported YAML fields must be skipped with explicit warnings.
 
 ## Deterministic State → Plan Synthesis
 
