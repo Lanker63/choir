@@ -3,10 +3,18 @@ import { runPipelineForWorkspace } from "./enforcer.js";
 import {
   buildCostTrace,
   CostTrace,
+  scorePlan,
   scorePlans,
   selectPlanSet,
 } from "./core/costPlanner.js";
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
+import {
+  MAX_STRATEGIES,
+  StrategyTrace,
+  buildStrategyTrace,
+  evaluateStrategies,
+  selectBestStrategy,
+} from "./core/strategyPlanner.js";
 import {
   createEmptyStatePlane,
   ExecutionState,
@@ -44,6 +52,11 @@ export type PlanStatusSummary = {
 export type CostBasedExecutionResult = {
   selectedPlans: Plan[];
   costTrace: CostTrace;
+  strategyTraces: {
+    basePlanId: string;
+    selectedStrategyId: string;
+    trace: StrategyTrace;
+  }[];
   executionTraces: ExecutionTrace[];
   state: StatePlane;
 };
@@ -402,21 +415,41 @@ export async function executeSelectedPlansWithCost(
     options.requestedPlanId
   );
 
+  const strategyTraces: CostBasedExecutionResult["strategyTraces"] = [];
   const executionTraces: ExecutionTrace[] = [];
+  const executablePlans: Plan[] = [];
 
   for (const plan of sortedPlans(selectedPlans)) {
-    const executed = await executePlan(plan, {
+    const baseCost = scorePlan(plan, state).totalCost;
+    const strategyResults = await evaluateStrategies(plan, state, {
+      controlPlane: control,
+      maxStrategies: MAX_STRATEGIES,
+      costThreshold: baseCost * 4,
+    });
+
+    const selectedStrategy = selectBestStrategy(strategyResults);
+    const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
+
+    strategyTraces.push({
+      basePlanId: plan.id,
+      selectedStrategyId: selectedStrategy.strategyId,
+      trace: strategyTrace,
+    });
+
+    const executed = await executePlan(selectedStrategy.plan, {
       controlPlane: control,
       root: options.root,
     });
 
     state = executed.state;
     executionTraces.push(executed.trace);
+    executablePlans.push(selectedStrategy.plan);
   }
 
   return {
-    selectedPlans: sortedPlans(selectedPlans),
+    selectedPlans: sortedPlans(executablePlans),
     costTrace,
+    strategyTraces,
     executionTraces,
     state,
   };

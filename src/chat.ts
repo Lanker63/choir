@@ -252,6 +252,21 @@ export function registerConductor(context: vscode.ExtensionContext) {
                         })
                         .join("\n");
 
+                    const strategySummary = result.strategyTraces
+                        .map((item) => {
+                            const evaluatedStrategies = item.trace.evaluated
+                                .map((entry) => `  - ${entry.strategyId}: cost=${entry.cost.toFixed(2)}, success=${entry.success}`)
+                                .join("\n");
+
+                            return [
+                                `- ${item.basePlanId}: selected=${item.selectedStrategyId}`,
+                                `  decision: ${item.trace.decision}`,
+                                "  evaluated:",
+                                evaluatedStrategies,
+                            ].join("\n");
+                        })
+                        .join("\n");
+
                     const executionSummary = result.executionTraces
                         .map((trace) => [
                             `- ${trace.planId}:`,
@@ -267,6 +282,9 @@ export function registerConductor(context: vscode.ExtensionContext) {
                         "",
                         "Evaluated plan scores:",
                         evaluated,
+                        "",
+                        "Strategy selection:",
+                        strategySummary,
                         "",
                         "Execution summary:",
                         executionSummary,

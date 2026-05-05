@@ -166,6 +166,30 @@ export type TransactionalExecutionResult = {
   traces: TransactionTrace[];
 };
 
+export type BatchSimulationResult = {
+  batchId: string;
+  transaction: Transaction;
+  validation: ValidationResult;
+  success: boolean;
+};
+
+export type ExecutionSimulationResult = {
+  results: BatchSimulationResult[];
+  validation: ValidationResult;
+  allPassed: boolean;
+  traces: TransactionTrace[];
+};
+
+export type SimulationExecutionOptions = {
+  root?: string;
+  fs?: TransactionFS;
+  enforcer: TransactionEnforcer;
+  pipeline: TransactionPipeline;
+  controlPlane: ControlPlane;
+  maxNewErrors?: number;
+  typeCheck?: (vfs: VirtualFS) => Promise<TypeCheckResult>;
+};
+
 export type InMemoryTransactionFS = TransactionFS & {
   journal: Array<{ kind: "atomic-write" | "write-state"; writes: number; deletes: number }>;
   snapshot(): { files: Record<string, string>; state: StatePlane };
@@ -1532,6 +1556,111 @@ export async function runExecutionPlanTransactionally(
   return {
     workUnitResults,
     transactions,
+    traces,
+  };
+}
+
+function emptyValidationResult(errors?: string[]): ValidationResult {
+  return {
+    passed: false,
+    diagnostics: [],
+    conflicts: [],
+    invariantChecks: [],
+    ...(errors && errors.length > 0 ? { errors } : {}),
+  };
+}
+
+function combineValidationResults(results: ValidationResult[]): ValidationResult {
+  const passed = results.every((result) => result.passed);
+
+  const diagnostics = stableDiagnostics(results.flatMap((result) => result.diagnostics));
+  const conflicts = stableConflicts(results.flatMap((result) => result.conflicts));
+  const invariantChecks = [...results.flatMap((result) => result.invariantChecks)];
+  const errors = results.flatMap((result) => result.errors ?? []);
+
+  return {
+    passed,
+    diagnostics,
+    conflicts,
+    invariantChecks,
+    ...(errors.length > 0 ? { errors: sortedUnique(errors) } : {}),
+  };
+}
+
+async function simulateBatch(
+  batch: ExecutionBatch,
+  txFs: TransactionFS,
+  options: SimulationExecutionOptions
+): Promise<{ result: BatchSimulationResult; trace: TransactionTrace }> {
+  const startTime = Date.now();
+  const tx = await prepareTransaction(batch, txFs);
+
+  try {
+    await simulate(tx, batch.workUnits, options.enforcer, options.controlPlane);
+    const vfs = materializeVFS(tx);
+
+    await validate(tx, vfs, options.pipeline, {
+      maxNewErrors: options.maxNewErrors,
+      typeCheck: options.typeCheck,
+      controlPlane: options.controlPlane,
+      batch,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    tx.status = "failed";
+    tx.validation = {
+      ...emptyValidationResult([message]),
+      diagnostics: tx.validation.diagnostics,
+      conflicts: tx.validation.conflicts,
+      invariantChecks: tx.validation.invariantChecks,
+    };
+  }
+
+  const trace: TransactionTrace = {
+    transactionId: tx.id,
+    batchId: batch.id,
+    patchesProposed: tx.proposedPatches.length,
+    patchesApplied: 0,
+    validationPassed: tx.validation.passed,
+    ...(tx.validation.passed ? {} : { rollbackReason: "simulation-only" }),
+    durationMs: Date.now() - startTime,
+  };
+
+  return {
+    result: {
+      batchId: batch.id,
+      transaction: tx,
+      validation: tx.validation,
+      success: tx.validation.passed,
+    },
+    trace,
+  };
+}
+
+export async function runExecutionPlanSimulation(
+  executionPlan: ExecutionPlan,
+  options: SimulationExecutionOptions
+): Promise<ExecutionSimulationResult> {
+  const txFs = options.fs ?? createNodeTransactionFS(options.root ?? process.cwd());
+  const batchesByLayer = groupBatchesByLayer(executionPlan);
+
+  const results: BatchSimulationResult[] = [];
+  const traces: TransactionTrace[] = [];
+
+  for (const layer of batchesByLayer) {
+    for (const batch of layer) {
+      const simulated = await simulateBatch(batch, txFs, options);
+      results.push(simulated.result);
+      traces.push(simulated.trace);
+    }
+  }
+
+  const validation = combineValidationResults(results.map((result) => result.validation));
+
+  return {
+    results,
+    validation,
+    allPassed: results.every((result) => result.success),
     traces,
   };
 }

@@ -20,6 +20,17 @@ import {
   selectBestPlan,
   selectPlanSet,
 } from "../../core/costPlanner.js";
+import {
+  MAX_STRATEGIES,
+  STRATEGIES,
+  StrategyResult,
+  buildStrategyTrace,
+  evaluateStrategies,
+  groupedStrategy,
+  layeredStrategy,
+  aggressiveStrategy,
+  selectBestStrategy,
+} from "../../core/strategyPlanner.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
@@ -825,6 +836,113 @@ const pass4: TestPass = {
         const trace = buildCostTrace(selectedSet[0]?.id as string, evaluated);
         assert.strictEqual(trace.selectedPlanId, "plan-low");
         assert.ok(trace.decision.includes("plan-low selected due to lowest total cost"));
+      },
+    },
+    {
+      id: "4.17",
+      name: "strategy registry is deterministic and capped",
+      run: async () => {
+        assert.strictEqual(MAX_STRATEGIES, 4);
+        assert.deepStrictEqual(
+          STRATEGIES.map((strategy) => strategy.id),
+          ["s-aggressive", "s-grouped", "s-layered", "s-minimal"]
+        );
+      },
+    },
+    {
+      id: "4.18",
+      name: "strategy transforms are deterministic across grouped layered and aggressive modes",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.dependencyGraph = {
+          "src/a.ts": ["src/core.ts"],
+          "src/b.ts": ["src/core.ts"],
+          "src/c.ts": ["src/b.ts"],
+          "src/core.ts": [],
+        };
+
+        const basePlan = makePlan("plan-strategy", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor-a", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          makeTask("t-refactor-b", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts", "src/b.ts"] }),
+          makeTask("t-refactor-c", "refactor", { dependsOn: ["t-analysis"], files: ["src/c.ts"] }),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor-a", "t-refactor-b", "t-refactor-c"] }),
+        ]);
+
+        const groupedFirst = groupedStrategy(basePlan, state);
+        const groupedSecond = groupedStrategy(basePlan, state);
+        assert.deepStrictEqual(groupedFirst, groupedSecond);
+        assert.ok(groupedFirst.tasks.filter((task) => task.type === "refactor").length < 3);
+
+        const layeredFirst = layeredStrategy(basePlan, state);
+        const layeredSecond = layeredStrategy(basePlan, state);
+        assert.deepStrictEqual(layeredFirst, layeredSecond);
+        assert.ok(layeredFirst.tasks.some((task) => task.id.startsWith("t-refactor-l")));
+
+        const aggressive = aggressiveStrategy(basePlan, state);
+        const aggressiveRefactors = aggressive.tasks.filter((task) => task.type === "refactor");
+        assert.strictEqual(aggressiveRefactors.length, 1);
+        assert.strictEqual(aggressiveRefactors[0]?.id, "t-refactor-aggressive");
+      },
+    },
+    {
+      id: "4.19",
+      name: "strategy evaluation and selection are deterministic with lexicographic tie break",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/a.ts", 1, 0, 1, 1),
+            traceId: "trace-1",
+          },
+        ];
+
+        const basePlan = makePlan("plan-strategy", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor-a", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          makeTask("t-refactor-b", "refactor", { dependsOn: ["t-analysis"], files: ["src/b.ts"] }),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor-a", "t-refactor-b"] }),
+        ]);
+
+        const planSnapshot = JSON.stringify(basePlan);
+        const stateSnapshot = JSON.stringify(state);
+
+        const results = await evaluateStrategies(basePlan, state, {
+          controlPlane: makeControlPlane(),
+          maxStrategies: MAX_STRATEGIES,
+        });
+
+        assert.strictEqual(results.length, 4);
+        assert.strictEqual(JSON.stringify(basePlan), planSnapshot);
+        assert.strictEqual(JSON.stringify(state), stateSnapshot);
+
+        const selected = selectBestStrategy(results);
+        const trace = buildStrategyTrace(results, selected);
+        assert.strictEqual(trace.selectedStrategyId, selected.strategyId);
+
+        const tieSeed = results[0] as StrategyResult;
+        const tied: StrategyResult[] = [
+          {
+            ...tieSeed,
+            strategyId: "s-zeta",
+            success: true,
+            cost: { ...tieSeed.cost, totalCost: 5 },
+          },
+          {
+            ...tieSeed,
+            strategyId: "s-alpha",
+            success: true,
+            cost: { ...tieSeed.cost, totalCost: 5 },
+          },
+        ];
+
+        const tieWinner = selectBestStrategy(tied);
+        assert.strictEqual(tieWinner.strategyId, "s-alpha");
       },
     },
     {

@@ -101,6 +101,7 @@ Choir includes a deterministic orchestration layer that supports:
 
 - State → plan synthesis with stable ordering and deterministic ids
 - Cost-based plan scoring and pre-execution selection
+- Deterministic multi-strategy plan shaping before task execution
 - Multi-plan optimization through global DAG merge and conflict-aware batching
 - Parallel-safe scheduling by dependency layer
 - Speculative transactional batch execution (`simulate → validate → commit/rollback`)
@@ -139,6 +140,32 @@ Selection rules:
 - Scoring performs no mutations and does not execute tasks
 
 Conductor execution output includes a cost trace with evaluated plans and the selection decision.
+
+### Multi-Strategy Plan Selection
+
+After cost-based plan-set selection, Conductor evaluates each selected plan across a fixed deterministic strategy set:
+
+- `minimal`
+- `grouped`
+- `layered`
+- `aggressive`
+
+Evaluation rules:
+
+- Strategy transforms are deterministic and side-effect free
+- Each strategy variant is validated via transaction simulation (no commit)
+- Validated strategies are preferred over failed strategies
+- Lowest total cost wins among candidates
+- Ties are broken by lexicographic `strategyId`
+
+Execution rules:
+
+- Only the selected strategy plan is executed
+- Conductor emits a strategy trace per base plan:
+  - evaluated strategies
+  - per-strategy cost/success
+  - selected strategy id
+  - deterministic decision reason
 
 ---
 
@@ -190,8 +217,8 @@ Supported commands:
 
 Execution behavior:
 
-- `execute`: score all approved plans, select optimal plan set, execute selected plans
-- `execute <planId>`: execute only that approved plan (still cost-scored and traced)
+- `execute`: score all approved plans, select optimal plan set, evaluate strategy variants, execute selected strategy plans
+- `execute <planId>`: execute only that approved plan (still cost-scored, strategy-evaluated, and traced)
 
 ---
 
