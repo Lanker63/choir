@@ -76,9 +76,11 @@ import {
 } from "../../core/dslYamlCompiler.js";
 import {
   computeDiff,
+  detectEnvironment,
   evaluatePolicies,
   hashDiff,
   toPolicySet,
+  validateRole,
 } from "../../core/policyEngine.js";
 import {
   formatDSL,
@@ -183,6 +185,37 @@ const planGoldenRoot = path.join(repoRoot, "src", "tests", "architecture", "gold
 
 function normalizeLineEndings(input: string): string {
   return input.replace(/\r\n/g, "\n").trim();
+}
+
+async function withTemporaryEnv(
+  updates: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT", string | undefined>>,
+  run: () => Promise<void> | void
+): Promise<void> {
+  const original: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT", string | undefined>> = {
+    CI: process.env.CI,
+    NODE_ENV: process.env.NODE_ENV,
+    CHOIR_ENVIRONMENT: process.env.CHOIR_ENVIRONMENT,
+  };
+
+  for (const [key, value] of Object.entries(updates)) {
+    if (value === undefined) {
+      delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"];
+    } else {
+      process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) {
+        delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"];
+      } else {
+        process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"] = value;
+      }
+    }
+  }
 }
 
 async function assertPlanGoldenForFixture(fixtureName: string, goldenFileName: string): Promise<void> {
@@ -834,12 +867,19 @@ const pass2: TestPass = {
           },
         ]);
 
-        const evalA = evaluatePolicies(diffs, policySet);
-        const evalB = evaluatePolicies(diffs, policySet);
+        const context = {
+          role: "architect" as const,
+          environment: "local" as const,
+        };
+
+        const evalA = evaluatePolicies(diffs, policySet, context);
+        const evalB = evaluatePolicies(diffs, policySet, context);
 
         assert.deepStrictEqual(evalA, evalB);
         assert.strictEqual(evalA.result.requiresApproval, true);
         assert.strictEqual(evalA.trace.decision, "require-approval");
+        assert.strictEqual(evalA.trace.role, "architect");
+        assert.strictEqual(evalA.trace.environment, "local");
       },
     },
     {
@@ -1011,6 +1051,158 @@ const pass2: TestPass = {
         assert.throws(
           () => runMacro(root, "a", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
           /Macro recursion detected/
+        );
+      },
+    },
+    {
+      id: "2.33",
+      name: "policy role x environment matrix is deterministic",
+      run: async () => {
+        const baseline = controlPlaneToChoirConfig(makeControlPlane());
+
+        const goalChange = (() => {
+          const next = makeControlPlane();
+          next.intent.goals = ["secure boundaries"];
+          return computeDiff(baseline, controlPlaneToChoirConfig(next));
+        })();
+
+        const constraintChange = (() => {
+          const next = makeControlPlane();
+          next.intent.constraints = ["db access"];
+          return computeDiff(baseline, controlPlaneToChoirConfig(next));
+        })();
+
+        const planChange = (() => {
+          const next = makeControlPlane();
+          next.execution.plans = [makePlan("plan-prod", [makeTask("t1", "analysis")])];
+          return computeDiff(baseline, controlPlaneToChoirConfig(next));
+        })();
+
+        const policySet = toPolicySet([
+          {
+            id: "block-structural-changes-prod",
+            scope: { environments: ["production"] },
+            match: { path: "execution.plans", operation: "add" },
+            effect: { type: "deny", message: "Cannot modify execution plans in production" },
+          },
+          {
+            id: "ci-requires-approval",
+            scope: { environments: ["ci"] },
+            match: { path: "intent.constraints", operation: "add" },
+            effect: { type: "require-approval" },
+          },
+          {
+            id: "analyst-read-only",
+            scope: { roles: ["analyst"] },
+            match: { path: "*", operation: "add" },
+            effect: { type: "deny", message: "analyst is read-only" },
+          },
+        ]);
+
+        const architectLocal = evaluatePolicies(goalChange, policySet, {
+          role: "architect",
+          environment: "local",
+        });
+        assert.strictEqual(architectLocal.trace.decision, "allow");
+
+        const conductorCi = evaluatePolicies(constraintChange, policySet, {
+          role: "conductor",
+          environment: "ci",
+        });
+        assert.strictEqual(conductorCi.trace.decision, "require-approval");
+
+        const anyProduction = evaluatePolicies(planChange, policySet, {
+          role: "architect",
+          environment: "production",
+        });
+        assert.strictEqual(anyProduction.trace.decision, "deny");
+
+        const analystAny = evaluatePolicies(goalChange, policySet, {
+          role: "analyst",
+          environment: "local",
+        });
+        assert.strictEqual(analystAny.trace.decision, "deny");
+
+        assert.deepStrictEqual(
+          evaluatePolicies(goalChange, policySet, { role: "analyst", environment: "local" }),
+          evaluatePolicies(goalChange, policySet, { role: "analyst", environment: "local" })
+        );
+      },
+    },
+    {
+      id: "2.34",
+      name: "policy precedence is deterministic deny over require-approval",
+      run: async () => {
+        const baseline = controlPlaneToChoirConfig(makeControlPlane());
+        const nextControl = makeControlPlane();
+        nextControl.intent.constraints = ["db access"];
+        const diffs = computeDiff(baseline, controlPlaneToChoirConfig(nextControl));
+
+        const policySet = toPolicySet([
+          {
+            id: "require-db-approval",
+            match: { path: "intent.constraints", operation: "add" },
+            effect: { type: "require-approval" },
+          },
+          {
+            id: "deny-db-local",
+            scope: { environments: ["local"] },
+            match: { path: "intent.constraints", operation: "add" },
+            effect: { type: "deny", message: "db denied" },
+          },
+        ]);
+
+        const evaluation = evaluatePolicies(diffs, policySet, {
+          role: "architect",
+          environment: "local",
+        });
+
+        assert.strictEqual(evaluation.trace.decision, "deny");
+        assert.strictEqual(evaluation.result.allowed, false);
+      },
+    },
+    {
+      id: "2.35",
+      name: "runtime environment detection drives policy deny in production",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-prod-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        const control = makeControlPlane();
+        control.policy.approvalRules = [
+          {
+            id: "deny-plan-prod",
+            scope: { environments: ["production"] },
+            match: { path: "execution.plans", operation: "add" },
+            effect: { type: "deny", message: "no plan writes in production" },
+          },
+        ];
+
+        await withTemporaryEnv({ NODE_ENV: "production", CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
+          assert.strictEqual(detectEnvironment(), "production");
+          const result = compileDSLAndWrite("choir plan", control, controlPath, { workspaceRoot: root });
+          assert.strictEqual(result.decision, "deny");
+          assert.strictEqual(result.policyTrace?.environment, "production");
+          assert.strictEqual(fs.existsSync(controlPath), false);
+        });
+      },
+    },
+    {
+      id: "2.36",
+      name: "role capability validation denies escalation deterministically",
+      run: async () => {
+        validateRole({ role: "architect", environment: "local" }, "modify-yaml");
+        validateRole({ role: "conductor", environment: "ci" }, "plan");
+        validateRole({ role: "enforcer", environment: "staging" }, "execute");
+        validateRole({ role: "analyst", environment: "local" }, "read-only");
+
+        assert.throws(
+          () => validateRole({ role: "analyst", environment: "local" }, "modify-yaml"),
+          /Role violation/
+        );
+        assert.throws(
+          () => validateRole({ role: "enforcer", environment: "local" }, "plan"),
+          /Role violation/
         );
       },
     },

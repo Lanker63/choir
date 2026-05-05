@@ -1,12 +1,24 @@
 import { createHash } from "crypto";
-import { ApprovalPolicyRule } from "../schema.js";
+import { ApprovalPolicyRule, PolicyEnvironment, PolicyRole } from "../schema.js";
 import { ChoirConfig, canonicalizeConfig } from "./dslYamlCompiler.js";
+
+export type Role = PolicyRole;
+export type Environment = PolicyEnvironment;
+
+export type ExecutionContext = {
+  role: Role;
+  environment: Environment;
+};
 
 export type PolicyRule = {
   id: string;
   match: {
     path: string;
     operation: "add" | "remove" | "update";
+  };
+  scope?: {
+    roles?: Role[];
+    environments?: Environment[];
   };
   condition?: {
     contains?: string;
@@ -39,12 +51,46 @@ export type PolicyResult = {
 };
 
 export type PolicyTrace = {
+  role: Role;
+  environment: Environment;
   diffCount: number;
   rulesMatched: string[];
   requiresApproval: boolean;
   denied: boolean;
-  decision: string;
+  decision: "allow" | "require-approval" | "deny";
 };
+
+export type PolicyAction = "modify-yaml" | "read-only" | "plan" | "preview" | "execute";
+
+const ROLE_CAPABILITIES: Record<Role, PolicyAction[]> = {
+  architect: ["modify-yaml"],
+  analyst: ["read-only"],
+  conductor: ["plan", "preview"],
+  enforcer: ["execute"],
+};
+
+export function validateRole(ctx: ExecutionContext, action: PolicyAction): void {
+  const capabilities = ROLE_CAPABILITIES[ctx.role] ?? [];
+  if (!capabilities.includes(action)) {
+    throw new Error(`Role violation: ${ctx.role} cannot ${action}`);
+  }
+}
+
+export function detectEnvironment(): Environment {
+  if (process.env.CI) {
+    return "ci";
+  }
+
+  if (process.env.CHOIR_ENVIRONMENT === "staging") {
+    return "staging";
+  }
+
+  if (process.env.NODE_ENV === "production" || process.env.CHOIR_ENVIRONMENT === "production") {
+    return "production";
+  }
+
+  return "local";
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -174,9 +220,25 @@ function normalizePath(path: string): string {
 }
 
 function matchesPath(rulePath: string, diffPath: string): boolean {
+  if (rulePath.trim() === "*") {
+    return true;
+  }
+
   const normalizedRule = normalizePath(rulePath);
   const normalizedDiff = normalizePath(diffPath);
   return normalizedDiff === normalizedRule || normalizedDiff.startsWith(`${normalizedRule}.`);
+}
+
+export function matchesScope(rule: PolicyRule, ctx: ExecutionContext): boolean {
+  if (rule.scope?.roles && rule.scope.roles.length > 0 && !rule.scope.roles.includes(ctx.role)) {
+    return false;
+  }
+
+  if (rule.scope?.environments && rule.scope.environments.length > 0 && !rule.scope.environments.includes(ctx.environment)) {
+    return false;
+  }
+
+  return true;
 }
 
 function sourceValueForCondition(diff: YAMLDiff): unknown {
@@ -228,10 +290,11 @@ function matches(rule: PolicyRule, diff: YAMLDiff): boolean {
 
 export function evaluatePolicies(
   diffs: YAMLDiff[],
-  policies: PolicySet
+  policies: PolicySet,
+  ctx: ExecutionContext
 ): { result: PolicyResult; trace: PolicyTrace } {
+  let denyDetected = false;
   let requiresApproval = false;
-  let allowed = true;
   const violations: { ruleId: string; message: string }[] = [];
   const matchedRuleIds = new Set<string>();
 
@@ -243,6 +306,10 @@ export function evaluatePolicies(
 
   for (const diff of orderedDiffs) {
     for (const rule of orderedRules) {
+      if (!matchesScope(rule, ctx)) {
+        continue;
+      }
+
       if (!matches(rule, diff)) {
         continue;
       }
@@ -250,7 +317,7 @@ export function evaluatePolicies(
       matchedRuleIds.add(rule.id);
 
       if (rule.effect.type === "deny") {
-        allowed = false;
+        denyDetected = true;
         violations.push({
           ruleId: rule.id,
           message: rule.effect.message ?? `Denied by policy rule ${rule.id}`,
@@ -263,24 +330,25 @@ export function evaluatePolicies(
     }
   }
 
-  const result: PolicyResult = {
-    allowed,
-    requiresApproval,
-    violations,
-  };
-
-  const denied = !allowed;
-  const decision = denied
+  const decision: "allow" | "require-approval" | "deny" = denyDetected
     ? "deny"
     : (requiresApproval ? "require-approval" : "allow");
+
+  const result: PolicyResult = {
+    allowed: decision !== "deny",
+    requiresApproval: decision === "require-approval",
+    violations,
+  };
 
   return {
     result,
     trace: {
+      role: ctx.role,
+      environment: ctx.environment,
       diffCount: orderedDiffs.length,
       rulesMatched: [...matchedRuleIds].sort((a, b) => a.localeCompare(b)),
-      requiresApproval,
-      denied,
+      requiresApproval: decision === "require-approval",
+      denied: decision === "deny",
       decision,
     },
   };
@@ -306,6 +374,16 @@ export function toPolicySet(rules: ApprovalPolicyRule[]): PolicySet {
           path: rule.match.path,
           operation: rule.match.operation,
         },
+        ...(rule.scope
+          ? {
+            scope: {
+              ...(Array.isArray(rule.scope.roles) ? { roles: [...rule.scope.roles].sort((a, b) => a.localeCompare(b)) } : {}),
+              ...(Array.isArray(rule.scope.environments)
+                ? { environments: [...rule.scope.environments].sort((a, b) => a.localeCompare(b)) }
+                : {}),
+            },
+          }
+          : {}),
         ...(rule.condition ? { condition: rule.condition } : {}),
         effect: {
           type: rule.effect.type,

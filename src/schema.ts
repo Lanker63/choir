@@ -148,6 +148,8 @@ const ExecutionSchema = z.object({
 }).strict();
 
 const ApprovalPolicyOperationSchema = z.enum(["add", "remove", "update"]);
+const PolicyRoleSchema = z.enum(["architect", "analyst", "conductor", "enforcer"]);
+const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"]);
 
 const ApprovalPolicyRuleSchema = z.object({
     id: z.string().min(1),
@@ -155,6 +157,10 @@ const ApprovalPolicyRuleSchema = z.object({
         path: z.string().min(1),
         operation: ApprovalPolicyOperationSchema,
     }).strict(),
+    scope: z.object({
+        roles: z.array(PolicyRoleSchema).optional(),
+        environments: z.array(PolicyEnvironmentSchema).optional(),
+    }).strict().optional(),
     condition: z.object({
         contains: z.string().optional(),
         countGreaterThan: z.number().int().optional(),
@@ -214,3 +220,5 @@ export type ControlPlane = z.infer<typeof ControlPlaneSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
 export type ApprovalPolicyRule = z.infer<typeof ApprovalPolicyRuleSchema>;
+export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
+export type PolicyEnvironment = z.infer<typeof PolicyEnvironmentSchema>;

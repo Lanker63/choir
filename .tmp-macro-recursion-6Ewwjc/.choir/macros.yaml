@@ -1,0 +1,7 @@
+macros:
+  - id: a
+    body:
+      - choir macro b
+  - id: b
+    body:
+      - choir macro a

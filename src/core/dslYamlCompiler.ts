@@ -21,7 +21,18 @@ import {
   validGrammar,
 } from "./choirRouter.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
-import { computeDiff, evaluatePolicies, hashDiff, toPolicySet } from "./policyEngine.js";
+import {
+  Environment,
+  ExecutionContext,
+  Role,
+  PolicyAction,
+  computeDiff,
+  detectEnvironment,
+  evaluatePolicies,
+  hashDiff,
+  toPolicySet,
+  validateRole,
+} from "./policyEngine.js";
 
 export type ChoirConfig = {
   version: string;
@@ -59,6 +70,63 @@ export type CompilationDecision = "allow" | "deny" | "require-approval" | "no-ch
 type CompilerContext = {
   state: StatePlane;
 };
+
+function capabilitiesForAction(action: ActionNode): PolicyAction[] {
+  if (action.type === "define") {
+    return ["modify-yaml"];
+  }
+
+  if (action.type === "plan") {
+    return ["plan"];
+  }
+
+  if (action.type === "preview") {
+    return ["preview"];
+  }
+
+  if (action.type === "execute") {
+    return ["execute"];
+  }
+
+  return ["read-only"];
+}
+
+function inferRoleFromAST(ast: AST): Role {
+  if (ast.type === "sequence") {
+    const roles = new Set<Role>();
+    for (const action of ast.actions) {
+      if (action.type === "define") {
+        roles.add("architect");
+      } else if (action.type === "plan" || action.type === "preview") {
+        roles.add("conductor");
+      } else if (action.type === "execute") {
+        roles.add("enforcer");
+      } else {
+        roles.add("analyst");
+      }
+    }
+
+    if (roles.size > 1) {
+      throw new Error("Role violation: mixed-role command sequence is not allowed");
+    }
+
+    return [...roles][0] ?? "analyst";
+  }
+
+  if (ast.type === "define") {
+    return "architect";
+  }
+
+  if (ast.type === "plan" || ast.type === "preview") {
+    return "conductor";
+  }
+
+  if (ast.type === "execute") {
+    return "enforcer";
+  }
+
+  return "analyst";
+}
 
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter((value) => value.length > 0)))
@@ -378,7 +446,6 @@ export function compileDSLAndWrite(
   controlPath: string,
   options?: {
     workspaceRoot?: string;
-    commandActor?: string;
   }
 ): {
   updatedControlPlane: ControlPlane;
@@ -393,18 +460,45 @@ export function compileDSLAndWrite(
     violations: { ruleId: string; message: string }[];
   };
   policyTrace?: {
+    role: Role;
+    environment: Environment;
     diffCount: number;
     rulesMatched: string[];
     requiresApproval: boolean;
     denied: boolean;
-    decision: string;
+    decision: "allow" | "require-approval" | "deny";
   };
 } {
   const result = compileDSL(input, controlPlane, options);
+
+  const role = inferRoleFromAST(result.trace.ast);
+  const environment = detectEnvironment();
+  const ctx: ExecutionContext = {
+    role,
+    environment,
+  };
+
+  const actions = result.trace.ast.type === "sequence"
+    ? result.trace.ast.actions
+    : [result.trace.ast];
+  const requiredCapabilities = Array.from(new Set(actions.flatMap((action) => capabilitiesForAction(action))));
+  for (const capability of requiredCapabilities) {
+    validateRole(ctx, capability);
+  }
+
   if (!result.changed) {
     return {
       ...result,
       decision: "no-change",
+      policyTrace: {
+        role: ctx.role,
+        environment: ctx.environment,
+        diffCount: 0,
+        rulesMatched: [],
+        requiresApproval: false,
+        denied: false,
+        decision: "allow",
+      },
     };
   }
 
@@ -414,7 +508,7 @@ export function compileDSLAndWrite(
   const diffHash = hashDiff(diffs);
 
   const policySet = toPolicySet(controlPlane.policy.approvalRules ?? []);
-  const policyEvaluation = evaluatePolicies(diffs, policySet);
+  const policyEvaluation = evaluatePolicies(diffs, policySet, ctx);
 
   if (!policyEvaluation.result.allowed) {
     return {

@@ -216,10 +216,15 @@ Projection contract:
 Policy gate contract:
 
 - Proposed YAML changes are diffed before write (`YAMLDiff[]`).
-- Policy evaluation is deterministic and uses only YAML diff + declarative `policy.approvalRules`.
+- Policy decision model is context-aware: `decision = f(yamlDiff, role, environment)`.
+- Policy evaluation is deterministic and uses declarative `policy.approvalRules` with scoped role/environment matching.
+- Role context is trusted and derived by system role mapping (not user-provided command args).
+- Environment context is trusted runtime detection (`CI`, `NODE_ENV`, optional deployment env) and must not be user-spoofable through DSL input.
+- Resolution precedence is deterministic and strict: `deny > require-approval > allow`.
 - `deny` blocks writes immediately.
 - `require-approval` blocks writes until exact diff hash is approved.
 - Approval records are stored in state and tied to exact diff hash.
+- Policy trace must include role, environment, matched rules, and final decision for auditability.
 
 ## Deterministic State → Plan Synthesis
 
@@ -576,6 +581,7 @@ Non-negotiable safeguards:
 4. Scheduler decisions are stable and auditable
 5. Execution is blocked unless preview hash is explicitly approved and revalidated
 6. Adaptive strategy feedback is persisted only in `.choir/state.json` (`strategyHistory`)
+7. Policy context cannot be user-spoofed: role is system-derived and environment is runtime-derived
 
 ---
 
