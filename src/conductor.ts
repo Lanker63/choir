@@ -9,11 +9,12 @@ import {
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
 import {
   StrategyOutcome,
+  StrategyType,
   StrategyTrace,
   adaptiveStrategySelection,
   buildStrategyTrace,
 } from "./core/strategyPlanner.js";
-import { FileChange } from "./core/executionPreview.js";
+import { FileChange, simulatePlanOutcome } from "./core/executionPreview.js";
 import {
   appendStrategyHistory,
   createEmptyStatePlane,
@@ -24,6 +25,18 @@ import {
 } from "./core/state.js";
 import { ExecutionTrace } from "./core/types.js";
 import { ControlPlane, Plan, Task } from "./schema.js";
+import {
+  ContextSignature,
+  StrategyMemoryTrace,
+  buildMemoryTrace,
+  buildSignature,
+  canReuse,
+  findMatchingStrategies,
+  readStrategyMemory,
+  recordStrategy,
+  selectFromMemory,
+  validatePlanStillApplies,
+} from "./core/strategyMemory.js";
 
 export type TaskResult = {
   taskId: string;
@@ -56,6 +69,7 @@ export type CostBasedExecutionResult = {
     basePlanId: string;
     selectedStrategyId: string;
     trace: StrategyTrace;
+    memoryTrace: StrategyMemoryTrace;
   }[];
   executionTraces: ExecutionTrace[];
   state: StatePlane;
@@ -90,6 +104,17 @@ type SelectedStrategyPlan = {
   selected: StrategyOutcome;
   outcomes: StrategyOutcome[];
   trace: StrategyTrace;
+  memoryTrace: StrategyMemoryTrace;
+  signature: ContextSignature;
+};
+
+type PlanStrategySelection = {
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  trace: StrategyTrace;
+  history: ReturnType<typeof appendStrategyHistory>["state"]["strategyHistory"];
+  memoryTrace: StrategyMemoryTrace;
+  signature: ContextSignature;
 };
 
 function sortedPlans(plans: Plan[]): Plan[] {
@@ -107,6 +132,123 @@ function normalizePreviewHash(input: string | undefined): string | undefined {
   }
 
   return undefined;
+}
+
+function cloneState(state: StatePlane): StatePlane {
+  return JSON.parse(JSON.stringify(state)) as StatePlane;
+}
+
+function inferStrategyType(strategyId: string): StrategyType {
+  if (strategyId.startsWith("s-aggressive")) return "aggressive";
+  if (strategyId.startsWith("s-grouped")) return "grouped";
+  if (strategyId.startsWith("s-layered")) return "layered";
+  if (strategyId.startsWith("s-minimal")) return "minimal";
+  return "adaptive";
+}
+
+function fromMemoryOutcome(entry: ReturnType<typeof readStrategyMemory>[number]): StrategyOutcome {
+  return {
+    strategyId: entry.strategyId,
+    strategyType: entry.strategyType ?? inferStrategyType(entry.strategyId),
+    plan: entry.plan,
+    patches: [],
+    diagnostics: [],
+    validation: {
+      passed: entry.outcome.success,
+      diagnostics: [],
+      conflicts: [],
+      invariantChecks: [],
+    },
+    metrics: entry.outcome.metrics,
+    success: entry.outcome.success,
+    fileChanges: [],
+    previewHash: "",
+  };
+}
+
+async function selectStrategyForPlan(
+  basePlan: Plan,
+  state: StatePlane,
+  options: {
+    controlPlane: ControlPlane;
+    root: string;
+    mode: "preview" | "execution";
+  }
+): Promise<PlanStrategySelection> {
+  const signature = buildSignature(options.controlPlane, state);
+  const memory = readStrategyMemory(options.root);
+  const matches = findMatchingStrategies(signature, memory)
+    .filter((entry) => entry.plan.id === basePlan.id)
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const reusable = matches.filter((entry) => canReuse(entry));
+  const selectedFromMemory = selectFromMemory(reusable);
+
+  if (selectedFromMemory && validatePlanStillApplies(selectedFromMemory.plan, state, {
+    root: options.root,
+    expectedPlanId: basePlan.id,
+  })) {
+    let selected = fromMemoryOutcome(selectedFromMemory);
+
+    if (options.mode === "preview") {
+      const simulated = await simulatePlanOutcome(selectedFromMemory.plan, {
+        root: options.root,
+        controlPlane: options.controlPlane,
+        state: cloneState(state),
+      });
+
+      selected = {
+        strategyId: selectedFromMemory.strategyId,
+        strategyType: selectedFromMemory.strategyType ?? inferStrategyType(selectedFromMemory.strategyId),
+        plan: selectedFromMemory.plan,
+        patches: simulated.patches,
+        diagnostics: simulated.diagnostics,
+        validation: simulated.validation,
+        metrics: simulated.metrics,
+        success: simulated.success,
+        fileChanges: simulated.fileChanges,
+        previewHash: simulated.previewHash,
+      };
+    }
+
+    const trace = buildStrategyTrace([selected], selected);
+    trace.decision = `${selected.strategyId} reused from deterministic strategy memory (exact signature match)`;
+
+    return {
+      selected,
+      outcomes: [selected],
+      trace,
+      history: [],
+      memoryTrace: buildMemoryTrace(signature, matches.length, {
+        reused: true,
+        selectedStrategyId: selected.strategyId,
+        fallbackToEvaluation: false,
+      }),
+      signature,
+    };
+  }
+
+  const adaptiveSelection = await adaptiveStrategySelection(basePlan, state, {
+    controlPlane: options.controlPlane,
+    root: options.root,
+  });
+  const trace = buildStrategyTrace(
+    adaptiveSelection.outcomes,
+    adaptiveSelection.selected,
+    adaptiveSelection.adaptiveTrace
+  );
+  trace.decision = `${trace.decision}; strategy memory fallback to evaluation`;
+
+  return {
+    selected: adaptiveSelection.selected,
+    outcomes: adaptiveSelection.outcomes,
+    trace,
+    history: adaptiveSelection.history,
+    memoryTrace: buildMemoryTrace(signature, matches.length, {
+      reused: false,
+      fallbackToEvaluation: true,
+    }),
+    signature,
+  };
 }
 
 export function getApprovedPlans(control: ControlPlane): Plan[] {
@@ -462,24 +604,23 @@ export async function executeSelectedPlansWithCost(
   const planned: SelectedStrategyPlan[] = [];
 
   for (const basePlan of sortedPlans(selectedPlans)) {
-    const adaptiveSelection = await adaptiveStrategySelection(basePlan, state, {
+    const selection = await selectStrategyForPlan(basePlan, state, {
       controlPlane: control,
       root: options.root,
+      mode: "execution",
     });
 
-    const strategyTrace = buildStrategyTrace(
-      adaptiveSelection.outcomes,
-      adaptiveSelection.selected,
-      adaptiveSelection.adaptiveTrace
-    );
-
-    appendStrategyHistory(options.root, adaptiveSelection.history);
+    if (selection.history.length > 0) {
+      appendStrategyHistory(options.root, selection.history);
+    }
 
     planned.push({
       basePlan,
-      selected: adaptiveSelection.selected,
-      outcomes: adaptiveSelection.outcomes,
-      trace: strategyTrace,
+      selected: selection.selected,
+      outcomes: selection.outcomes,
+      trace: selection.trace,
+      memoryTrace: selection.memoryTrace,
+      signature: selection.signature,
     });
   }
 
@@ -492,6 +633,7 @@ export async function executeSelectedPlansWithCost(
       basePlanId: plan.basePlan.id,
       selectedStrategyId: plan.selected.strategyId,
       trace: plan.trace,
+      memoryTrace: plan.memoryTrace,
     });
 
     const executed = await executePlan(plan.selected.plan, {
@@ -502,6 +644,10 @@ export async function executeSelectedPlansWithCost(
     state = executed.state;
     executionTraces.push(executed.trace);
     executablePlans.push(plan.selected.plan);
+
+    if (executed.trace.tasksFailed.length === 0) {
+      recordStrategy(options.root, plan.signature, plan.selected);
+    }
   }
 
   return {
@@ -528,24 +674,22 @@ export async function generateSelectedPlanPreview(
     throw new Error("No approved plans available for preview.");
   }
 
-  const adaptiveSelection = await adaptiveStrategySelection(basePlan, state, {
+  const selection = await selectStrategyForPlan(basePlan, state, {
     controlPlane: control,
     root: options.root,
+    mode: "preview",
   });
-  const selectedOutcome = adaptiveSelection.selected;
-  const strategyTrace = buildStrategyTrace(
-    adaptiveSelection.outcomes,
-    selectedOutcome,
-    adaptiveSelection.adaptiveTrace
-  );
+  const selectedOutcome = selection.selected;
 
-  appendStrategyHistory(options.root, adaptiveSelection.history);
+  if (selection.history.length > 0) {
+    appendStrategyHistory(options.root, selection.history);
+  }
 
   const preview: MultiStrategyPreview = {
     previewId: selectedOutcome.previewHash,
     hash: selectedOutcome.previewHash,
     planId: basePlan.id,
-    strategies: [...adaptiveSelection.outcomes]
+    strategies: [...selection.outcomes]
       .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
       .map((outcome) => ({
         strategyId: outcome.strategyId,
@@ -573,7 +717,7 @@ export async function generateSelectedPlanPreview(
     costTrace,
     selectedPlan: selectedOutcome.plan,
     basePlanId: basePlan.id,
-    strategyTrace,
+    strategyTrace: selection.trace,
   };
 }
 

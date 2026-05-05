@@ -223,6 +223,68 @@ Adaptive traces must include:
 - selected strategy id
 - deterministic decision log
 
+## Strategy memory and reuse (deterministic)
+
+Choir may persist reusable strategy outcomes and deterministically reuse them in later runs.
+
+### Storage model
+
+- Strategy memory is persisted in `.choir/memory.json`.
+- Memory entries contain:
+  - deterministic context signature
+  - normalized selected strategy plan
+  - selected strategy id
+  - outcome metrics and success flag
+- No hidden memory state is allowed outside `.choir/state.json` and `.choir/memory.json`.
+
+### Context signature
+
+Signatures are derived from control + state only and must be stable:
+
+- sorted goals
+- sorted constraints
+- sorted violation summary (`ruleId`, `count`)
+- optional sorted module hints
+
+### Lookup and reuse policy
+
+1. Build deterministic context signature for current run.
+2. Lookup exact signature matches in memory.
+3. Filter reusable entries:
+  - outcome success is `true`
+  - outcome `remainingViolations === 0`
+4. Select deterministic best memory entry:
+  - lowest `patchesCount`
+  - tie-break by entry id
+5. Validate plan applicability before reuse.
+6. If validation fails, fall back to adaptive simulation-based selection.
+
+### Reuse safety
+
+Before reusing a memory entry, plan applicability must be checked:
+
+- plan id still matches target plan
+- task graph references are valid
+- referenced files still exist
+- plan still overlaps current relevant violation/file context
+
+If safety checks fail, memory reuse is rejected and deterministic evaluation is used.
+
+### Memory writes and dedupe
+
+- After successful execution, selected strategy outcome is recorded to memory.
+- Memory entries are deduplicated deterministically and bounded in size.
+
+### Memory trace
+
+Each selection pass should emit deterministic memory trace data:
+
+- signature used for lookup
+- matched entry count
+- whether memory was reused
+- selected strategy id (if reused)
+- whether fallback to evaluation occurred
+
 ## Cost-planning hard constraints
 
 - No randomness

@@ -199,6 +199,28 @@ Adaptive trace includes:
 - selected strategy id
 - deterministic decision log
 
+### Strategy Memory and Reuse (Deterministic)
+
+Choir can persist successful strategy outcomes and reuse them deterministically in future runs.
+
+Memory behavior:
+
+- Strategy memory is stored in `.choir/memory.json`
+- Entries are indexed by deterministic context signature (goals, constraints, violation summary, module hints)
+- Exact signature match is used for deterministic lookup
+- Reuse candidates must satisfy:
+  - `success === true`
+  - `remainingViolations === 0`
+- Reuse selection is deterministic:
+  - lowest patch count
+  - then lexicographic memory id tie-break
+
+Safety guardrails:
+
+- Reused plan must pass applicability validation against current workspace/state
+- If validation fails, Choir falls back to adaptive simulation-based strategy evaluation
+- Memory entries are deduplicated and bounded to prevent uncontrolled growth
+
 ### Execution Preview and Approval Gate
 
 Conductor supports deterministic execution previews so you can inspect exact file diffs before execution.
@@ -311,6 +333,8 @@ Derived system state is written to `.choir/state.json`, including:
 - diagnostics and metrics
 - execution runtime state (task status, task results, history, preview approvals)
 - strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
+
+Strategy memory is persisted separately in `.choir/memory.json`.
 
 `state.json` is derived and reproducible from workspace + control plane.
 

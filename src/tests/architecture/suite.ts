@@ -41,6 +41,18 @@ import {
   groupPatchesByFile,
   hashPreview,
 } from "../../core/executionPreview.js";
+import {
+  StrategyMemoryEntry,
+  buildSignature,
+  canReuse,
+  dedupeMemory,
+  findMatchingStrategies,
+  matchSignature,
+  readStrategyMemory,
+  recordStrategy,
+  selectFromMemory,
+  validatePlanStillApplies,
+} from "../../core/strategyMemory.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
@@ -1163,6 +1175,123 @@ const pass4: TestPass = {
           first.outcomes.map((outcome) => outcome.strategyId),
           second.outcomes.map((outcome) => outcome.strategyId)
         );
+      },
+    },
+    {
+      id: "4.23",
+      name: "strategy memory signature generation and matching are deterministic",
+      run: async () => {
+        const control = {
+          ...makeControlPlane(),
+          intent: {
+            ...makeControlPlane().intent,
+            goals: ["z-goal", "a-goal"],
+            constraints: ["b-constraint", "a-constraint"],
+          },
+        };
+
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "m-2",
+            ruleId: "rule-b",
+            message: "B",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/b.ts", 1, 0, 1, 1),
+            traceId: "m-trace-2",
+          },
+          {
+            id: "m-1",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/a.ts", 1, 0, 1, 1),
+            traceId: "m-trace-1",
+          },
+          {
+            id: "m-3",
+            ruleId: "rule-b",
+            message: "B2",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/b.ts", 2, 0, 2, 1),
+            traceId: "m-trace-3",
+          },
+        ];
+        state.dependencyGraph = {
+          "src/a.ts": ["src/shared.ts"],
+          "src/b.ts": ["src/shared.ts"],
+          "src/shared.ts": [],
+        };
+
+        const first = buildSignature(control, state);
+        const second = buildSignature(control, JSON.parse(JSON.stringify(state)));
+
+        assert.deepStrictEqual(first, second);
+        assert.ok(matchSignature(first, second));
+        assert.deepStrictEqual(first.goals, ["a-goal", "z-goal"]);
+        assert.deepStrictEqual(first.constraints, ["a-constraint", "b-constraint"]);
+        assert.deepStrictEqual(first.violationSummary, [
+          { ruleId: "rule-a", count: 1 },
+          { ruleId: "rule-b", count: 2 },
+        ]);
+      },
+    },
+    {
+      id: "4.24",
+      name: "strategy memory record lookup reuse and dedupe are deterministic",
+      run: async () => {
+        await withFixture("simple-project", async ({ root }) => {
+          const state = createEmptyStatePlane();
+          const control = makeControlPlane();
+          const signature = buildSignature(control, state);
+
+          const selected: StrategyOutcome = {
+            strategyId: "s-minimal",
+            strategyType: "minimal",
+            plan: makePlan("plan-memory", [
+              makeTask("t-analysis", "analysis"),
+              makeTask("t-enforce", "enforce", { dependsOn: ["t-analysis"] }),
+            ]),
+            patches: [],
+            diagnostics: [],
+            validation: {
+              passed: true,
+              diagnostics: [],
+              conflicts: [],
+              invariantChecks: [],
+            },
+            metrics: {
+              filesChanged: 0,
+              patchesCount: 1,
+              remainingViolations: 0,
+              introducedErrors: 0,
+            },
+            success: true,
+            fileChanges: [],
+            previewHash: "memory-preview-hash",
+          };
+
+          const entry = recordStrategy(root, signature, selected);
+          const memory = readStrategyMemory(root);
+          const matches = findMatchingStrategies(signature, memory);
+          const reusable = matches.filter((candidate) => canReuse(candidate));
+          const chosen = selectFromMemory(reusable);
+
+          assert.ok(entry.id.length > 0);
+          assert.ok(matches.length >= 1);
+          assert.ok(chosen);
+          assert.strictEqual(chosen?.strategyId, "s-minimal");
+          assert.ok(validatePlanStillApplies(chosen!.plan, state, { root, expectedPlanId: "plan-memory" }));
+
+          const duplicate: StrategyMemoryEntry = {
+            ...entry,
+          };
+          const deduped = dedupeMemory([entry, duplicate]);
+          assert.strictEqual(deduped.length, 1);
+        });
       },
     },
     {
