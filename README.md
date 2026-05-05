@@ -49,9 +49,12 @@ Commit this file to version control so the team shares one control-plane source 
 
 Policy governance source:
 
-- Mutation policy gates are authored in `.choir/policies.dsl`.
+- Org-level policy gates are authored in `/org/policies.dsl`.
+- Repo-level policy gates are authored in `.choir/policies.dsl`.
+- Environment policies are runtime-derived (trusted context), applied as the last layer.
+- Effective policy set is deterministic: `org -> repo -> environment`.
 - Choir creates a default `.choir/policies.dsl` file if missing.
-- Commit this file to version control alongside `.choir/choir.config.yaml`.
+- Commit both `/org/policies.dsl` and `.choir/policies.dsl` alongside `.choir/choir.config.yaml`.
 
 ### Top-level direction
 
@@ -88,13 +91,24 @@ Explicit DSL rules evaluated across the workspace.
 | `message` | ✔ | Diagnostic message shown in Problems. |
 | `severity` | | `"error"` (default) · `"warning"` · `"info"` · `"hint"` |
 
-### Policy DSL Governance (`.choir/policies.dsl`)
+### Policy DSL Governance (Org + Repo + Environment)
 
-Mutation governance rules are authored as code in `.choir/policies.dsl`.
+Mutation governance rules are authored as code in Policy DSL and merged across hierarchy layers.
+
+Hierarchy model:
+
+```text
+Org Policies (/org/policies.dsl)
+  -> Repo Policies (.choir/policies.dsl)
+  -> Environment Policies (runtime layer)
+  -> Effective Policy Set (evaluated)
+```
 
 - Source of truth for policy gating is Policy DSL, not YAML `policy.approvalRules`.
-- Runtime flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Policy Engine`.
+- Runtime flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Merge Engine -> Policy Engine`.
 - Policy decisions use context model: `decision = f(yamlDiff, role, environment)`.
+- Parent policies always apply; `deny` is never bypassable by child layers.
+- Merge is deterministic and stable: `org -> repo -> environment`.
 
 Policy DSL rule model supports:
 
@@ -102,11 +116,16 @@ Policy DSL rule model supports:
 - scope selectors: `role`, `environment`
 - predicates: `contains`, `count > <number>`
 - effects: `allow`, `deny`, `require-approval`
+- inheritance operators: `assign`, `append`, `remove`
+- controlled overrides: `override child`, `override none`
 
 Policy DSL grammar:
 
 ```bnf
-<policy> ::= "policy" <identifier> "{" <rule>* "}"
+<policy> ::= "policy" <identifier> "{" <directive>* <rule>* "}"
+
+<directive> ::= "inherit" ("assign" | "append" | "remove")
+          | "override" ("child" | "none")
 
 <rule> ::= "when" <condition> "then" <effect>
 
@@ -122,16 +141,32 @@ Policy DSL grammar:
 <effect> ::= "allow" | "deny" | "require-approval"
 ```
 
-Minimal example:
+Minimal examples:
 
 ```text
-policy restrict-db-access {
+/org/policies.dsl
+policy org-review-db {
+  override child
   when diff.path = "intent.constraints"
     and diff.operation = add
     and contains "db"
   then require-approval
 }
+
+.choir/policies.dsl
+policy repo-fastlane-db {
+  inherit assign
+  when diff.path = "intent.constraints"
+    and diff.operation = add
+    and contains "db"
+  then allow
+}
 ```
+
+Environment layer behavior:
+
+- Environment policies are evaluated last.
+- Production injects strict runtime policy denies for `execution.plans` mutations.
 
 Legacy note:
 
@@ -453,43 +488,53 @@ YAML -> DSL projection behavior:
 Policy approval gate behavior:
 
 - Decision model: `decision = f(yamlDiff, role, environment)`
-- Every YAML mutation diff is evaluated deterministically against compiled rules from `.choir/policies.dsl`
+- Every YAML mutation diff is evaluated deterministically against an effective merged policy set from org/repo/environment Policy DSL layers
+- Source merge order is deterministic and fixed: `org -> repo -> environment`
 - Role is trusted system context (derived from command/action role mapping), not user-provided DSL input
 - Environment is trusted runtime context (`CI`, `NODE_ENV`, optional `CHOIR_ENVIRONMENT`), not DSL input
 - Deterministic precedence is enforced: `deny > require-approval > allow`
+- No policy source is mutated during evaluation
+- No hidden overrides are allowed
+- Duplicate policy IDs across layers are rejected
 - `deny` rules block mutation
 - `require-approval` rules create a pending diff id and block mutation until approved
 - Approvals are bound to exact diff hash and cannot be reused for different diffs
-- Policy traces include role, environment, matched rules, policy DSL traces, and final decision for auditability
+- Child layers cannot override parent `deny`
+- Policy traces include role, environment, source-aware matched rules, policy DSL traces, inheritance traces, and final decision for auditability
 
-Example policy gate config (`.choir/policies.dsl`):
+Example policy gate config:
 
 ```text
-policy block-prod-plan-changes {
+/org/policies.dsl
+policy org-block-prod-plan-changes {
   when diff.path = "execution.plans"
     and environment = production
   then deny
 }
 
-policy ci-requires-approval {
+policy org-ci-requires-approval {
   when diff.path = "intent.constraints"
     and diff.operation = add
     and environment = ci
   then require-approval
 }
 
-policy analyst-readonly {
+.choir/policies.dsl
+policy repo-analyst-readonly {
   when diff.operation = add
     and role = analyst
   then deny
 }
 
-policy restrict-db-access {
+policy repo-restrict-db-access {
   when diff.path = "intent.constraints"
     and diff.operation = add
     and contains "db"
   then require-approval
 }
+
+# runtime environment layer (implicit)
+# production denies execution.plans add/update/remove
 ```
 
 Idempotency guarantees:
@@ -498,7 +543,7 @@ Idempotency guarantees:
 - Duplicate intent entries are deduplicated and stably sorted
 - Duplicate plan ids are not re-added
 - Macro expansion with identical inputs produces identical expanded commands
-- Identical `(yamlDiff, role, environment, policies.dsl)` inputs always produce identical policy decisions
+- Identical `(yamlDiff, role, environment, org+repo policies, runtime environment)` inputs always produce identical policy decisions
 
 ---
 

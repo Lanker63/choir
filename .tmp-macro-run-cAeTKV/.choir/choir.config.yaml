@@ -1,0 +1,37 @@
+version: 1.0.0
+mission: ""
+vision: ""
+intent:
+  goals:
+    - enforce clean repository boundaries
+  constraints:
+    - no direct db access
+  non-goals: []
+policy:
+  rules: []
+  approvalRules: []
+execution:
+  plans:
+    - id: plan-584b985266f8
+      title: Auto-generated enforcement plan
+      derivedFrom: goal
+      goalRefs:
+        - enforce clean repository boundaries
+      tasks:
+        - id: t-analysis
+          title: Analyze violations
+          description: Enumerate relevant violations and establish deterministic
+            remediation scope.
+          type: analysis
+          dependsOn: []
+          successCriteria:
+            - violations enumerated
+        - id: t-validate
+          title: Validate all constraints
+          description: Run policy enforcement to verify that constraints are satisfied.
+          type: enforce
+          dependsOn:
+            - t-analysis
+          successCriteria:
+            - zero violations
+      status: draft

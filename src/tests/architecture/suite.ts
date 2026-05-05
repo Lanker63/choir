@@ -78,12 +78,14 @@ import {
   computeDiff,
   detectEnvironment,
   evaluatePolicies,
+  formatPolicyInheritanceTrace,
   hashDiff,
   toPolicySet,
   validateRole,
 } from "../../core/policyEngine.js";
 import {
   compilePolicies,
+  loadAllPolicies,
   loadPolicies,
   parsePolicyDSL,
 } from "../../core/policyDsl.js";
@@ -227,6 +229,12 @@ function writePoliciesDSL(root: string, content: string): void {
   const choirRoot = path.join(root, ".choir");
   fs.mkdirSync(choirRoot, { recursive: true });
   fs.writeFileSync(path.join(choirRoot, "policies.dsl"), content, "utf-8");
+}
+
+function writeOrgPoliciesDSL(root: string, content: string): void {
+  const orgRoot = path.join(root, "org");
+  fs.mkdirSync(orgRoot, { recursive: true });
+  fs.writeFileSync(path.join(orgRoot, "policies.dsl"), content, "utf-8");
 }
 
 async function assertPlanGoldenForFixture(fixtureName: string, goldenFileName: string): Promise<void> {
@@ -1253,6 +1261,262 @@ const pass2: TestPass = {
         ].join("\n"));
 
         assert.throws(() => loadPolicies(root), /Duplicate policy id/);
+      },
+    },
+    {
+      id: "2.40",
+      name: "policy inheritance loader returns org repo and environment sources",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-sources-"));
+
+        writeOrgPoliciesDSL(root, [
+          "policy org-base {",
+          "  when diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy repo-base {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add then require-approval",
+          "}",
+          "",
+        ].join("\n"));
+
+        const loaded = loadAllPolicies(root, "production");
+        assert.strictEqual(loaded.org.length, 1);
+        assert.strictEqual(loaded.repo.length, 1);
+        assert.strictEqual(loaded.environment.length > 0, true);
+      },
+    },
+    {
+      id: "2.41",
+      name: "org deny policy wins over repo allow policy",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-org-deny-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        writeOrgPoliciesDSL(root, [
+          "policy org-deny-db {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy repo-allow-db {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        const result = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(result.decision, "deny");
+        assert.strictEqual(fs.existsSync(controlPath), false);
+      },
+    },
+    {
+      id: "2.42",
+      name: "repo cannot override org deny with assign inheritance",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-no-override-deny-"));
+
+        writeOrgPoliciesDSL(root, [
+          "policy org-deny-db {",
+          "  override child",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy repo-assign-allow-db {",
+          "  inherit assign",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        assert.throws(() => loadPolicies(root, "local"), /cannot override/i);
+      },
+    },
+    {
+      id: "2.43",
+      name: "org can allow controlled child assign for non-deny policy",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-child-override-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        writeOrgPoliciesDSL(root, [
+          "policy org-require-review {",
+          "  override child",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then require-approval",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy repo-assign-allow {",
+          "  inherit assign",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        const result = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(result.decision, "allow");
+        assert.strictEqual(fs.existsSync(controlPath), true);
+      },
+    },
+    {
+      id: "2.44",
+      name: "environment policy layer is applied last and can enforce strict production denies",
+      run: async () => {
+        const prodRoot = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-last-prod-"));
+        const prodControlPath = path.join(prodRoot, ".choir", "choir.config.yaml");
+
+        writeOrgPoliciesDSL(prodRoot, [
+          "policy org-allow-plans {",
+          "  when diff.path = \"execution.plans\" and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(prodRoot, [
+          "policy repo-allow-plans {",
+          "  when diff.path = \"execution.plans\" and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        await withTemporaryEnv({ NODE_ENV: "production", CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
+          const result = compileDSLAndWrite("choir plan", makeControlPlane(), prodControlPath, { workspaceRoot: prodRoot });
+          assert.strictEqual(result.decision, "deny");
+          assert.strictEqual(result.policyTrace?.environment, "production");
+        });
+
+        const localRoot = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-last-local-"));
+        const localControlPath = path.join(localRoot, ".choir", "choir.config.yaml");
+
+        writeOrgPoliciesDSL(localRoot, [
+          "policy org-allow-plans {",
+          "  when diff.path = \"execution.plans\" and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(localRoot, [
+          "policy repo-allow-plans {",
+          "  when diff.path = \"execution.plans\" and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        await withTemporaryEnv({ NODE_ENV: undefined, CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
+          const result = compileDSLAndWrite("choir plan", makeControlPlane(), localControlPath, { workspaceRoot: localRoot });
+          assert.strictEqual(result.decision, "allow");
+        });
+      },
+    },
+    {
+      id: "2.45",
+      name: "duplicate policy ids across org and repo layers are rejected",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dup-cross-layer-"));
+
+        writeOrgPoliciesDSL(root, [
+          "policy shared-policy {",
+          "  when diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy shared-policy {",
+          "  when diff.operation = add then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        assert.throws(() => loadPolicies(root, "local"), /Duplicate policy id across layers/);
+      },
+    },
+    {
+      id: "2.46",
+      name: "effective policy trace records source and final decision deterministically",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-trace-sources-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        writeOrgPoliciesDSL(root, [
+          "policy org-deny-db {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        writePoliciesDSL(root, [
+          "policy repo-allow-db {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then allow",
+          "}",
+          "",
+        ].join("\n"));
+
+        const first = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+        const second = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.deepStrictEqual(first.policyTrace, second.policyTrace);
+        assert.strictEqual(first.policyTrace?.inheritanceTrace.finalDecision, "deny");
+        assert.ok(first.policyTrace?.inheritanceTrace.matchedRules.some((entry) => entry.source === "org"));
+        assert.ok(first.policyTrace?.inheritanceTrace.matchedRules.some((entry) => entry.source === "repo"));
+      },
+    },
+    {
+      id: "2.47",
+      name: "effective policy visualization renders source-aware debug output",
+      run: async () => {
+        const rendered = formatPolicyInheritanceTrace({
+          matchedRules: [
+            {
+              policyId: "org-deny-prod",
+              source: "org",
+              effect: "deny",
+            },
+            {
+              policyId: "repo-allow-plans",
+              source: "repo",
+              effect: "allow",
+            },
+          ],
+          finalDecision: "deny",
+        });
+
+        assert.ok(rendered.includes("Effective Policy:"));
+        assert.ok(rendered.includes("[ORG] deny org-deny-prod"));
+        assert.ok(rendered.includes("[REPO] allow repo-allow-plans"));
+        assert.ok(rendered.includes("Final Decision: DENY"));
       },
     },
   ],

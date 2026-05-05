@@ -1,6 +1,13 @@
 import fs from "fs";
 import path from "path";
-import { Environment, PolicyRule, PolicySet, Role } from "./policyEngine.js";
+import {
+  Environment,
+  InheritanceOperator,
+  PolicyRule,
+  PolicySet,
+  PolicySource,
+  Role,
+} from "./policyEngine.js";
 
 type PolicyEffect = "allow" | "deny" | "require-approval";
 type DiffOperation = "add" | "remove" | "update";
@@ -29,9 +36,26 @@ type PolicyRuleAST = {
   effect: PolicyEffect;
 };
 
+export type PolicyOverride = {
+  allowed: boolean;
+  scope: "child" | "none";
+};
+
 export type PolicyAST = {
   id: string;
   rules: PolicyRuleAST[];
+  inheritanceOperator: InheritanceOperator;
+  override: PolicyOverride;
+};
+
+export type CompiledPolicy = PolicyRule & {
+  source: PolicySource;
+};
+
+export type PolicySources<T> = {
+  org: T;
+  repo: T;
+  environment: T;
 };
 
 type Token =
@@ -45,9 +69,26 @@ const ROLE_VALUES: Role[] = ["architect", "analyst", "conductor", "enforcer"];
 const ENV_VALUES: Environment[] = ["local", "ci", "staging", "production"];
 const EFFECT_VALUES: PolicyEffect[] = ["allow", "deny", "require-approval"];
 const OPERATION_VALUES: DiffOperation[] = ["add", "remove", "update"];
+const INHERITANCE_VALUES: InheritanceOperator[] = ["assign", "append", "remove"];
+const OVERRIDE_SCOPE_VALUES: Array<PolicyOverride["scope"]> = ["child", "none"];
 const POLICY_ID_PATTERN = /^[a-zA-Z0-9-_]+$/;
 
-function policyFilePath(root: string): string {
+export const POLICY_MERGE_ORDER: PolicySource[] = ["org", "repo", "environment"];
+
+const PRODUCTION_ENVIRONMENT_POLICIES = [
+  "policy env-production-deny-plan-changes {",
+  "  when diff.path = \"execution.plans\" and diff.operation = add and environment = production then deny",
+  "  when diff.path = \"execution.plans\" and diff.operation = update and environment = production then deny",
+  "  when diff.path = \"execution.plans\" and diff.operation = remove and environment = production then deny",
+  "}",
+  "",
+].join("\n");
+
+function orgPolicyFilePath(root: string): string {
+  return path.join(root, "org", "policies.dsl");
+}
+
+function repoPolicyFilePath(root: string): string {
   return path.join(root, ".choir", "policies.dsl");
 }
 
@@ -213,15 +254,58 @@ class Parser {
     this.expectSymbol("{");
     const rules: PolicyRuleAST[] = [];
 
+    let inheritanceOperator: InheritanceOperator = "append";
+    let overrideScope: PolicyOverride["scope"] = "none";
+    let sawInheritanceDirective = false;
+    let sawOverrideDirective = false;
+
     while (!this.consumeSymbol("}")) {
       if (this.isEOF()) {
         throw parseError(`Unterminated policy block for ${id}`, this.current());
       }
 
+      if (this.consumeWord("inherit")) {
+        if (sawInheritanceDirective) {
+          throw parseError("Duplicate inherit directive", this.previous());
+        }
+
+        const operator = this.expectIdentifier("Expected inheritance operator after 'inherit'");
+        if (!INHERITANCE_VALUES.includes(operator as InheritanceOperator)) {
+          throw parseError(`Invalid inheritance operator: ${operator}`, this.previous());
+        }
+
+        inheritanceOperator = operator as InheritanceOperator;
+        sawInheritanceDirective = true;
+        continue;
+      }
+
+      if (this.consumeWord("override")) {
+        if (sawOverrideDirective) {
+          throw parseError("Duplicate override directive", this.previous());
+        }
+
+        const scope = this.expectIdentifier("Expected override scope after 'override'");
+        if (!OVERRIDE_SCOPE_VALUES.includes(scope as PolicyOverride["scope"])) {
+          throw parseError(`Invalid override scope: ${scope}`, this.previous());
+        }
+
+        overrideScope = scope as PolicyOverride["scope"];
+        sawOverrideDirective = true;
+        continue;
+      }
+
       rules.push(this.parseRule());
     }
 
-    return { id, rules };
+    return {
+      id,
+      rules,
+      inheritanceOperator,
+      override: {
+        allowed: overrideScope === "child",
+        scope: overrideScope,
+      },
+    };
   }
 
   private parseRule(): PolicyRuleAST {
@@ -446,42 +530,15 @@ export function parsePolicyDSL(input: string): PolicyAST[] {
   return new Parser(tokenize(input)).parsePolicies();
 }
 
-export function compilePolicy(ast: PolicyAST): PolicyRule[] {
-  return ast.rules.map((rule, index) => {
-    if (!rule.match.path && !rule.match.operation) {
-      throw new Error(`Policy ${ast.id} rule ${index + 1} must include diff.path or diff.operation`);
-    }
+function sourceRank(source: PolicySource): number {
+  return POLICY_MERGE_ORDER.indexOf(source);
+}
 
-    return {
-      id: `${ast.id}.rule.${index + 1}`,
-      policyId: ast.id,
-      match: {
-        ...(rule.match.path ? { path: rule.match.path } : {}),
-        ...(rule.match.operation ? { operation: rule.match.operation } : {}),
-      },
-      ...(rule.scope
-        ? {
-          scope: {
-            ...(rule.scope.role ? { roles: [rule.scope.role] } : {}),
-            ...(rule.scope.environment ? { environments: [rule.scope.environment] } : {}),
-          },
-        }
-        : {}),
-      ...(rule.condition
-        ? {
-          condition: {
-            ...(typeof rule.condition.contains === "string" ? { contains: rule.condition.contains } : {}),
-            ...(typeof rule.condition.countGreaterThan === "number"
-              ? { countGreaterThan: rule.condition.countGreaterThan }
-              : {}),
-          },
-        }
-        : {}),
-      effect: {
-        type: rule.effect,
-      },
-    };
-  });
+function sortCompiledPolicies(policies: CompiledPolicy[]): CompiledPolicy[] {
+  return [...policies].sort((left, right) =>
+    sourceRank(left.source) - sourceRank(right.source)
+    || left.id.localeCompare(right.id)
+  );
 }
 
 function normalizedConflictSignature(rule: PolicyRule): string {
@@ -501,34 +558,191 @@ function normalizedConflictSignature(rule: PolicyRule): string {
   });
 }
 
-export function compilePolicies(asts: PolicyAST[]): PolicySet {
-  const compiled = [...asts]
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .flatMap((ast) => compilePolicy(ast));
-
-  const signatureToEffect = new Map<string, PolicyEffect>();
-  for (const rule of compiled) {
-    const signature = normalizedConflictSignature(rule);
-    const existing = signatureToEffect.get(signature);
-    if (existing && existing !== rule.effect.type) {
-      throw new Error(`Conflicting policy rules detected for selector signature: ${signature}`);
-    }
-
-    signatureToEffect.set(signature, rule.effect.type);
+function canOverrideParent(parent: CompiledPolicy, child: CompiledPolicy): boolean {
+  if (parent.source === child.source) {
+    return true;
   }
 
-  return {
-    rules: compiled.sort((left, right) => left.id.localeCompare(right.id)),
-  };
+  // Deny is absolute and cannot be bypassed by child layers.
+  if (parent.effect.type === "deny") {
+    return false;
+  }
+
+  return parent.override?.allowed === true && parent.override.scope === "child";
 }
 
-export function loadPolicies(root: string): PolicySet {
-  const filePath = policyFilePath(root);
+function compileFromSource(asts: PolicyAST[], source: PolicySource): CompiledPolicy[] {
+  const orderedPolicies = [...asts].sort((left, right) => left.id.localeCompare(right.id));
+
+  return orderedPolicies.flatMap((ast) => {
+    return ast.rules.map((rule, index) => {
+      if (!rule.match.path && !rule.match.operation) {
+        throw new Error(`Policy ${ast.id} rule ${index + 1} must include diff.path or diff.operation`);
+      }
+
+      return {
+        id: `${source}.${ast.id}.rule.${index + 1}`,
+        policyId: ast.id,
+        source,
+        inheritanceOperator: ast.inheritanceOperator,
+        override: ast.override,
+        match: {
+          ...(rule.match.path ? { path: rule.match.path } : {}),
+          ...(rule.match.operation ? { operation: rule.match.operation } : {}),
+        },
+        ...(rule.scope
+          ? {
+            scope: {
+              ...(rule.scope.role ? { roles: [rule.scope.role] } : {}),
+              ...(rule.scope.environment ? { environments: [rule.scope.environment] } : {}),
+            },
+          }
+          : {}),
+        ...(rule.condition
+          ? {
+            condition: {
+              ...(typeof rule.condition.contains === "string" ? { contains: rule.condition.contains } : {}),
+              ...(typeof rule.condition.countGreaterThan === "number"
+                ? { countGreaterThan: rule.condition.countGreaterThan }
+                : {}),
+            },
+          }
+          : {}),
+        effect: {
+          type: rule.effect,
+        },
+      };
+    });
+  });
+}
+
+export function applyInheritance(
+  parentRules: CompiledPolicy[],
+  childRule: CompiledPolicy,
+  operator: InheritanceOperator
+): CompiledPolicy[] {
+  const childSignature = normalizedConflictSignature(childRule);
+  const targetParents = parentRules.filter((rule) => normalizedConflictSignature(rule) === childSignature);
+
+  if (operator === "append") {
+    return [...parentRules, childRule];
+  }
+
+  if (targetParents.length === 0) {
+    return operator === "assign"
+      ? [...parentRules, childRule]
+      : [...parentRules];
+  }
+
+  for (const parent of targetParents) {
+    if (!canOverrideParent(parent, childRule)) {
+      throw new Error(
+        `Policy inheritance violation: ${childRule.source}.${childRule.policyId ?? childRule.id}`
+        + ` cannot override ${parent.source}.${parent.policyId ?? parent.id}`
+      );
+    }
+  }
+
+  const survivors = parentRules.filter((rule) => normalizedConflictSignature(rule) !== childSignature);
+
+  return operator === "assign"
+    ? [...survivors, childRule]
+    : survivors;
+}
+
+export function mergePolicies(sources: PolicySources<CompiledPolicy[]>): CompiledPolicy[] {
+  let merged: CompiledPolicy[] = [];
+
+  for (const source of POLICY_MERGE_ORDER) {
+    const orderedSourceRules = sortCompiledPolicies(sources[source]);
+
+    for (const rule of orderedSourceRules) {
+      const operator = rule.inheritanceOperator ?? "append";
+      merged = applyInheritance(merged, rule, operator);
+    }
+  }
+
+  return sortCompiledPolicies(merged);
+}
+
+function loadPolicyFileASTs(filePath: string): PolicyAST[] {
   if (!fs.existsSync(filePath)) {
-    return { rules: [] };
+    return [];
   }
 
   const text = fs.readFileSync(filePath, "utf-8");
-  const ast = parsePolicyDSL(text);
-  return compilePolicies(ast);
+  return parsePolicyDSL(text);
+}
+
+function buildEnvironmentPolicies(environment: Environment): PolicyAST[] {
+  if (environment !== "production") {
+    return [];
+  }
+
+  return parsePolicyDSL(PRODUCTION_ENVIRONMENT_POLICIES);
+}
+
+function validateNoDuplicatePolicyIds(sources: PolicySources<PolicyAST[]>): void {
+  const seen = new Map<string, PolicySource>();
+
+  for (const source of POLICY_MERGE_ORDER) {
+    for (const policy of sources[source]) {
+      const existing = seen.get(policy.id);
+      if (existing) {
+        throw new Error(`Duplicate policy id across layers: ${policy.id} (${existing}, ${source})`);
+      }
+
+      seen.set(policy.id, source);
+    }
+  }
+}
+
+function validateNoCircularInheritance(_sources: PolicySources<PolicyAST[]>): void {
+  // The current DSL has no parent-reference construct, so circular inheritance is structurally impossible.
+}
+
+export function loadAllPolicies(root: string, environment: Environment): PolicySources<PolicyAST[]> {
+  const sources: PolicySources<PolicyAST[]> = {
+    org: loadPolicyFileASTs(orgPolicyFilePath(root)),
+    repo: loadPolicyFileASTs(repoPolicyFilePath(root)),
+    environment: buildEnvironmentPolicies(environment),
+  };
+
+  validateNoDuplicatePolicyIds(sources);
+  validateNoCircularInheritance(sources);
+
+  return sources;
+}
+
+export function compilePolicy(ast: PolicyAST, source: PolicySource = "repo"): CompiledPolicy[] {
+  return compileFromSource([ast], source);
+}
+
+export function compilePolicies(asts: PolicyAST[]): PolicySet {
+  const sources: PolicySources<CompiledPolicy[]> = {
+    org: [],
+    repo: compileFromSource(asts, "repo"),
+    environment: [],
+  };
+
+  return {
+    rules: mergePolicies(sources),
+  };
+}
+
+export function compilePoliciesFromSources(sources: PolicySources<PolicyAST[]>): PolicySet {
+  const compiledBySource: PolicySources<CompiledPolicy[]> = {
+    org: compileFromSource(sources.org, "org"),
+    repo: compileFromSource(sources.repo, "repo"),
+    environment: compileFromSource(sources.environment, "environment"),
+  };
+
+  return {
+    rules: mergePolicies(compiledBySource),
+  };
+}
+
+export function loadPolicies(root: string, environment: Environment = "local"): PolicySet {
+  const sources = loadAllPolicies(root, environment);
+  return compilePoliciesFromSources(sources);
 }

@@ -4,6 +4,8 @@ import { ChoirConfig, canonicalizeConfig } from "./dslYamlCompiler.js";
 
 export type Role = PolicyRole;
 export type Environment = PolicyEnvironment;
+export type PolicySource = "org" | "repo" | "environment";
+export type InheritanceOperator = "assign" | "append" | "remove";
 
 export type ExecutionContext = {
   role: Role;
@@ -13,6 +15,12 @@ export type ExecutionContext = {
 export type PolicyRule = {
   id: string;
   policyId?: string;
+  source?: PolicySource;
+  inheritanceOperator?: InheritanceOperator;
+  override?: {
+    allowed: boolean;
+    scope: "child" | "none";
+  };
   match: {
     path?: string;
     operation?: "add" | "remove" | "update";
@@ -60,12 +68,23 @@ export type PolicyTrace = {
   denied: boolean;
   decision: "allow" | "require-approval" | "deny";
   policyDslTrace: PolicyDSLTrace[];
+  inheritanceTrace: PolicyInheritanceTrace;
 };
 
 export type PolicyDSLTrace = {
   policyId: string;
+  source: PolicySource;
   matched: boolean;
   effect: "allow" | "require-approval" | "deny";
+};
+
+export type PolicyInheritanceTrace = {
+  matchedRules: {
+    policyId: string;
+    source: PolicySource;
+    effect: "allow" | "require-approval" | "deny";
+  }[];
+  finalDecision: "allow" | "require-approval" | "deny";
 };
 
 export type PolicyAction = "modify-yaml" | "read-only" | "plan" | "preview" | "execute";
@@ -312,15 +331,18 @@ export function evaluatePolicies(
   );
   const orderedRules = [...policies.rules].sort((left, right) => left.id.localeCompare(right.id));
   const dslTraceByPolicy = new Map<string, PolicyDSLTrace>();
+  const matchedInheritanceRules = new Map<string, { policyId: string; source: PolicySource; effect: "allow" | "require-approval" | "deny" }>();
 
   for (const rule of orderedRules) {
-    if (!rule.policyId) {
+    if (!rule.policyId || !rule.source) {
       continue;
     }
 
-    if (!dslTraceByPolicy.has(rule.policyId)) {
-      dslTraceByPolicy.set(rule.policyId, {
+    const key = `${rule.source}:${rule.policyId}`;
+    if (!dslTraceByPolicy.has(key)) {
+      dslTraceByPolicy.set(key, {
         policyId: rule.policyId,
+        source: rule.source,
         matched: false,
         effect: rule.effect.type,
       });
@@ -338,10 +360,18 @@ export function evaluatePolicies(
       }
 
       matchedRuleIds.add(rule.id);
-      if (rule.policyId) {
-        dslTraceByPolicy.set(rule.policyId, {
+      if (rule.policyId && rule.source) {
+        const key = `${rule.source}:${rule.policyId}`;
+        dslTraceByPolicy.set(key, {
           policyId: rule.policyId,
+          source: rule.source,
           matched: true,
+          effect: rule.effect.type,
+        });
+
+        matchedInheritanceRules.set(key, {
+          policyId: rule.policyId,
+          source: rule.source,
           effect: rule.effect.type,
         });
       }
@@ -381,7 +411,18 @@ export function evaluatePolicies(
       denied: decision === "deny",
       decision,
       policyDslTrace: [...dslTraceByPolicy.values()]
-        .sort((left, right) => left.policyId.localeCompare(right.policyId)),
+        .sort((left, right) =>
+          left.source.localeCompare(right.source)
+          || left.policyId.localeCompare(right.policyId)
+        ),
+      inheritanceTrace: {
+        matchedRules: [...matchedInheritanceRules.values()]
+          .sort((left, right) =>
+            left.source.localeCompare(right.source)
+            || left.policyId.localeCompare(right.policyId)
+          ),
+        finalDecision: decision,
+      },
     },
   };
 }
@@ -424,4 +465,17 @@ export function toPolicySet(rules: ApprovalPolicyRule[]): PolicySet {
       }))
       .sort((left, right) => left.id.localeCompare(right.id)),
   };
+}
+
+export function formatPolicyInheritanceTrace(trace: PolicyInheritanceTrace): string {
+  const lines = ["Effective Policy:", ""];
+
+  for (const matched of trace.matchedRules) {
+    lines.push(`[${matched.source.toUpperCase()}] ${matched.effect} ${matched.policyId}`);
+  }
+
+  lines.push("");
+  lines.push(`Final Decision: ${trace.finalDecision.toUpperCase()}`);
+
+  return lines.join("\n");
 }

@@ -482,9 +482,18 @@ export function compileDSLAndWrite(
     decision: "allow" | "require-approval" | "deny";
     policyDslTrace: Array<{
       policyId: string;
+      source: "org" | "repo" | "environment";
       matched: boolean;
       effect: "allow" | "require-approval" | "deny";
     }>;
+    inheritanceTrace: {
+      matchedRules: Array<{
+        policyId: string;
+        source: "org" | "repo" | "environment";
+        effect: "allow" | "require-approval" | "deny";
+      }>;
+      finalDecision: "allow" | "require-approval" | "deny";
+    };
   };
 } {
   const result = compileDSL(input, controlPlane, options);
@@ -517,6 +526,10 @@ export function compileDSLAndWrite(
         denied: false,
         decision: "allow",
         policyDslTrace: [],
+        inheritanceTrace: {
+          matchedRules: [],
+          finalDecision: "allow",
+        },
       },
     };
   }
@@ -527,7 +540,7 @@ export function compileDSLAndWrite(
   const diffHash = hashDiff(diffs);
 
   const policyRoot = inferPolicyRoot(controlPath, options?.workspaceRoot);
-  const policySet = loadPolicies(policyRoot);
+  const policySet = loadPolicies(policyRoot, environment);
   const policyEvaluation = evaluatePolicies(diffs, policySet, ctx);
 
   if (!policyEvaluation.result.allowed) {

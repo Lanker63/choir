@@ -20,7 +20,8 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 - Required properties:
   - Versioned and schema-validated
   - Deterministic input for all pipeline and scheduler runs
-  - Single source of truth for policy and plan intent
+  - Single source of truth for workspace intent and execution plans
+  - Repo-level policy source of truth for workspace policy intent (`.choir/policies.dsl`), composed with org and environment layers at evaluation time
 
 > Chat compiles into YAML. YAML is authoritative.
 
@@ -217,21 +218,34 @@ Policy gate contract:
 
 - Proposed YAML changes are diffed before write (`YAMLDiff[]`).
 - Policy decision model is context-aware: `decision = f(yamlDiff, role, environment)`.
-- Policy source of truth is `.choir/policies.dsl`.
-- Runtime policy flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Policy Engine`.
-- Policy evaluation is deterministic and uses compiled declarative rules with scoped role/environment matching.
+- Policy sources are layered and deterministic:
+  - Org: `/org/policies.dsl`
+  - Repo: `.choir/policies.dsl`
+  - Environment: runtime-injected policy layer
+- Runtime policy flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Merge Engine -> Policy Engine`.
+- Effective policy merge order is fixed: `org -> repo -> environment`.
+- Policy evaluation is deterministic and uses merged compiled declarative rules with scoped role/environment matching.
 - Role context is trusted and derived by system role mapping (not user-provided command args).
 - Environment context is trusted runtime detection (`CI`, `NODE_ENV`, optional deployment env) and must not be user-spoofable through DSL input.
 - Resolution precedence is deterministic and strict: `deny > require-approval > allow`.
+- Parent policies always apply.
+- Child layers cannot override parent `deny`.
+- Policy sources are not mutated during evaluation.
+- Duplicate policy IDs across inheritance layers are invalid and must fail loading.
+- Circular inheritance is disallowed.
 - `deny` blocks writes immediately.
 - `require-approval` blocks writes until exact diff hash is approved.
 - Approval records are stored in state and tied to exact diff hash.
-- Policy trace must include role, environment, matched rules, policy DSL traces, and final decision for auditability.
+- Environment policies are applied last; production can inject strict deny policies for `execution.plans` mutations.
+- Policy trace must include role, environment, source-aware matched rules, policy DSL traces, inheritance trace, and final decision for auditability.
 
 Policy DSL grammar contract:
 
 ```bnf
-<policy> ::= "policy" <identifier> "{" <rule>* "}"
+<policy> ::= "policy" <identifier> "{" <directive>* <rule>* "}"
+
+<directive> ::= "inherit" ("assign" | "append" | "remove")
+              | "override" ("child" | "none")
 
 <rule> ::= "when" <condition> "then" <effect>
 
@@ -246,6 +260,12 @@ Policy DSL grammar contract:
 
 <effect> ::= "allow" | "deny" | "require-approval"
 ```
+
+Inheritance operator contract:
+
+- `append`: add child rule in addition to inherited parent rules.
+- `assign`: replace matching inherited selectors only when parent override policy permits child override.
+- `remove`: subtract matching inherited selectors only when parent override policy permits child override.
 
 ## Deterministic State → Plan Synthesis
 
