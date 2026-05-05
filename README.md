@@ -40,7 +40,6 @@ intent:
   non-goals: []
 policy:
   rules: []
-  approvalRules: []
 execution:
   plans: []
 ```
@@ -104,7 +103,7 @@ Org Policies (/org/policies.dsl)
   -> Effective Policy Set (evaluated)
 ```
 
-- Source of truth for policy gating is Policy DSL, not YAML `policy.approvalRules`.
+- Policy DSL is the only source of truth for policy gating.
 - Runtime flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Merge Engine -> Policy Engine`.
 - Policy decisions use context model: `decision = f(yamlDiff, role, environment)`.
 - Parent policies always apply; `deny` is never bypassable by child layers.
@@ -169,10 +168,6 @@ Environment layer behavior:
 
 - Environment policies are evaluated last.
 - Production injects strict runtime policy denies for `execution.plans` mutations.
-
-Legacy note:
-
-- `policy.approvalRules` may still appear in YAML shape for compatibility of persisted documents, but policy gating is driven by `.choir/policies.dsl`.
 
 ### `execution.plans`
 

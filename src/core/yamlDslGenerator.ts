@@ -122,10 +122,6 @@ export function generateDSL(config: ChoirConfig, options?: GenerateDSLOptions): 
 
       commands.push(command(reconstructed));
     }
-
-    for (const rule of [...canonical.policy.approvalRules].sort((left, right) => left.id.localeCompare(right.id))) {
-      warnings.push(`Unrepresentable field: policy.approvalRules.${rule.id}`);
-    }
   }
 
   if (shouldInclude(section, "plans")) {

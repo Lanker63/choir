@@ -185,7 +185,6 @@ export function createDefaultControlPlane(): ControlPlane {
         },
         policy: {
             rules: [],
-            approvalRules: [],
         },
         execution: {
             plans: []

@@ -162,7 +162,6 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     },
     policy: {
       rules: [],
-      approvalRules: [],
       ...(overrides ? { priorityOverrides: overrides } : {}),
     },
     execution: {

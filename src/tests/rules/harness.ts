@@ -47,7 +47,6 @@ function makeControlPlaneFixture(): ControlPlane {
           severity: "error",
         },
       ],
-      approvalRules: [],
     },
     execution: {
       plans: [],

@@ -59,7 +59,7 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       view.webview.html = `<body><pre>Failed to load Choir console: ${err}</pre></body>`;
     }
 
-    view.webview.onDidReceiveMessage(async (msg: WebviewInboundMessage | { type?: string; dsl?: string }) => {
+    view.webview.onDidReceiveMessage(async (msg: WebviewInboundMessage) => {
       if (msg.type === "ready") {
         await this.postRefreshSnapshot();
         return;
@@ -67,21 +67,6 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
       if (msg.type === "action" && "payload" in msg) {
         const result = await this.service.handleAction(msg.payload);
-        this.postMessage({
-          type: "action-result",
-          payload: result,
-        });
-        return;
-      }
-
-      // Legacy compatibility path for older webview scripts.
-      if (msg.type === "validate" || msg.type === "save") {
-        const result = await this.service.handleAction({
-          type: "run-dsl",
-          role: "conductor",
-          dsl: String(msg.dsl ?? ""),
-        });
-
         this.postMessage({
           type: "action-result",
           payload: result,

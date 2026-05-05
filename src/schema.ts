@@ -147,38 +147,8 @@ const ExecutionSchema = z.object({
     plans: z.array(PlanSchema).default([]),
 }).strict();
 
-const ApprovalPolicyOperationSchema = z.enum(["add", "remove", "update"]);
 const PolicyRoleSchema = z.enum(["architect", "analyst", "conductor", "enforcer"]);
 const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"]);
-
-const ApprovalPolicyRuleSchema = z.object({
-    id: z.string().min(1),
-    match: z.object({
-        path: z.string().min(1).optional(),
-        operation: ApprovalPolicyOperationSchema.optional(),
-        macro: z.string().min(1).optional(),
-    }).strict().superRefine((match, context) => {
-        if (!match.path && !match.operation && !match.macro) {
-            context.addIssue({
-                code: "custom",
-                message: "Policy match requires at least one selector: path, operation, or macro",
-                path: [],
-            });
-        }
-    }),
-    scope: z.object({
-        roles: z.array(PolicyRoleSchema).optional(),
-        environments: z.array(PolicyEnvironmentSchema).optional(),
-    }).strict().optional(),
-    condition: z.object({
-        contains: z.string().optional(),
-        countGreaterThan: z.number().int().optional(),
-    }).strict().optional(),
-    effect: z.object({
-        type: z.enum(["allow", "require-approval", "deny"]),
-        message: z.string().optional(),
-    }).strict(),
-}).strict();
 
 export const ControlPlaneSchema = z.object({
     version: z.string().min(1),
@@ -191,7 +161,6 @@ export const ControlPlaneSchema = z.object({
     }).strict(),
     policy: z.object({
         rules: z.array(DSLRuleSchema).default([]),
-        approvalRules: z.array(ApprovalPolicyRuleSchema).default([]),
         priorityOverrides: z.object({
             AST: z.number().finite().optional(),
             semantic: z.number().finite().optional(),
@@ -228,6 +197,5 @@ export const ControlPlaneSchema = z.object({
 export type ControlPlane = z.infer<typeof ControlPlaneSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
-export type ApprovalPolicyRule = z.infer<typeof ApprovalPolicyRuleSchema>;
 export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
 export type PolicyEnvironment = z.infer<typeof PolicyEnvironmentSchema>;

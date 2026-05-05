@@ -50,7 +50,6 @@ export type ChoirConfig = {
   };
   policy: {
     rules: ControlPlane["policy"]["rules"];
-    approvalRules: ControlPlane["policy"]["approvalRules"];
     priorityOverrides?: ControlPlane["policy"]["priorityOverrides"];
   };
   execution: {
@@ -258,7 +257,6 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
     },
     policy: {
       rules: [...config.policy.rules],
-      approvalRules: [...config.policy.approvalRules].sort((left, right) => left.id.localeCompare(right.id)),
       ...(config.policy.priorityOverrides ? { priorityOverrides: config.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -281,7 +279,6 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     },
     policy: {
       rules: control.policy.rules,
-      approvalRules: control.policy.approvalRules,
       ...(control.policy.priorityOverrides ? { priorityOverrides: control.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -303,7 +300,6 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     },
     policy: {
       rules: canonical.policy.rules,
-      approvalRules: canonical.policy.approvalRules,
       ...(canonical.policy.priorityOverrides ? { priorityOverrides: canonical.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -511,7 +507,6 @@ export function serializeYAML(config: ChoirConfig): string {
     },
     policy: {
       rules: [...control.policy.rules],
-      approvalRules: [...control.policy.approvalRules].sort((left, right) => left.id.localeCompare(right.id)),
       ...(control.policy.priorityOverrides ? { priorityOverrides: control.policy.priorityOverrides } : {}),
     },
     execution: {

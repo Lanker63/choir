@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import { ApprovalPolicyRule, PolicyEnvironment, PolicyRole } from "../schema.js";
+import { PolicyEnvironment, PolicyRole } from "../schema.js";
 import { ChoirConfig, canonicalizeConfig } from "./dslYamlCompiler.js";
 
 export type Role = PolicyRole;
@@ -43,6 +43,27 @@ export type PolicyRule = {
 
 export type PolicySet = {
   rules: PolicyRule[];
+};
+
+export type ApprovalPolicyRuleInput = {
+  id: string;
+  match: {
+    path?: string;
+    operation?: "add" | "remove" | "update";
+    macro?: string;
+  };
+  scope?: {
+    roles?: Role[];
+    environments?: Environment[];
+  };
+  condition?: {
+    contains?: string;
+    countGreaterThan?: number;
+  };
+  effect: {
+    type: "allow" | "require-approval" | "deny";
+    message?: string;
+  };
 };
 
 export type YAMLDiff = {
@@ -446,7 +467,7 @@ export function hashDiff(diffs: YAMLDiff[]): string {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
-export function toPolicySet(rules: ApprovalPolicyRule[]): PolicySet {
+export function toPolicySet(rules: ApprovalPolicyRuleInput[]): PolicySet {
   return {
     rules: [...rules]
       .map((rule) => ({
