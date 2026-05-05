@@ -17,8 +17,15 @@ import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
+import {
+  buildConflictMatrix,
+  buildExecutionGraph,
+  buildExecutionPlan,
+  computeExecutionLayers,
+  runExecutionPlan,
+} from "../../core/scheduler.js";
 import { createEmptyStatePlane } from "../../core/state.js";
-import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema } from "../../schema.js";
+import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
   return {
@@ -45,6 +52,36 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     execution: {
       plans: [],
     },
+  };
+}
+
+function makeTask(
+  id: string,
+  type: Task["type"],
+  options: {
+    title?: string;
+    files?: string[];
+    dependsOn?: string[];
+  } = {}
+): Task {
+  return {
+    id,
+    title: options.title ?? id,
+    type,
+    ...(options.files ? { scope: { files: options.files } } : {}),
+    ...(options.dependsOn ? { dependsOn: options.dependsOn } : { dependsOn: [] }),
+    successCriteria: ["ok"],
+  };
+}
+
+function makePlan(id: string, tasks: Task[]): Plan {
+  return {
+    id,
+    title: id,
+    derivedFrom: "goal",
+    goalRefs: [id],
+    tasks,
+    status: "draft",
   };
 }
 
@@ -585,6 +622,101 @@ const pass4: TestPass = {
 
         const thirdExecutable = getExecutableTasks(plan, state).map((task) => task.id);
         assert.deepStrictEqual(thirdExecutable, ["t-validate"]);
+      },
+    },
+    {
+      id: "4.6",
+      name: "global execution graph flattens and normalizes dependencies",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [
+            makeTask("t-analysis", "analysis"),
+            makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          ]),
+          makePlan("plan-b", [
+            makeTask("t-analysis", "analysis"),
+            makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/b.ts"] }),
+          ]),
+        ];
+
+        const graph = buildExecutionGraph(plans);
+        assert.ok(graph.nodes.has("plan-a:t-analysis"));
+        assert.ok(graph.nodes.has("plan-b:t-refactor"));
+        assert.deepStrictEqual(graph.nodes.get("plan-a:t-refactor")?.dependencies, ["plan-a:t-analysis"]);
+      },
+    },
+    {
+      id: "4.7",
+      name: "global execution graph topological layers are deterministic",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [
+            makeTask("t-analysis", "analysis"),
+            makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          ]),
+          makePlan("plan-b", [
+            makeTask("t-analysis", "analysis"),
+            makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/b.ts"] }),
+          ]),
+        ];
+
+        const graph = buildExecutionGraph(plans);
+        const layers = computeExecutionLayers(graph);
+
+        assert.deepStrictEqual(layers[0]?.map((node) => node.id), ["plan-a:t-analysis", "plan-b:t-analysis"]);
+        assert.deepStrictEqual(layers[1]?.map((node) => node.id), ["plan-a:t-refactor", "plan-b:t-refactor"]);
+      },
+    },
+    {
+      id: "4.8",
+      name: "conflict matrix blocks overlapping file mutations",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/shared.ts"] })]),
+          makePlan("plan-b", [makeTask("t-refactor", "refactor", { files: ["src/shared.ts"] })]),
+        ];
+
+        const graph = buildExecutionGraph(plans);
+        const matrix = buildConflictMatrix(graph);
+
+        assert.ok(matrix.get("plan-a:t-refactor")?.has("plan-b:t-refactor"));
+        assert.ok(matrix.get("plan-b:t-refactor")?.has("plan-a:t-refactor"));
+      },
+    },
+    {
+      id: "4.9",
+      name: "execution planner enables safe parallel batches",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/a.ts"] })]),
+          makePlan("plan-b", [makeTask("t-refactor", "refactor", { files: ["src/b.ts"] })]),
+        ];
+
+        const first = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+        const second = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+
+        assert.deepStrictEqual(first.executionPlan, second.executionPlan);
+        assert.strictEqual(first.executionPlan.batches.length, 1);
+        assert.strictEqual(first.executionPlan.batches[0]?.parallelizable, true);
+        assert.strictEqual(first.executionPlan.batches[0]?.workUnits.length, 2);
+
+        const results = await runExecutionPlan(first.executionPlan, async (unit) => unit.id);
+        assert.strictEqual(results.length, 2);
+      },
+    },
+    {
+      id: "4.10",
+      name: "execution planner separates conflicting tasks into distinct batches",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/shared.ts"] })]),
+          makePlan("plan-b", [makeTask("t-refactor", "refactor", { files: ["src/shared.ts"] })]),
+        ];
+
+        const planned = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+
+        assert.strictEqual(planned.executionPlan.batches.length, 2);
+        assert.ok(planned.executionPlan.batches.every((batch) => batch.workUnits.length === 1));
       },
     },
   ],

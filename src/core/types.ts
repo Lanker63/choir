@@ -55,6 +55,15 @@ export type ExecutionTrace = {
   decisions: string[];
 };
 
+export type SchedulerTrace = {
+  totalPlans: number;
+  totalTasks: number;
+  totalBatches: number;
+  parallelBatches: number;
+  conflictsAvoided: number;
+  decisions: string[];
+};
+
 export type LegacySeverity = "error" | "warn" | "warning" | "info" | "information" | "hint";
 
 export function normalizeDiagnosticSeverity(severity: LegacySeverity): DiagnosticSeverity {
