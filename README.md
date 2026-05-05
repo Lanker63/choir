@@ -354,6 +354,12 @@ Primary interface from VS Code Chat:
 
 - `@choir`
 
+Participant exposure contract:
+
+- Only one chat participant is contributed: `@choir` (`id: choir`).
+- Internal role modules (`architect`, `analyst`, `conductor`, `enforcer`) are not directly user-addressable participants.
+- Routing from `@choir` to internal role logic is deterministic and implementation-defined.
+
 Control-plane mutation commands are strict DSL (alpha mode, no natural-language command parsing).
 
 ### Interactive Init Wizard (`@choir init`)
@@ -903,7 +909,7 @@ Interactive init wizard session state (resumable) is persisted in `.choir/init-s
 |---|---|
 | No diagnostics appear | Ensure a workspace is open and `.choir/choir.config.yaml` exists. If missing, run `@choir init` or create it manually. |
 | `choir.config.yaml` parse error | Check Problems for schema errors; ensure YAML matches documented schema and canonical severity values. |
-| Chat participants not responding | Confirm VS Code 1.90+ and extension enabled in the active workspace. |
+| Chat participants not responding | Confirm VS Code 1.90+ and extension enabled in the active workspace; only `@choir` should be visible. |
 | Rule Editor appears blank | Open the Choir activity view, then run `Choir: Open Rule Editor` from Command Palette. |
 | No DSL completion/hover in `.choir` files | Confirm the file extension is `.choir`, language mode is `Choir DSL`, and the extension is enabled in the workspace. |
 | `@choir init` exits unexpectedly | Re-run `@choir init`; if state was paused, choose Resume from the saved wizard prompt. |

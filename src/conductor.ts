@@ -43,7 +43,7 @@ import {
 export type TaskResult = {
   taskId: string;
   ok: boolean;
-  route: "choir.analyst" | "choir.enforcer" | "stub";
+  route: "analyst" | "enforcer" | "stub";
   output: unknown;
   decisions: string[];
 };
@@ -413,12 +413,12 @@ export async function executeTask(
     return {
       taskId: task.id,
       ok: true,
-      route: "choir.analyst",
+      route: "analyst",
       output: {
         summary,
         hotspots,
       },
-      decisions: [`Task ${task.id} routed to choir.analyst`],
+      decisions: [`Task ${task.id} routed to analyst`],
     };
   }
 
@@ -444,7 +444,7 @@ export async function executeTask(
     return {
       taskId: task.id,
       ok: false,
-      route: "choir.enforcer",
+      route: "enforcer",
       output: {
         message: "No workspace root available for enforcer execution.",
       },
@@ -458,14 +458,14 @@ export async function executeTask(
   return {
     taskId: task.id,
     ok,
-    route: "choir.enforcer",
+    route: "enforcer",
     output: {
       diagnostics: pipelineResult.diagnostics.length,
       blockingDiagnostics,
       appliedPatches: pipelineResult.appliedPatches.filter((patch) => patch.success).length,
     },
     decisions: [
-      `Task ${task.id} routed to choir.enforcer`,
+      `Task ${task.id} routed to enforcer`,
       `Enforcer diagnostics=${pipelineResult.diagnostics.length}, blocking=${blockingDiagnostics}`,
     ],
   };
@@ -850,7 +850,7 @@ export async function executeSelectedPlansWithPreviewGuard(
 
   const expectedHash = normalizePreviewHash(options.previewId);
   if (!expectedHash) {
-    throw new Error("Execution requires a preview hash. Run: @choir.conductor preview [planId], then execute <planId> <previewHash>.");
+    throw new Error("Execution requires a preview hash. Run: @choir preview [planId], then execute <planId> <previewHash>.");
   }
 
   const state = readStatePlane(options.root) ?? createEmptyStatePlane();

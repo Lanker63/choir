@@ -67,12 +67,18 @@ User-facing entry point is a single chat agent:
 
 - `@choir`
 
+Participant exposure constraints:
+
+- Exactly one contributed chat participant: `@choir` (`id: choir`).
+- Internal roles are module boundaries, not user-facing participants.
+- Deterministic routing is required from `@choir` input to internal role execution path.
+
 Internal roles remain isolated modules:
 
-- `choir.architect`
-- `choir.analyst`
-- `choir.enforcer`
-- `choir.conductor`
+- `architect`
+- `analyst`
+- `enforcer`
+- `conductor`
 
 Compiler model:
 

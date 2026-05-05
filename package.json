@@ -12,10 +12,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onChatParticipant:choir.analyst",
-    "onChatParticipant:choir.architect",
-    "onChatParticipant:choir.enforcer",
-    "onChatParticipant:choir.conductor"
+    "onChatParticipant:choir"
   ],
   "main": "./out/vscode/extension.js",
   "bin": {
@@ -82,31 +79,10 @@
     },
     "chatParticipants": [
       {
-        "id": "choir.analyst",
-        "name": "Choir-Analyst",
-        "fullName": "Choir Analyst",
-        "description": "Analyzes the project structure and provides insights to the choir.",
-        "isSticky": true
-      },
-      {
-        "id": "choir.architect",
-        "name": "Choir-Architect",
-        "fullName": "Choir Architect",
-        "description": "Designs the overall architecture and strategy for the project.",
-        "isSticky": true
-      },
-      {
-        "id": "choir.enforcer",
-        "name": "Choir-Enforcer",
-        "fullName": "Choir Enforcer",
-        "description": "Ensures that the project adheres to the defined strategy and architecture.",
-        "isSticky": true
-      },
-      {
-        "id": "choir.conductor",
-        "name": "Choir-Conductor",
-        "fullName": "Choir Conductor",
-        "description": "Builds deterministic plans and coordinates dependency-aware task execution through existing Choir agents.",
+        "id": "choir",
+        "fullName": "Choir",
+        "name": "choir",
+        "description": "Unified orchestration agent for intent, planning, and enforcement",
         "isSticky": true
       }
     ],
