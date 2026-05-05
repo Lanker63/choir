@@ -1,6 +1,6 @@
 # Choir Design Guidelines
 
-Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, and applies speculative execution with rollback-safe transactional batches.
+Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, applies speculative execution with rollback-safe transactional batches, and records immutable audit evidence for compliance reporting.
 
 ---
 
@@ -78,7 +78,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -90,6 +90,12 @@ DSL command grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<audit> ::= "audit" "log"
+          | "audit" "report"
+          | "audit" "query" [<audit-filters>]
+
+<audit-filters> ::= <audit-filter> ("," <audit-filter>)*
+<audit-filter> ::= ("role" | "environment" | "action" | "from" | "to") "=" (<identifier> | <string>)
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
@@ -189,6 +195,9 @@ Supported command surface (via `@choir`):
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir audit log`
+- `choir audit report`
+- `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
 - `choir macro list`
 - `choir macro show <macroId>`
 - `choir macro <macroId> [key="value", ...]`
@@ -206,13 +215,22 @@ Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
-- `analyze|preview|execute|status` are non-mutating in YAML compiler mode.
+- `analyze|preview|execute|status|audit` are non-mutating in YAML compiler mode.
 
 Projection contract:
 
 - `export dsl` is non-mutating and projects authoritative YAML into deterministic DSL text.
 - Projection ordering is stable and diff-friendly.
 - Unsupported YAML fields must be skipped with explicit warnings.
+
+Audit and compliance contract:
+
+- Audit storage is append-only in `.choir/audit.log.jsonl`.
+- Every record includes a deterministic `chainIndex`, `previousHash`, and `hash` to form an immutable hash chain (`GENESIS` anchor for first record).
+- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`.
+- Querying is deterministic and supports filters by role, environment, action, and bounded time range (`from` + `to`).
+- Compliance reports are deterministic summaries over queried records with anomaly detection and export formats `json`, `yaml`, and `pdf`.
+- Report exports are written under `.choir/reports/`.
 
 Policy gate contract:
 
@@ -613,6 +631,8 @@ For identical inputs, Choir must produce identical:
 - Execution graph/layers/batches
 - Conflict decisions
 - Transaction outcomes
+- Audit chain ordering and record hashes
+- Compliance report summaries for identical filter windows
 
 Non-negotiable safeguards:
 
@@ -623,6 +643,7 @@ Non-negotiable safeguards:
 5. Execution is blocked unless preview hash is explicitly approved and revalidated
 6. Adaptive strategy feedback is persisted only in `.choir/state.json` (`strategyHistory`)
 7. Policy context cannot be user-spoofed: role is system-derived and environment is runtime-derived
+8. Audit evidence is append-only, hash-chained, and emitted for all significant policy and execution decisions
 
 ---
 
@@ -632,4 +653,5 @@ Non-negotiable safeguards:
 YAML = intent + policy + execution plans (authoritative)
 JSON = computed facts + execution runtime state (derived)
 Chat = orchestration interface (non-authoritative)
+Audit = immutable compliance evidence (append-only, hash-chained)
 ```

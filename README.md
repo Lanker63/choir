@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, and coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor).
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), and records immutable audit/compliance evidence for significant actions.
 
 ---
 
@@ -357,7 +357,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -369,6 +369,13 @@ Grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<audit> ::= "audit" "log"
+          | "audit" "report"
+          | "audit" "query" [<audit-filters>]
+
+<audit-filters> ::= <audit-filter> ("," <audit-filter>)*
+
+<audit-filter> ::= ("role" | "environment" | "action" | "from" | "to") "=" (<identifier> | <string>)
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
@@ -395,7 +402,7 @@ Choir ships first-class VS Code language support for the DSL.
   - `*.choir` is associated to language id `choir`.
 - Syntax highlighting:
   - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
-  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `macro`, `then`, and related terminals).
+  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
 - Language configuration:
   - Line comments use `#`.
   - Bracket pairs: `{}`, `()`.
@@ -408,7 +415,7 @@ Choir ships first-class VS Code language support for the DSL.
   - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
   - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
 - Snippets:
-  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, and `macro` commands.
+  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `audit log`, `audit report`, `audit query`, and `macro` commands.
 - Editor trace:
   - Command Palette: `Choir: Show DSL Editor Trace`
   - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
@@ -452,6 +459,9 @@ Supported commands:
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir audit log`
+- `choir audit report`
+- `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
 - `choir macro list`
 - `choir macro show <macroId>`
 - `choir macro <macroId> [key="value", ...]`
@@ -476,7 +486,7 @@ Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
-- `choir analyze|preview|execute|status`: accepted by grammar, non-mutating in YAML compiler mode
+- `choir analyze|preview|execute|status|audit ...`: accepted by grammar, non-mutating in YAML compiler mode
 
 YAML -> DSL projection behavior:
 
@@ -547,6 +557,47 @@ Idempotency guarantees:
 
 ---
 
+## Audit and Compliance Reporting
+
+Choir records immutable, explainable audit evidence for significant control-plane and execution actions.
+
+Audit storage and integrity:
+
+- Append-only audit log file: `.choir/audit.log.jsonl`
+- Each record is hash-chained with deterministic fields: `chainIndex`, `previousHash`, and `hash`
+- First record uses `GENESIS` as `previousHash`
+- Chain integrity is validated when reading audit data
+
+Audited action types include:
+
+- `policy-evaluation`
+- `compile-dsl`
+- `approval-granted`
+- `approval-rejected`
+- `execute-plan`
+
+Audit query/report command surface:
+
+- `choir audit log`
+  - Shows recent audit events with role, action, and result
+- `choir audit query role=architect, environment=ci, action=compile-dsl`
+  - Filters are deterministic and support: `role`, `environment`, `action`, `from`, `to`
+  - Time-range filters require both `from` and `to`
+- `choir audit report`
+  - Generates deterministic compliance summaries
+  - Exports report artifacts to:
+    - `.choir/reports/compliance-report.json`
+    - `.choir/reports/compliance-report.yaml`
+    - `.choir/reports/compliance-report.pdf`
+
+Report model highlights:
+
+- Summary fields: `totalEvents`, `approvalsRequired`, `denials`
+- Findings fields: `violations`, `anomalies`
+- Anomalies are derived from failed audit events
+
+---
+
 ## Rule Editor
 
 The **Choir** activity bar icon opens two views:
@@ -572,6 +623,10 @@ Derived system state is written to `.choir/state.json`, including:
 - diagnostics and metrics
 - execution runtime state (task status, task results, history, preview approvals)
 - strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
+
+Audit evidence is persisted in `.choir/audit.log.jsonl`.
+
+Compliance reports are exported to `.choir/reports/` when `choir audit report` is invoked.
 
 Strategy memory is persisted separately in `.choir/memory.json`.
 

@@ -1,5 +1,6 @@
 import {
   CHOIR_ACTION_KEYWORDS,
+  CHOIR_AUDIT_META_KEYWORDS,
   CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_DEFINE_TYPE_KEYWORDS,
   CHOIR_EXPORT_FORMAT_KEYWORD,
@@ -48,6 +49,11 @@ type ParserState =
   | "approve-id"
   | "reject-id"
   | "policy-status"
+  | "audit-next"
+  | "audit-query-key"
+  | "audit-query-equals"
+  | "audit-query-value"
+  | "audit-query-after-filter"
   | "macro-next"
   | "macro-show-id"
   | "macro-id"
@@ -75,6 +81,7 @@ type CompletionLexResult = {
 const DSL_KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
   ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_AUDIT_META_KEYWORDS,
   ...CHOIR_MACRO_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
@@ -106,6 +113,10 @@ const KEYWORD_HOVER: Record<string, string> = {
   all: "Export all representable DSL sections.",
   intent: "Export only intent section.",
   policy: "Export policy section or query policy status.",
+  audit: "Read audit logs, query records, or generate compliance reports.",
+  log: "Read immutable audit event records.",
+  report: "Generate deterministic compliance report from audit records.",
+  query: "Filter audit events by role, environment, action, or time range.",
   plans: "Export plan section.",
   approve: "Approve a pending policy-gated diff id.",
   reject: "Reject a pending policy-gated diff id.",
@@ -268,6 +279,8 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
       || state === "preview-tail"
       || state === "execute-tail"
       || state === "export-section-or-end"
+      || state === "audit-query-key"
+      || state === "audit-query-after-filter"
       || state === "macro-args-or-end"
       || state === "macro-after-arg"
     ) {
@@ -289,6 +302,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
 
     if (state === "macro-arg-value") {
       return ["macro-after-arg"];
+    }
+
+    if (state === "audit-query-value") {
+      return ["audit-query-after-filter"];
     }
 
     return [];
@@ -313,6 +330,14 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["macro-arg-equals"];
     }
 
+    if (state === "audit-query-key") {
+      return ["audit-query-equals"];
+    }
+
+    if (state === "audit-query-value") {
+      return ["audit-query-after-filter"];
+    }
+
     return [];
   }
 
@@ -325,7 +350,29 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["macro-args-or-end"];
     }
 
+    if (state === "audit-query-equals" && token.value === "=") {
+      return ["audit-query-value"];
+    }
+
+    if (state === "audit-query-after-filter" && token.value === ",") {
+      return ["audit-query-key"];
+    }
+
     return [];
+  }
+
+  if (token.type === "keyword") {
+    if (state === "audit-query-key") {
+      if (token.value === "role" || token.value === "environment" || token.value === "action" || token.value === "from" || token.value === "to") {
+        return ["audit-query-equals"];
+      }
+
+      return [];
+    }
+
+    if (state === "audit-query-value") {
+      return ["audit-query-after-filter"];
+    }
   }
 
   if (state === "expect-root") {
@@ -369,7 +416,23 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["macro-next"];
     }
 
+    if (token.value === "audit") {
+      return ["audit-next"];
+    }
+
     return ["policy-status"];
+  }
+
+  if (state === "audit-next") {
+    if (token.value === "log" || token.value === "report") {
+      return ["expect-then-or-end"];
+    }
+
+    if (token.value === "query") {
+      return ["audit-query-key", "expect-then-or-end"];
+    }
+
+    return [];
   }
 
   if (state === "macro-next") {
@@ -472,6 +535,33 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
 
   if (state === "policy-status") {
     return [{ type: "keyword", value: CHOIR_POLICY_STATUS_KEYWORD }];
+  }
+
+  if (state === "audit-next") {
+    return CHOIR_AUDIT_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
+  }
+
+  if (state === "audit-query-key") {
+    return [
+      { type: "keyword", value: "role" },
+      { type: "keyword", value: "environment" },
+      { type: "keyword", value: "action" },
+      { type: "keyword", value: "from" },
+      { type: "keyword", value: "to" },
+      { type: "identifier" },
+    ];
+  }
+
+  if (state === "audit-query-equals") {
+    return [{ type: "symbol", value: "=" }];
+  }
+
+  if (state === "audit-query-value") {
+    return [{ type: "identifier" }, { type: "string" }];
+  }
+
+  if (state === "audit-query-after-filter") {
+    return [{ type: "symbol", value: "," }];
   }
 
   if (state === "macro-next") {

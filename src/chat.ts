@@ -1,6 +1,12 @@
 import * as vscode from "vscode";
+import fs from "fs";
 import path from "path";
 import { getControlPlanePath, readControlPlane } from "./choirManager.js";
+import {
+    exportReport,
+    generateReport,
+    queryAudit,
+} from "./core/audit.js";
 import {
     approveDiff,
     CompilationTrace,
@@ -85,6 +91,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir approve <diffId>",
         "- choir reject <diffId>",
         "- choir policy status",
+        "- choir audit log",
+        "- choir audit report",
+        "- choir audit query role=architect",
     ].join("\n"));
 }
 
@@ -125,12 +134,15 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "approve"
                     || action.type === "reject"
                     || action.type === "policy-status"
+                    || action.type === "audit-log"
+                    || action.type === "audit-report"
+                    || action.type === "audit-query"
                     || action.type === "macro-list"
                     || action.type === "macro-show"
                     || action.type === "macro-run"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|macro` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|audit|macro` cannot be chained with `then`.");
                 return;
             }
 
@@ -315,8 +327,124 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
+                if (parsed.ast.type === "audit-log") {
+                    const records = queryAudit(workspaceRoot, {});
+                    if (records.length === 0) {
+                        stream.markdown("Audit log is empty.");
+                        return;
+                    }
+
+                    const recent = records.slice(-20);
+                    const lines = recent.map((record) => {
+                        const event = record.auditEvent;
+                        return `- ${event.timestamp} | ${event.actor.role} | ${event.action} | ${event.result}`;
+                    });
+
+                    stream.markdown([
+                        `Audit log (${records.length} total events):`,
+                        ...lines,
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "audit-query") {
+                    const role = parsed.ast.filters.role;
+                    const environment = parsed.ast.filters.environment;
+                    const action = parsed.ast.filters.action;
+                    const from = parsed.ast.filters.from;
+                    const to = parsed.ast.filters.to;
+
+                    if (role && role !== "architect" && role !== "analyst" && role !== "conductor" && role !== "enforcer") {
+                        stream.markdown(`Invalid audit query role: ${role}`);
+                        return;
+                    }
+
+                    if (environment && environment !== "local" && environment !== "ci" && environment !== "staging" && environment !== "production") {
+                        stream.markdown(`Invalid audit query environment: ${environment}`);
+                        return;
+                    }
+
+                    if ((from && !to) || (!from && to)) {
+                        stream.markdown("Audit query requires both `from` and `to` when filtering by time range.");
+                        return;
+                    }
+
+                    const roleFilter = role === "architect" || role === "analyst" || role === "conductor" || role === "enforcer"
+                        ? role
+                        : undefined;
+
+                    const environmentFilter = environment === "local"
+                        || environment === "ci"
+                        || environment === "staging"
+                        || environment === "production"
+                        ? environment
+                        : undefined;
+
+                    const records = queryAudit(workspaceRoot, {
+                        ...(roleFilter ? { role: roleFilter } : {}),
+                        ...(environmentFilter ? { environment: environmentFilter } : {}),
+                        ...(action ? { action } : {}),
+                        ...(from && to ? { timeRange: [from, to] as [string, string] } : {}),
+                    });
+
+                    if (records.length === 0) {
+                        stream.markdown("Audit query matched 0 records.");
+                        return;
+                    }
+
+                    const lines = records.slice(-20).map((record) => {
+                        const event = record.auditEvent;
+                        return `- ${event.timestamp} | ${event.actor.role} | ${event.action} | ${record.decisionTrace.finalDecision}`;
+                    });
+
+                    stream.markdown([
+                        `Audit query matched ${records.length} record(s):`,
+                        ...lines,
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "audit-report") {
+                    const report = generateReport(workspaceRoot, {});
+                    const reportsDir = path.join(workspaceRoot, ".choir", "reports");
+                    fs.mkdirSync(reportsDir, { recursive: true });
+
+                    const jsonPath = path.join(reportsDir, "compliance-report.json");
+                    const yamlPath = path.join(reportsDir, "compliance-report.yaml");
+                    const pdfPath = path.join(reportsDir, "compliance-report.pdf");
+
+                    fs.writeFileSync(jsonPath, exportReport(report, "json"), "utf-8");
+                    fs.writeFileSync(yamlPath, exportReport(report, "yaml"), "utf-8");
+                    fs.writeFileSync(pdfPath, exportReport(report, "pdf"), "binary");
+
+                    const recent = report.records.slice(-3).map((record) => {
+                        const event = record.auditEvent;
+                        return `- ${event.actor.role} ${event.action} -> ${record.decisionTrace.finalDecision}`;
+                    });
+
+                    stream.markdown([
+                        "Audit Report:",
+                        "",
+                        `Total Events: ${report.summary.totalEvents}`,
+                        `Approvals Required: ${report.summary.approvalsRequired}`,
+                        `Denied: ${report.summary.denials}`,
+                        `Violations: ${report.findings.violations}`,
+                        `Anomalies: ${report.findings.anomalies}`,
+                        "",
+                        "Recent Activity:",
+                        ...(recent.length > 0 ? recent : ["- none"]),
+                        "",
+                        "Exported:",
+                        "- .choir/reports/compliance-report.json",
+                        "- .choir/reports/compliance-report.yaml",
+                        "- .choir/reports/compliance-report.pdf",
+                    ].join("\n"));
+                    return;
+                }
+
                 const compiled = compileDSLAndWrite(raw, control, controlPath, {
                     workspaceRoot,
+                    actorId: "chat-user",
                 });
 
                 if (compiled.decision === "deny") {

@@ -11,6 +11,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <approve>
   | <reject>
   | <policy-status>
+  | <audit>
   | <macro>
 
 <define> ::= "define" <define-type> <string>
@@ -38,6 +39,14 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <reject> ::= "reject" <identifier>
 
 <policy-status> ::= "policy" "status"
+
+<audit> ::= "audit" "log"
+          | "audit" "report"
+          | "audit" "query" [<audit-filters>]
+
+<audit-filters> ::= <audit-filter> ("," <audit-filter>)*
+
+<audit-filter> ::= ("role" | "environment" | "action" | "from" | "to") "=" (<identifier> | <string>)
 
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
@@ -72,10 +81,12 @@ export const CHOIR_ACTION_KEYWORDS = [
   "approve",
   "reject",
   "policy",
+  "audit",
   "macro",
 ] as const;
 
 export const CHOIR_MACRO_META_KEYWORDS = ["list", "show"] as const;
+export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
 export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "violations", "hotspots"] as const;
@@ -89,6 +100,7 @@ export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 const KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
   ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_AUDIT_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
@@ -159,6 +171,27 @@ export type PolicyStatusNode = {
   type: "policy-status";
 };
 
+export type AuditQueryFilters = {
+  role?: string;
+  environment?: string;
+  action?: string;
+  from?: string;
+  to?: string;
+};
+
+export type AuditLogNode = {
+  type: "audit-log";
+};
+
+export type AuditReportNode = {
+  type: "audit-report";
+};
+
+export type AuditQueryNode = {
+  type: "audit-query";
+  filters: AuditQueryFilters;
+};
+
 export type MacroListNode = {
   type: "macro-list";
 };
@@ -185,6 +218,9 @@ export type ActionNode =
   | ApproveNode
   | RejectNode
   | PolicyStatusNode
+  | AuditLogNode
+  | AuditReportNode
+  | AuditQueryNode
   | MacroListNode
   | MacroShowNode
   | MacroRunNode;
@@ -379,6 +415,8 @@ class Parser {
         return this.parseReject();
       case "policy":
         return this.parsePolicyStatus();
+      case "audit":
+        return this.parseAudit();
       case "macro":
         return this.parseMacro();
       default:
@@ -572,6 +610,60 @@ class Parser {
     return { type: "policy-status" };
   }
 
+  private parseAudit(): AuditLogNode | AuditReportNode | AuditQueryNode {
+    this.expectKeyword("audit");
+    const mode = this.expectIdentifierLike().toLowerCase();
+
+    if (mode === "log") {
+      return { type: "audit-log" };
+    }
+
+    if (mode === "report") {
+      return { type: "audit-report" };
+    }
+
+    if (mode !== "query") {
+      throw new Error("Expected audit command: log|report|query");
+    }
+
+    const filters: AuditQueryFilters = {};
+
+    while (true) {
+      const next = this.peek();
+      if (!next || (next.type === "keyword" && next.value === "then")) {
+        break;
+      }
+
+      const key = this.expectIdentifierLike().toLowerCase();
+      if (key !== "role" && key !== "environment" && key !== "action" && key !== "from" && key !== "to") {
+        throw new Error(`Unsupported audit query filter: ${key}`);
+      }
+
+      this.expectSymbol("=");
+      const value = this.expectIdentifierLikeOrString();
+
+      if (Object.prototype.hasOwnProperty.call(filters, key)) {
+        throw new Error(`Duplicate audit query filter: ${key}`);
+      }
+
+      filters[key] = value;
+
+      if (!this.consumeSymbol(",")) {
+        const afterFilter = this.peek();
+        if (!afterFilter || (afterFilter.type === "keyword" && afterFilter.value === "then")) {
+          break;
+        }
+
+        throw new Error("Expected ',' between audit query filters");
+      }
+    }
+
+    return {
+      type: "audit-query",
+      filters,
+    };
+  }
+
   private expectKeyword(expected: string): void {
     const token = this.take();
     if (!token || token.type !== "keyword" || token.value !== expected) {
@@ -626,6 +718,27 @@ class Parser {
     }
 
     return token.value;
+  }
+
+  private expectIdentifierLikeOrString(): string {
+    const token = this.take();
+    if (!token) {
+      throw new Error("Expected identifier or quoted string, found <end>");
+    }
+
+    if (token.type === "string") {
+      return token.value;
+    }
+
+    if (token.type === "identifier" || token.type === "keyword") {
+      if (!CHOIR_IDENTIFIER_PATTERN.test(token.value)) {
+        throw new Error(`Invalid identifier: ${token.value}`);
+      }
+
+      return token.value;
+    }
+
+    throw new Error(`Expected identifier or quoted string, found ${token.type}:${token.value}`);
   }
 
   private expectSymbol(expected: "=" | ","): void {
@@ -709,6 +822,21 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "policy-status") {
+    return true;
+  }
+
+  if (node.type === "audit-log" || node.type === "audit-report") {
+    return true;
+  }
+
+  if (node.type === "audit-query") {
+    const allowed = new Set(["role", "environment", "action", "from", "to"]);
+    for (const [key, value] of Object.entries(node.filters)) {
+      if (!allowed.has(key) || typeof value !== "string" || value.length === 0) {
+        return false;
+      }
+    }
+
     return true;
   }
 
@@ -820,6 +948,21 @@ async function compileAction<TContext>(
     case "policy-status":
       trace.steps.push("system.policy.status");
       trace.compiledActions.push("system.policy.status");
+      return;
+
+    case "audit-log":
+      trace.steps.push("system.audit.log");
+      trace.compiledActions.push("system.audit.log");
+      return;
+
+    case "audit-report":
+      trace.steps.push("system.audit.report");
+      trace.compiledActions.push("system.audit.report");
+      return;
+
+    case "audit-query":
+      trace.steps.push("system.audit.query");
+      trace.compiledActions.push("system.audit.query");
       return;
 
     case "macro-list":

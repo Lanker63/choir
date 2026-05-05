@@ -5,6 +5,8 @@ import ts from "typescript";
 import { runConflictResolutionEngine } from "../fix/conflictEngine.js";
 import { Fix, FixConflict, Patch, isTextPatch } from "../fix/types.js";
 import { ControlPlane, Plan, Task } from "../schema.js";
+import { recordAudit } from "./audit.js";
+import { detectEnvironment } from "./policyEngine.js";
 import { createEmptyStatePlane, StatePlane, readStatePlane, persistStatePlane } from "./state.js";
 import { Diagnostic, SchedulerTrace, TransactionTrace } from "./types.js";
 import { locationToOffsetRange } from "./diagnostics.js";
@@ -1495,6 +1497,39 @@ async function executeBatchTransaction(
     ...(rollbackReason ? { rollbackReason } : {}),
     durationMs: Date.now() - startTime,
   };
+
+  const auditRoot = options.root ?? process.cwd();
+  recordAudit(auditRoot, {
+    auditEvent: {
+      id: "",
+      timestamp: "",
+      actor: {
+        role: "conductor",
+      },
+      environment: detectEnvironment(),
+      action: "execute-plan",
+      resource: batch.id,
+      result: tx.status === "committed" ? "success" : "failure",
+      metadata: {
+        transactionId: tx.id,
+        batchId: batch.id,
+        status: tx.status,
+        rollbackReason: rollbackReason ?? null,
+      },
+    },
+    decisionTrace: {
+      policiesEvaluated: [],
+      finalDecision: tx.status === "committed" ? "allow" : "deny",
+      reasoning: tx.status === "committed"
+        ? "Transactional execution committed successfully"
+        : "Transactional execution failed or rolled back",
+    },
+    executionTrace: {
+      planId: batch.id,
+      patchesApplied: tx.status === "committed" ? tx.proposedPatches.length : 0,
+      filesChanged: tx.status === "committed" ? tx.touchedFiles.length : 0,
+    },
+  });
 
   return {
     workUnitResults,

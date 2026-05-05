@@ -14,6 +14,10 @@ import {
   upsertPendingApproval,
 } from "./state.js";
 import {
+  DecisionTrace,
+  recordAudit,
+} from "./audit.js";
+import {
   AST,
   ActionNode,
   parse,
@@ -139,6 +143,74 @@ function inferPolicyRoot(controlPath: string, workspaceRoot?: string): string {
   }
 
   return path.dirname(controlPath);
+}
+
+function toDecisionTrace(
+  policyTrace: {
+    policyDslTrace: Array<{
+      policyId: string;
+      source: "org" | "repo" | "environment";
+      matched: boolean;
+      effect: "allow" | "require-approval" | "deny";
+    }>;
+    decision: "allow" | "require-approval" | "deny";
+  },
+  reasoning: string
+): DecisionTrace {
+  return {
+    policiesEvaluated: [...policyTrace.policyDslTrace]
+      .map((entry) => ({
+        policyId: entry.policyId,
+        source: entry.source,
+        matched: entry.matched,
+        effect: entry.effect,
+      }))
+      .sort((left, right) =>
+        left.source.localeCompare(right.source)
+        || left.policyId.localeCompare(right.policyId)
+      ),
+    finalDecision: policyTrace.decision,
+    reasoning,
+  };
+}
+
+function writeAuditEvent(
+  root: string,
+  event: {
+    role: Role;
+    actorId?: string;
+    environment: Environment;
+    action: string;
+    resource: string;
+    diff?: import("./policyEngine.js").YAMLDiff[];
+    result: "success" | "failure";
+    metadata?: Record<string, unknown>;
+    decisionTrace: DecisionTrace;
+    executionTrace?: {
+      planId: string;
+      patchesApplied: number;
+      filesChanged: number;
+    };
+  }
+): void {
+  recordAudit(root, {
+    auditEvent: {
+      id: "",
+      timestamp: "",
+      actor: {
+        role: event.role,
+        ...(event.actorId ? { id: event.actorId } : {}),
+      },
+      environment: event.environment,
+      action: event.action,
+      resource: event.resource,
+      ...(event.diff ? { diff: event.diff } : {}),
+      result: event.result,
+      ...(event.metadata ? { metadata: event.metadata } : {}),
+    },
+    decisionTrace: event.decisionTrace,
+    ...(event.executionTrace ? { executionTrace: event.executionTrace } : {}),
+  });
 }
 
 function sortedUnique(values: string[]): string[] {
@@ -459,6 +531,7 @@ export function compileDSLAndWrite(
   controlPath: string,
   options?: {
     workspaceRoot?: string;
+    actorId?: string;
   }
 ): {
   updatedControlPlane: ControlPlane;
@@ -496,113 +569,244 @@ export function compileDSLAndWrite(
     };
   };
 } {
-  const result = compileDSL(input, controlPlane, options);
+  const auditRoot = inferPolicyRoot(controlPath, options?.workspaceRoot);
 
-  const role = inferRoleFromAST(result.trace.ast);
-  const environment = detectEnvironment();
-  const ctx: ExecutionContext = {
-    role,
-    environment,
-  };
+  try {
+    const result = compileDSL(input, controlPlane, options);
 
-  const actions = result.trace.ast.type === "sequence"
-    ? result.trace.ast.actions
-    : [result.trace.ast];
-  const requiredCapabilities = Array.from(new Set(actions.flatMap((action) => capabilitiesForAction(action))));
-  for (const capability of requiredCapabilities) {
-    validateRole(ctx, capability);
-  }
-
-  if (!result.changed) {
-    return {
-      ...result,
-      decision: "no-change",
-      policyTrace: {
-        role: ctx.role,
-        environment: ctx.environment,
-        diffCount: 0,
-        rulesMatched: [],
-        requiresApproval: false,
-        denied: false,
-        decision: "allow",
-        policyDslTrace: [],
-        inheritanceTrace: {
-          matchedRules: [],
-          finalDecision: "allow",
-        },
-      },
+    const role = inferRoleFromAST(result.trace.ast);
+    const environment = detectEnvironment();
+    const ctx: ExecutionContext = {
+      role,
+      environment,
     };
-  }
 
-  const beforeConfig = controlPlaneToChoirConfig(controlPlane);
-  const afterConfig = controlPlaneToChoirConfig(result.updatedControlPlane);
-  const diffs = computeDiff(beforeConfig, afterConfig);
-  const diffHash = hashDiff(diffs);
-
-  const policyRoot = inferPolicyRoot(controlPath, options?.workspaceRoot);
-  const policySet = loadPolicies(policyRoot, environment);
-  const policyEvaluation = evaluatePolicies(diffs, policySet, ctx);
-
-  if (!policyEvaluation.result.allowed) {
-    return {
-      ...result,
-      decision: "deny",
-      diffHash,
-      policyResult: policyEvaluation.result,
-      policyTrace: policyEvaluation.trace,
-    };
-  }
-
-  const workspaceRoot = options?.workspaceRoot;
-  if (policyEvaluation.result.requiresApproval) {
-    if (!workspaceRoot) {
-      return {
-        ...result,
-        decision: "require-approval",
-        diffHash,
-        pendingApprovalId: `diff-${diffHash.slice(0, 12)}`,
-        policyResult: policyEvaluation.result,
-        policyTrace: policyEvaluation.trace,
-      };
+    const actions = result.trace.ast.type === "sequence"
+      ? result.trace.ast.actions
+      : [result.trace.ast];
+    const requiredCapabilities = Array.from(new Set(actions.flatMap((action) => capabilitiesForAction(action))));
+    for (const capability of requiredCapabilities) {
+      validateRole(ctx, capability);
     }
 
-    const approved = hasApprovalForDiff(workspaceRoot, diffHash);
-    if (!approved) {
-      const pendingId = `diff-${diffHash.slice(0, 12)}`;
-      upsertPendingApproval(workspaceRoot, {
-        id: pendingId,
-        diffHash,
-        diffs,
-        createdAt: new Date().toISOString(),
-        command: input,
+    if (!result.changed) {
+      writeAuditEvent(auditRoot, {
+        role: ctx.role,
+        actorId: options?.actorId,
+        environment: ctx.environment,
+        action: "compile-dsl",
+        resource: ".choir/choir.config.yaml",
+        result: "success",
+        metadata: {
+          changed: false,
+          decision: "no-change",
+          command: input,
+        },
+        decisionTrace: {
+          policiesEvaluated: [],
+          finalDecision: "allow",
+          reasoning: "No control-plane mutation required",
+        },
       });
 
       return {
         ...result,
-        decision: "require-approval",
+        decision: "no-change",
+        policyTrace: {
+          role: ctx.role,
+          environment: ctx.environment,
+          diffCount: 0,
+          rulesMatched: [],
+          requiresApproval: false,
+          denied: false,
+          decision: "allow",
+          policyDslTrace: [],
+          inheritanceTrace: {
+            matchedRules: [],
+            finalDecision: "allow",
+          },
+        },
+      };
+    }
+
+    const beforeConfig = controlPlaneToChoirConfig(controlPlane);
+    const afterConfig = controlPlaneToChoirConfig(result.updatedControlPlane);
+    const diffs = computeDiff(beforeConfig, afterConfig);
+    const diffHash = hashDiff(diffs);
+
+    const policyRoot = inferPolicyRoot(controlPath, options?.workspaceRoot);
+    const policySet = loadPolicies(policyRoot, environment);
+    const policyEvaluation = evaluatePolicies(diffs, policySet, ctx);
+
+    const decisionTrace = toDecisionTrace(
+      policyEvaluation.trace,
+      `Policy evaluation completed with decision=${policyEvaluation.trace.decision} and ${policyEvaluation.trace.rulesMatched.length} matched rule(s)`
+    );
+
+    writeAuditEvent(auditRoot, {
+      role: ctx.role,
+      actorId: options?.actorId,
+      environment: ctx.environment,
+      action: "policy-evaluation",
+      resource: ".choir/policies.dsl",
+      diff: diffs,
+      result: policyEvaluation.result.allowed ? "success" : "failure",
+      metadata: {
         diffHash,
-        pendingApprovalId: pendingId,
+        command: input,
+      },
+      decisionTrace,
+    });
+
+    if (!policyEvaluation.result.allowed) {
+      writeAuditEvent(auditRoot, {
+        role: ctx.role,
+        actorId: options?.actorId,
+        environment: ctx.environment,
+        action: "compile-dsl",
+        resource: ".choir/choir.config.yaml",
+        diff: diffs,
+        result: "failure",
+        metadata: {
+          diffHash,
+          command: input,
+          decision: "deny",
+          violations: policyEvaluation.result.violations,
+        },
+        decisionTrace,
+      });
+
+      return {
+        ...result,
+        decision: "deny",
+        diffHash,
         policyResult: policyEvaluation.result,
         policyTrace: policyEvaluation.trace,
       };
     }
+
+    const workspaceRoot = options?.workspaceRoot;
+    if (policyEvaluation.result.requiresApproval) {
+      if (!workspaceRoot) {
+        writeAuditEvent(auditRoot, {
+          role: ctx.role,
+          actorId: options?.actorId,
+          environment: ctx.environment,
+          action: "compile-dsl",
+          resource: ".choir/choir.config.yaml",
+          diff: diffs,
+          result: "failure",
+          metadata: {
+            diffHash,
+            command: input,
+            decision: "require-approval",
+            pendingApprovalId: `diff-${diffHash.slice(0, 12)}`,
+          },
+          decisionTrace,
+        });
+
+        return {
+          ...result,
+          decision: "require-approval",
+          diffHash,
+          pendingApprovalId: `diff-${diffHash.slice(0, 12)}`,
+          policyResult: policyEvaluation.result,
+          policyTrace: policyEvaluation.trace,
+        };
+      }
+
+      const approved = hasApprovalForDiff(workspaceRoot, diffHash);
+      if (!approved) {
+        const pendingId = `diff-${diffHash.slice(0, 12)}`;
+        upsertPendingApproval(workspaceRoot, {
+          id: pendingId,
+          diffHash,
+          diffs,
+          createdAt: new Date().toISOString(),
+          command: input,
+        });
+
+        writeAuditEvent(auditRoot, {
+          role: ctx.role,
+          actorId: options?.actorId,
+          environment: ctx.environment,
+          action: "compile-dsl",
+          resource: ".choir/choir.config.yaml",
+          diff: diffs,
+          result: "failure",
+          metadata: {
+            diffHash,
+            command: input,
+            decision: "require-approval",
+            pendingApprovalId: pendingId,
+          },
+          decisionTrace,
+        });
+
+        return {
+          ...result,
+          decision: "require-approval",
+          diffHash,
+          pendingApprovalId: pendingId,
+          policyResult: policyEvaluation.result,
+          policyTrace: policyEvaluation.trace,
+        };
+      }
+    }
+
+    writeAuditEvent(auditRoot, {
+      role: ctx.role,
+      actorId: options?.actorId,
+      environment: ctx.environment,
+      action: "compile-dsl",
+      resource: ".choir/choir.config.yaml",
+      diff: diffs,
+      result: "success",
+      metadata: {
+        diffHash,
+        command: input,
+        decision: "allow",
+      },
+      decisionTrace,
+    });
+
+    const config = controlPlaneToChoirConfig(result.updatedControlPlane);
+    writeYAML(config, controlPath);
+
+    if (workspaceRoot && policyEvaluation.result.requiresApproval) {
+      const pendingId = `diff-${diffHash.slice(0, 12)}`;
+      rejectPendingDiff(workspaceRoot, pendingId);
+    }
+
+    return {
+      ...result,
+      decision: "allow",
+      diffHash,
+      policyResult: policyEvaluation.result,
+      policyTrace: policyEvaluation.trace,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    writeAuditEvent(auditRoot, {
+      role: "analyst",
+      actorId: options?.actorId,
+      environment: detectEnvironment(),
+      action: "compile-dsl",
+      resource: ".choir/choir.config.yaml",
+      result: "failure",
+      metadata: {
+        command: input,
+        error: message,
+      },
+      decisionTrace: {
+        policiesEvaluated: [],
+        finalDecision: "deny",
+        reasoning: `Compilation failed: ${message}`,
+      },
+    });
+
+    throw error;
   }
-
-  const config = controlPlaneToChoirConfig(result.updatedControlPlane);
-  writeYAML(config, controlPath);
-
-  if (workspaceRoot && policyEvaluation.result.requiresApproval) {
-    const pendingId = `diff-${diffHash.slice(0, 12)}`;
-    rejectPendingDiff(workspaceRoot, pendingId);
-  }
-
-  return {
-    ...result,
-    decision: "allow",
-    diffHash,
-    policyResult: policyEvaluation.result,
-    policyTrace: policyEvaluation.trace,
-  };
 }
 
 export function approveDiff(
@@ -612,8 +816,42 @@ export function approveDiff(
 ): { approved: boolean; diffHash?: string } {
   const approved = approvePendingDiff(root, diffId, approvedBy, new Date().toISOString());
   if (!approved.approved) {
+    writeAuditEvent(root, {
+      role: "architect",
+      actorId: approvedBy,
+      environment: detectEnvironment(),
+      action: "approval-granted",
+      resource: diffId,
+      result: "failure",
+      metadata: {
+        reason: "pending-diff-not-found",
+      },
+      decisionTrace: {
+        policiesEvaluated: [],
+        finalDecision: "deny",
+        reasoning: "Approval failed because pending diff was not found",
+      },
+    });
+
     return { approved: false };
   }
+
+  writeAuditEvent(root, {
+    role: "architect",
+    actorId: approvedBy,
+    environment: detectEnvironment(),
+    action: "approval-granted",
+    resource: diffId,
+    result: "success",
+    metadata: {
+      diffHash: approved.approved.diffHash,
+    },
+    decisionTrace: {
+      policiesEvaluated: [],
+      finalDecision: "allow",
+      reasoning: "Pending diff approval granted",
+    },
+  });
 
   return {
     approved: true,
@@ -623,6 +861,24 @@ export function approveDiff(
 
 export function rejectDiff(root: string, diffId: string): { removed: boolean } {
   const rejected = rejectPendingDiff(root, diffId);
+  writeAuditEvent(root, {
+    role: "architect",
+    environment: detectEnvironment(),
+    action: "approval-rejected",
+    resource: diffId,
+    result: rejected.removed ? "success" : "failure",
+    metadata: {
+      removed: rejected.removed,
+    },
+    decisionTrace: {
+      policiesEvaluated: [],
+      finalDecision: "deny",
+      reasoning: rejected.removed
+        ? "Pending diff was rejected"
+        : "Reject requested for non-existent pending diff",
+    },
+  });
+
   return {
     removed: rejected.removed,
   };

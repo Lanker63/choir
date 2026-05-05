@@ -1,0 +1,22 @@
+{
+  "astIndex": {},
+  "symbolGraph": {},
+  "violations": [],
+  "metrics": {},
+  "dependencyGraph": {},
+  "execution": {
+    "taskStatus": {},
+    "taskResults": {},
+    "history": []
+  },
+  "strategyHistory": [],
+  "approvals": [
+    {
+      "id": "diff-a29e53016d14",
+      "diffHash": "a29e53016d141734602c56fe67ccff00ba2cadf09ff6939a77d7ece6ed94e7b9",
+      "approvedBy": "approver-user",
+      "timestamp": "2026-05-05T19:09:11.939Z"
+    }
+  ],
+  "pendingApprovals": []
+}

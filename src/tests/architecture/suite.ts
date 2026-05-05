@@ -75,6 +75,12 @@ import {
   serializeYAML,
 } from "../../core/dslYamlCompiler.js";
 import {
+  exportReport,
+  generateReport,
+  queryAudit,
+  readAuditStore,
+} from "../../core/audit.js";
+import {
   computeDiff,
   detectEnvironment,
   evaluatePolicies,
@@ -896,6 +902,19 @@ const pass2: TestPass = {
         assert.deepStrictEqual(parseCommand("choir policy status").ast, {
           type: "policy-status",
         });
+        assert.deepStrictEqual(parseCommand("choir audit log").ast, {
+          type: "audit-log",
+        });
+        assert.deepStrictEqual(parseCommand("choir audit report").ast, {
+          type: "audit-report",
+        });
+        assert.deepStrictEqual(parseCommand("choir audit query role=architect, environment=ci").ast, {
+          type: "audit-query",
+          filters: {
+            role: "architect",
+            environment: "ci",
+          },
+        });
       },
     },
     {
@@ -917,6 +936,7 @@ const pass2: TestPass = {
           "approve",
           "reject",
           "policy",
+          "audit",
           "macro",
         ]);
 
@@ -931,6 +951,9 @@ const pass2: TestPass = {
 
         const macroTail = getDeterministicCompletions("choir macro ").map((item) => item.label);
         assert.deepStrictEqual(macroTail, ["list", "show", "identifier"]);
+
+        const auditTail = getDeterministicCompletions("choir audit ").map((item) => item.label);
+        assert.deepStrictEqual(auditTail, ["log", "report", "query"]);
       },
     },
     {
@@ -1517,6 +1540,155 @@ const pass2: TestPass = {
         assert.ok(rendered.includes("[ORG] deny org-deny-prod"));
         assert.ok(rendered.includes("[REPO] allow repo-allow-plans"));
         assert.ok(rendered.includes("Final Decision: DENY"));
+      },
+    },
+    {
+      id: "2.48",
+      name: "audit store records compile and policy evaluation with immutable hash chain",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-compile-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        compileDSLAndWrite(
+          'choir define goal "enforce service boundaries"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root, actorId: "test-actor" }
+        );
+
+        const store = readAuditStore(root);
+        assert.strictEqual(store.records.length >= 2, true);
+
+        const actions = store.records.map((record) => record.auditEvent.action);
+        assert.ok(actions.includes("policy-evaluation"));
+        assert.ok(actions.includes("compile-dsl"));
+
+        for (let index = 0; index < store.records.length; index += 1) {
+          const record = store.records[index];
+          assert.strictEqual(record.chainIndex, index + 1);
+          if (index === 0) {
+            assert.strictEqual(record.previousHash, "GENESIS");
+          } else {
+            assert.strictEqual(record.previousHash, store.records[index - 1].hash);
+          }
+        }
+      },
+    },
+    {
+      id: "2.49",
+      name: "audit records approval granted events",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-approval-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        writePoliciesDSL(root, [
+          "policy require-db-approval {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then require-approval",
+          "}",
+          "",
+        ].join("\n"));
+
+        const first = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+        assert.strictEqual(first.decision, "require-approval");
+        assert.ok(first.pendingApprovalId);
+
+        const approval = approveDiff(root, first.pendingApprovalId!, "approver-user");
+        assert.strictEqual(approval.approved, true);
+
+        const records = queryAudit(root, { action: "approval-granted" });
+        assert.strictEqual(records.length, 1);
+        assert.strictEqual(records[0].auditEvent.result, "success");
+        assert.strictEqual(records[0].auditEvent.actor.id, "approver-user");
+      },
+    },
+    {
+      id: "2.50",
+      name: "audit query and compliance reports are deterministic with multi-format export",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-report-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        writePoliciesDSL(root, [
+          "policy deny-db {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        compileDSLAndWrite(
+          'choir define goal "safe boundary"',
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        const queriedA = queryAudit(root, { role: "architect" });
+        const queriedB = queryAudit(root, { role: "architect" });
+        assert.deepStrictEqual(queriedA, queriedB);
+
+        const reportA = generateReport(root, {});
+        const reportB = generateReport(root, {});
+        assert.deepStrictEqual(reportA, reportB);
+
+        const asJson = exportReport(reportA, "json");
+        const asYaml = exportReport(reportA, "yaml");
+        const asPdf = exportReport(reportA, "pdf");
+
+        assert.ok(asJson.includes("\"totalEvents\""));
+        assert.ok(asYaml.includes("totalEvents:"));
+        assert.ok(asPdf.startsWith("%PDF-1.4"));
+      },
+    },
+    {
+      id: "2.51",
+      name: "transactional execution writes execution audit record",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-execute-"));
+        const control = makeControlPlane();
+        const plan = makePlan("plan-audit", [
+          makeTask("t-analysis", "analysis"),
+        ]);
+        const built = buildExecutionPlan([plan], { smallTaskMergeThreshold: 0 });
+
+        const executed = await runExecutionPlanTransactionally(built.executionPlan, {
+          root,
+          controlPlane: control,
+          enforcer: {
+            async proposeFixes() {
+              return {
+                fixes: [],
+                diagnostics: [],
+              };
+            },
+          },
+          pipeline: {
+            async run() {
+              return {
+                diagnostics: [],
+                conflicts: [],
+              };
+            },
+          },
+        });
+        assert.strictEqual(executed.transactions.length, 1);
+        assert.strictEqual(executed.transactions[0].status, "committed");
+
+        const executionRecords = queryAudit(root, { action: "execute-plan" });
+        assert.strictEqual(executionRecords.length, 1);
+        assert.strictEqual(executionRecords[0].auditEvent.result, "success");
+        assert.strictEqual(executionRecords[0].executionTrace?.planId, built.executionPlan.batches[0].id);
       },
     },
   ],

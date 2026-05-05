@@ -1,5 +1,6 @@
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import { runPipelineForWorkspace } from "./enforcer.js";
+import { recordAudit } from "./core/audit.js";
 import {
   buildCostTrace,
   CostTrace,
@@ -23,6 +24,7 @@ import {
   StatePlane,
   updateExecutionState,
 } from "./core/state.js";
+import { detectEnvironment } from "./core/policyEngine.js";
 import { ExecutionTrace } from "./core/types.js";
 import { ControlPlane, Plan, Task } from "./schema.js";
 import {
@@ -438,6 +440,42 @@ function taskStatus(state: ExecutionState, planId: string, taskId: string): Exec
   return state.taskStatus[taskExecutionKey(planId, taskId)] ?? "pending";
 }
 
+function countExecutionPatches(state: StatePlane, planId: string, tasks: Task[]): number {
+  let total = 0;
+
+  for (const task of tasks) {
+    const key = taskExecutionKey(planId, task.id);
+    const entry = state.execution.taskResults[key] as Record<string, unknown> | undefined;
+    if (!entry || typeof entry.appliedPatches !== "number") {
+      continue;
+    }
+
+    total += entry.appliedPatches;
+  }
+
+  return total;
+}
+
+function countExecutionChangedFiles(state: StatePlane, planId: string, tasks: Task[]): number {
+  const files = new Set<string>();
+
+  for (const task of tasks) {
+    const key = taskExecutionKey(planId, task.id);
+    const entry = state.execution.taskResults[key] as Record<string, unknown> | undefined;
+    if (!entry || !Array.isArray(entry.filesChanged)) {
+      continue;
+    }
+
+    for (const value of entry.filesChanged) {
+      if (typeof value === "string" && value.trim().length > 0) {
+        files.add(value);
+      }
+    }
+  }
+
+  return files.size;
+}
+
 function setTaskState(
   root: string,
   planId: string,
@@ -582,6 +620,37 @@ export async function executePlan(
       ? "Plan completed with all tasks successful"
       : "Plan completed with task failures"
   );
+
+  recordAudit(options.root, {
+    auditEvent: {
+      id: "",
+      timestamp: "",
+      actor: {
+        role: "conductor",
+      },
+      environment: detectEnvironment(),
+      action: "execute-plan",
+      resource: `execution.plans.${plan.id}`,
+      result: finalStatus === "complete" ? "success" : "failure",
+      metadata: {
+        tasksExecuted: trace.tasksExecuted,
+        tasksSucceeded: trace.tasksSucceeded,
+        tasksFailed: trace.tasksFailed,
+      },
+    },
+    decisionTrace: {
+      policiesEvaluated: [],
+      finalDecision: finalStatus === "complete" ? "allow" : "deny",
+      reasoning: finalStatus === "complete"
+        ? "Execution completed and all tasks succeeded"
+        : "Execution completed with task failures",
+    },
+    executionTrace: {
+      planId: plan.id,
+      patchesApplied: countExecutionPatches(state, plan.id, plan.tasks),
+      filesChanged: countExecutionChangedFiles(state, plan.id, plan.tasks),
+    },
+  });
 
   return { state, trace };
 }

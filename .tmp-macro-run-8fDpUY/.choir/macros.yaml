@@ -1,0 +1,10 @@
+macros:
+  - id: setup-boundaries
+    parameters:
+      - name: entity
+        required: false
+        default: service
+    body:
+      - choir define goal "enforce clean {{entity}} boundaries"
+      - choir define constraint "no direct db access"
+      - choir plan
