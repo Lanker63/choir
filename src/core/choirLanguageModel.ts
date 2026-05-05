@@ -2,6 +2,7 @@ import {
   CHOIR_ACTION_KEYWORDS,
   CHOIR_AUDIT_META_KEYWORDS,
   CHOIR_ANALYZE_TARGET_KEYWORDS,
+  CHOIR_CI_META_KEYWORDS,
   CHOIR_DEFINE_TYPE_KEYWORDS,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   CHOIR_EXPORT_SECTION_KEYWORDS,
@@ -60,6 +61,7 @@ type ParserState =
   | "library-install-at"
   | "library-install-version"
   | "library-update-library"
+  | "ci-next"
   | "audit-next"
   | "audit-query-key"
   | "audit-query-equals"
@@ -133,6 +135,8 @@ const KEYWORD_HOVER: Record<string, string> = {
   approve: "Approve a pending policy-gated diff id.",
   reject: "Reject a pending policy-gated diff id.",
   import: "Resolve and lock a macro library version selector.",
+  ci: "Run deterministic Choir CI pipeline execution.",
+  run: "Execute Choir CI pipeline stages for deterministic enforcement.",
   library: "Manage local macro libraries and lockfile resolution.",
   install: "Install a library selector into .choir/lock.yaml.",
   update: "Update a locked library to latest available local version.",
@@ -325,6 +329,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["audit-query-after-filter"];
     }
 
+    if (state === "ci-next" && token.value.toLowerCase() === "run") {
+      return ["expect-then-or-end"];
+    }
+
     return [];
   }
 
@@ -464,6 +472,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["library-next"];
     }
 
+    if (token.value === "ci") {
+      return ["ci-next"];
+    }
+
     if (token.value === "macro") {
       return ["macro-next"];
     }
@@ -513,6 +525,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
     }
 
     return [];
+  }
+
+  if (state === "ci-next") {
+    return token.value === "run" ? ["expect-then-or-end"] : [];
   }
 
   if (state === "define-type") {
@@ -623,6 +639,10 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
 
   if (state === "library-next") {
     return CHOIR_LIBRARY_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
+  }
+
+  if (state === "ci-next") {
+    return CHOIR_CI_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
   }
 
   if (state === "audit-query-key") {

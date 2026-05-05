@@ -359,7 +359,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -383,6 +383,7 @@ Grammar:
 <version-selector> ::= MAJOR "." MINOR "." PATCH
                      | MAJOR "." MINOR "." "x"
                      | MAJOR "." "x"
+<ci> ::= "ci" "run"
 <audit> ::= "audit" "log"
           | "audit" "report"
           | "audit" "query" [<audit-filters>]
@@ -416,7 +417,7 @@ Choir ships first-class VS Code language support for the DSL.
   - `*.choir` is associated to language id `choir`.
 - Syntax highlighting:
   - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
-  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `import`, `library`, `install`, `update`, `lock`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
+  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `import`, `library`, `install`, `update`, `lock`, `ci`, `run`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
 - Language configuration:
   - Line comments use `#`.
   - Bracket pairs: `{}`, `()`.
@@ -429,7 +430,7 @@ Choir ships first-class VS Code language support for the DSL.
   - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
   - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
 - Snippets:
-  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `audit log`, `audit report`, `audit query`, and `macro` commands.
+  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `ci run`, `audit log`, `audit report`, `audit query`, and `macro` commands.
 - Editor trace:
   - Command Palette: `Choir: Show DSL Editor Trace`
   - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
@@ -478,6 +479,7 @@ Supported commands:
 - `choir library install <library>@<version-selector>`
 - `choir library update <library>`
 - `choir library lock`
+- `choir ci run`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -511,7 +513,7 @@ Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
-- `choir analyze|preview|execute|status|audit|import|library ...`: accepted by grammar, non-mutating in YAML compiler mode
+- `choir analyze|preview|execute|status|ci|audit|import|library ...`: accepted by grammar, non-mutating in YAML compiler mode
 
 YAML -> DSL projection behavior:
 
@@ -585,6 +587,89 @@ Idempotency guarantees:
 
 ---
 
+## CI/CD Integration
+
+Choir supports deterministic pipeline execution through:
+
+- `choir ci run`
+
+Pipeline model:
+
+- `source -> compile -> plan -> policy -> preview -> execute -> audit`
+- Stages may be omitted in `.choir/ci.yaml`, but stage ordering must remain canonical and deterministic.
+
+CI config file:
+
+- Path: `.choir/ci.yaml`
+- Schema highlights:
+  - `pipeline.stages`: ordered list of stage ids
+  - `environments.<local|ci|staging|production>.enforcePolicy`
+  - `environments.<local|ci|staging|production>.requireApproval`
+  - `macros`: list of macro ids executed during `plan`
+
+Example:
+
+```yaml
+pipeline:
+  stages:
+    - source
+    - compile
+    - plan
+    - policy
+    - preview
+    - execute
+    - audit
+
+environments:
+  ci:
+    enforcePolicy: true
+    requireApproval: true
+
+macros:
+  - core.enforce-service-boundaries
+```
+
+Execution constraints in CI mode:
+
+- Macro execution is blocked outside `choir ci run`.
+- Plan execution is blocked outside `choir ci run`.
+- Environment context is runtime-derived and validated (`detectEnvironment`), not caller-provided.
+
+Artifacts written by CI runs:
+
+- `.choir/artifacts/ci/<run-key>/plan.json`
+- `.choir/artifacts/ci/<run-key>/preview.json`
+- `.choir/artifacts/ci/<run-key>/preview.diff`
+- `.choir/artifacts/ci/<run-key>/execution.json` (if execute stage runs)
+- `.choir/artifacts/ci/<run-key>/audit.log`
+- `.choir/artifacts/ci/<run-key>/trace.json`
+
+GitHub Actions sample:
+
+```yaml
+name: Choir CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  choir:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build:extension
+      - run: npm link
+      - run: choir ci run
+```
+
+---
+
 ## Macro Libraries
 
 Choir supports local, versioned macro libraries for cross-repository reuse.
@@ -642,6 +727,8 @@ Audited action types include:
 - `approval-rejected`
 - `execute-plan`
 - `macro-execution`
+- `ci-policy-gate`
+- `ci-pipeline`
 
 Audit query/report command surface:
 
@@ -697,6 +784,10 @@ Audit evidence is persisted in `.choir/audit.log.jsonl`.
 Macro library manifests are stored under `.choir/libraries/`.
 
 Macro library lock resolution is stored in `.choir/lock.yaml`.
+
+CI pipeline configuration is stored in `.choir/ci.yaml`.
+
+CI run artifacts are stored in `.choir/artifacts/ci/`.
 
 Compliance reports are exported to `.choir/reports/` when `choir audit report` is invoked.
 

@@ -13,6 +13,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <policy-status>
   | <import>
   | <library>
+  | <ci>
   | <audit>
   | <macro>
 
@@ -54,6 +55,8 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <version-selector> ::= MAJOR "." MINOR "." PATCH
                      | MAJOR "." MINOR "." "x"
                      | MAJOR "." "x"
+
+<ci> ::= "ci" "run"
 
 <audit> ::= "audit" "log"
           | "audit" "report"
@@ -98,12 +101,14 @@ export const CHOIR_ACTION_KEYWORDS = [
   "policy",
   "import",
   "library",
+  "ci",
   "audit",
   "macro",
 ] as const;
 
 export const CHOIR_MACRO_META_KEYWORDS = ["list", "show"] as const;
 export const CHOIR_LIBRARY_META_KEYWORDS = ["list", "install", "update", "lock"] as const;
+export const CHOIR_CI_META_KEYWORDS = ["run"] as const;
 export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
@@ -217,6 +222,10 @@ export type LibraryLockNode = {
   type: "library-lock";
 };
 
+export type CIRunNode = {
+  type: "ci-run";
+};
+
 export type AuditQueryFilters = {
   role?: string;
   environment?: string;
@@ -269,6 +278,7 @@ export type ActionNode =
   | LibraryInstallNode
   | LibraryUpdateNode
   | LibraryLockNode
+  | CIRunNode
   | AuditLogNode
   | AuditReportNode
   | AuditQueryNode
@@ -470,6 +480,8 @@ class Parser {
         return this.parseImportLibrary();
       case "library":
         return this.parseLibrary();
+      case "ci":
+        return this.parseCi();
       case "audit":
         return this.parseAudit();
       case "macro":
@@ -721,6 +733,18 @@ class Parser {
     throw new Error("Expected library command: list|install|update|lock");
   }
 
+  private parseCi(): CIRunNode {
+    this.expectKeyword("ci");
+    const mode = this.expectIdentifierLike().toLowerCase();
+    if (mode !== "run") {
+      throw new Error("Expected ci command: run");
+    }
+
+    return {
+      type: "ci-run",
+    };
+  }
+
   private parseAudit(): AuditLogNode | AuditReportNode | AuditQueryNode {
     this.expectKeyword("audit");
     const mode = this.expectIdentifierLike().toLowerCase();
@@ -952,6 +976,10 @@ function validateActionNode(node: ActionNode): boolean {
     return CHOIR_IDENTIFIER_PATTERN.test(node.library);
   }
 
+  if (node.type === "ci-run") {
+    return true;
+  }
+
   if (node.type === "audit-log" || node.type === "audit-report") {
     return true;
   }
@@ -1100,6 +1128,11 @@ async function compileAction<TContext>(
     case "library-lock":
       trace.steps.push("system.library.lock");
       trace.compiledActions.push("system.library.lock");
+      return;
+
+    case "ci-run":
+      trace.steps.push("system.ci.run");
+      trace.compiledActions.push("system.ci.run");
       return;
 
     case "audit-log":

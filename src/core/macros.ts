@@ -357,8 +357,13 @@ export function runMacro(
   controlPath: string,
   options?: {
     workspaceRoot?: string;
+    executionMode?: "interactive" | "ci-pipeline";
   }
 ): MacroRunResult {
+  if (detectEnvironment() === "ci" && options?.executionMode !== "ci-pipeline") {
+    throw new Error("CI mode macro execution is restricted. Use 'choir ci run' to execute macros in CI.");
+  }
+
   const rootMacro = resolveMacroReference(root, macroId);
 
   const context: MacroExecutionContext = {

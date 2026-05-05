@@ -78,7 +78,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -101,6 +101,7 @@ DSL command grammar:
 <version-selector> ::= MAJOR "." MINOR "." PATCH
                      | MAJOR "." MINOR "." "x"
                      | MAJOR "." "x"
+<ci> ::= "ci" "run"
 <audit> ::= "audit" "log"
           | "audit" "report"
           | "audit" "query" [<audit-filters>]
@@ -216,6 +217,7 @@ Supported command surface (via `@choir`):
 - `choir library install <library>@<version-selector>`
 - `choir library update <library>`
 - `choir library lock`
+- `choir ci run`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -241,7 +243,7 @@ Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
-- `analyze|preview|execute|status|audit|import|library` are non-mutating in YAML compiler mode.
+- `analyze|preview|execute|status|ci|audit|import|library` are non-mutating in YAML compiler mode.
 
 Projection contract:
 
@@ -253,7 +255,7 @@ Audit and compliance contract:
 
 - Audit storage is append-only in `.choir/audit.log.jsonl`.
 - Every record includes a deterministic `chainIndex`, `previousHash`, and `hash` to form an immutable hash chain (`GENESIS` anchor for first record).
-- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`.
+- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`, `ci-policy-gate`, `ci-pipeline`.
 - Querying is deterministic and supports filters by role, environment, action, and bounded time range (`from` + `to`).
 - Compliance reports are deterministic summaries over queried records with anomaly detection and export formats `json`, `yaml`, and `pdf`.
 - Report exports are written under `.choir/reports/`.
@@ -285,6 +287,18 @@ Policy gate contract:
 - Approval records are stored in state and tied to exact diff hash.
 - Environment policies are applied last; production can inject strict deny policies for `execution.plans` mutations.
 - Policy trace must include role, environment, source-aware matched rules, policy DSL traces, inheritance trace, and final decision for auditability.
+
+CI/CD pipeline contract:
+
+- Entry command is `choir ci run`.
+- Canonical stage order is fixed: `source -> compile -> plan -> policy -> preview -> execute -> audit`.
+- `.choir/ci.yaml` may select a subset of stages but cannot reorder stages.
+- `plan` stage can execute configured macros from `.choir/ci.yaml` and remains policy-gated per expanded command.
+- `policy` stage evaluates deterministic diff context before execution and fails on `deny` or missing required approval.
+- `preview` stage computes deterministic preview artifacts before execution.
+- `execute` stage is transactional and blocked if preview hash changes.
+- CI environment blocks macro execution and plan execution paths outside `choir ci run`.
+- CI artifacts are persisted under `.choir/artifacts/ci/<run-key>/`.
 
 Policy DSL grammar contract:
 
@@ -676,6 +690,7 @@ Non-negotiable safeguards:
 7. Policy context cannot be user-spoofed: role is system-derived and environment is runtime-derived
 8. Audit evidence is append-only, hash-chained, and emitted for all significant policy and execution decisions
 9. Macro library execution is lockfile-pinned and version-deterministic
+10. CI mode execution is restricted to `choir ci run` with runtime environment validation
 
 ---
 

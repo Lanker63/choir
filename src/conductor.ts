@@ -511,8 +511,12 @@ function setTaskState(
 
 export async function executePlan(
   plan: Plan,
-  options: { controlPlane: ControlPlane; root: string }
+  options: { controlPlane: ControlPlane; root: string; ciPipelineExecution?: boolean }
 ): Promise<{ state: StatePlane; trace: ExecutionTrace }> {
+  if (detectEnvironment() === "ci" && options.ciPipelineExecution !== true) {
+    throw new Error("CI mode execution is restricted. Use 'choir ci run' to execute plans in CI.");
+  }
+
   const trace: ExecutionTrace = {
     planId: plan.id,
     tasksExecuted: [],
@@ -660,8 +664,13 @@ export async function executeSelectedPlansWithCost(
   options: {
     root: string;
     requestedPlanId?: string;
+    ciPipelineExecution?: boolean;
   }
 ): Promise<CostBasedExecutionResult> {
+  if (detectEnvironment() === "ci" && options.ciPipelineExecution !== true) {
+    throw new Error("CI mode execution is restricted. Use 'choir ci run' to execute plans in CI.");
+  }
+
   let state = readStatePlane(options.root) ?? createEmptyStatePlane();
 
   const { selectedPlans, costTrace } = selectApprovedPlansForExecution(
@@ -708,6 +717,7 @@ export async function executeSelectedPlansWithCost(
     const executed = await executePlan(plan.selected.plan, {
       controlPlane: control,
       root: options.root,
+      ciPipelineExecution: options.ciPipelineExecution,
     });
 
     state = executed.state;
@@ -796,8 +806,13 @@ export async function executeSelectedPlansWithPreviewGuard(
     root: string;
     previewId?: string;
     requestedPlanId?: string;
+    ciPipelineExecution?: boolean;
   }
 ): Promise<CostBasedExecutionResult & { previewHash: string }> {
+  if (detectEnvironment() === "ci" && options.ciPipelineExecution !== true) {
+    throw new Error("CI mode execution is restricted. Use 'choir ci run' to execute plans in CI.");
+  }
+
   const expectedHash = normalizePreviewHash(options.previewId);
   if (!expectedHash) {
     throw new Error("Execution requires a preview hash. Run: @choir.conductor preview [planId], then execute <planId> <previewHash>.");
@@ -827,6 +842,7 @@ export async function executeSelectedPlansWithPreviewGuard(
   const executed = await executeSelectedPlansWithCost(control, {
     root: options.root,
     requestedPlanId: targetPlanId,
+    ciPipelineExecution: options.ciPipelineExecution,
   });
 
   return {

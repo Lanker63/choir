@@ -18,6 +18,9 @@
     "onChatParticipant:choir.conductor"
   ],
   "main": "./out/vscode/extension.js",
+  "bin": {
+    "choir": "./out/cli.js"
+  },
   "contributes": {
     "commands": [
       {
@@ -141,6 +144,7 @@
     "watch:extension": "tsc -watch -p ./",
     "watch:webview": "vite build --watch",
     "dev:webview": "vite",
+    "ci:run": "node out/cli.js ci run",
     "test:rules": "npm run build:extension && node out/tests/rules/harness.js",
     "test:architecture": "npm run build:extension && node out/tests/architecture/suite.js",
     "test": "npm run test:rules && npm run test:architecture"

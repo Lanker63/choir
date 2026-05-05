@@ -1,6 +1,7 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
+import * as YAML from "yaml";
 import { compileControlPlaneToRules } from "../../dsl/compiler.js";
 import {
   createHarnessFromFixture,
@@ -117,6 +118,10 @@ import {
   resolveLibraryVersion,
   updateLibrary,
 } from "../../core/macroLibraries.js";
+import {
+  loadCIConfig,
+  runCI,
+} from "../../core/ci.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -943,6 +948,9 @@ const pass2: TestPass = {
         assert.deepStrictEqual(parseCommand("choir library lock").ast, {
           type: "library-lock",
         });
+        assert.deepStrictEqual(parseCommand("choir ci run").ast, {
+          type: "ci-run",
+        });
       },
     },
     {
@@ -966,6 +974,7 @@ const pass2: TestPass = {
           "policy",
           "import",
           "library",
+          "ci",
           "audit",
           "macro",
         ]);
@@ -990,6 +999,9 @@ const pass2: TestPass = {
 
         const libraryTail = getDeterministicCompletions("choir library ").map((item) => item.label);
         assert.deepStrictEqual(libraryTail, ["list", "install", "update", "lock"]);
+
+        const ciTail = getDeterministicCompletions("choir ci ").map((item) => item.label);
+        assert.deepStrictEqual(ciTail, ["run"]);
       },
     },
     {
@@ -1960,6 +1972,115 @@ const pass2: TestPass = {
           () => resolveLibraryVersion(root, "core", "1.x"),
           /Breaking change detected/
         );
+      },
+    },
+    {
+      id: "2.57",
+      name: "ci config defaults are deterministic",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-config-defaults-"));
+        const config = loadCIConfig(root);
+
+        assert.deepStrictEqual(config.pipeline.stages, [
+          "source",
+          "compile",
+          "plan",
+          "policy",
+          "preview",
+          "execute",
+          "audit",
+        ]);
+        assert.deepStrictEqual(config.macros, []);
+      },
+    },
+    {
+      id: "2.58",
+      name: "ci pipeline trace and artifacts are deterministic for identical inputs",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-run-"));
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "index.ts"), [
+          "export const value = 1;",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+        fs.writeFileSync(controlPath, YAML.stringify(makeControlPlane()), "utf-8");
+
+        fs.writeFileSync(path.join(root, ".choir", "ci.yaml"), [
+          "pipeline:",
+          "  stages:",
+          "    - source",
+          "    - compile",
+          "    - plan",
+          "    - policy",
+          "    - preview",
+          "    - audit",
+          "environments:",
+          "  local:",
+          "    enforcePolicy: true",
+          "    requireApproval: false",
+          "macros: []",
+          "",
+        ].join("\n"), "utf-8");
+
+        const control = ControlPlaneSchema.parse(YAML.parse(fs.readFileSync(controlPath, "utf-8")));
+
+        const first = await runCI({
+          root,
+          controlPlane: control,
+          controlPath,
+          context: {
+            role: "conductor",
+            environment: "local",
+          },
+          actorId: "test-runner",
+        });
+
+        const second = await runCI({
+          root,
+          controlPlane: control,
+          controlPath,
+          context: {
+            role: "conductor",
+            environment: "local",
+          },
+          actorId: "test-runner",
+        });
+
+        assert.strictEqual(first.trace.result, "success");
+        assert.strictEqual(second.trace.result, "success");
+        assert.strictEqual(first.trace.commitId, second.trace.commitId);
+        assert.deepStrictEqual(first.trace.stagesExecuted, second.trace.stagesExecuted);
+        assert.strictEqual(first.artifacts.some((artifact) => artifact.endsWith("/plan.json")), true);
+        assert.strictEqual(first.artifacts.some((artifact) => artifact.endsWith("/preview.diff")), true);
+        assert.strictEqual(first.artifacts.some((artifact) => artifact.endsWith("/audit.log")), true);
+      },
+    },
+    {
+      id: "2.59",
+      name: "macro execution is blocked outside pipeline in ci mode",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-ci-mode-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+
+        fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
+          "macros:",
+          "  - id: ci-only-macro",
+          "    version: 1.0.0",
+          "    body:",
+          "      - choir define goal \"ci-only-goal\"",
+          "",
+        ].join("\n"), "utf-8");
+
+        await withTemporaryEnv({ CI: "1" }, () => {
+          assert.throws(
+            () => runMacro(root, "ci-only-macro", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+            /CI mode macro execution is restricted/
+          );
+        });
       },
     },
   ],

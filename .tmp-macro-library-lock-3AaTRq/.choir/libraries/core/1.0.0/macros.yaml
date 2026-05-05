@@ -1,0 +1,8 @@
+name: core
+version: 1.0.0
+metadata:
+  description: core
+macros:
+  - id: enforce-service-boundaries
+    body:
+      - choir define goal "core-1.0.0"

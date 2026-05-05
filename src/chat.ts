@@ -23,8 +23,10 @@ import {
     policyStatus,
     rejectDiff,
 } from "./core/dslYamlCompiler.js";
+import { formatCIRunResult, runCI } from "./core/ci.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
+import { detectEnvironment } from "./core/policyEngine.js";
 import {
     formatDSL,
     generateDSL,
@@ -101,6 +103,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir library install core@1.0.0",
         "- choir library update core",
         "- choir library lock",
+        "- choir ci run",
         "- choir approve <diffId>",
         "- choir reject <diffId>",
         "- choir policy status",
@@ -152,6 +155,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "library-install"
                     || action.type === "library-update"
                     || action.type === "library-lock"
+                    || action.type === "ci-run"
                     || action.type === "audit-log"
                     || action.type === "audit-report"
                     || action.type === "audit-query"
@@ -160,7 +164,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-run"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|audit|macro` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|audit|macro` cannot be chained with `then`.");
                 return;
             }
 
@@ -334,7 +338,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         parsed.ast.args,
                         control,
                         controlPath,
-                        { workspaceRoot }
+                        { workspaceRoot, executionMode: "interactive" }
                     );
 
                     const stepLines = executed.steps.length === 0
@@ -359,6 +363,22 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         "Step results:",
                         ...stepLines,
                     ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "ci-run") {
+                    const ciResult = await runCI({
+                        root: workspaceRoot,
+                        controlPlane: control,
+                        controlPath,
+                        context: {
+                            role: "conductor",
+                            environment: detectEnvironment(),
+                        },
+                        actorId: "chat-user",
+                    });
+
+                    stream.markdown(formatCIRunResult(ciResult));
                     return;
                 }
 
