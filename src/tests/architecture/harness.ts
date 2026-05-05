@@ -210,6 +210,24 @@ function relativizeRecord<T>(
 
 function canonicalizeState(root: string, state: StatePlane): StatePlane {
   return {
+    version: state.version,
+    intent: {
+      goals: [...state.intent.goals],
+      constraints: [...state.intent.constraints],
+      nonGoals: [...state.intent.nonGoals],
+    },
+    ast: state.ast.map((node) => ({ ...node })),
+    graph: {
+      dependencies: relativizeRecord(root, state.graph.dependencies),
+    },
+    ruleViolations: state.ruleViolations.map((entry) => ({ ...entry })),
+    plans: state.plans.map((plan) => ({
+      id: plan.id,
+      status: plan.status,
+      taskIds: [...plan.taskIds],
+      nodeRefs: [...plan.nodeRefs],
+    })),
+    stateHash: state.stateHash,
     astIndex: relativizeRecord(root, state.astIndex),
     symbolGraph: relativizeRecord(root, state.symbolGraph),
     violations: state.violations.map((violation) => ({

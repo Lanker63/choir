@@ -168,7 +168,17 @@ import {
   runExecutionPlan,
   runExecutionPlanTransactionally,
 } from "../../core/scheduler.js";
-import { createEmptyStatePlane } from "../../core/state.js";
+import {
+  buildState,
+  createEmptyStatePlane,
+  hashState,
+  listSnapshots,
+  readStatePlane,
+  replaySnapshots,
+  rollbackState,
+  validateConsistency,
+  validateState,
+} from "../../core/state.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -2984,6 +2994,124 @@ const pass3: TestPass = {
           }),
           /Cycle detected in dependency graph/
         );
+      },
+    },
+    {
+      id: "3.11",
+      name: "state builder and validator enforce structural correctness",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["A"];
+
+        const ast = parseCommand('choir define goal "A" then plan').ast;
+        const state = buildState({
+          yaml: control,
+          ast,
+          ruleResults: [],
+          plans: control.execution.plans,
+          previous: createEmptyStatePlane(),
+        });
+
+        const validation = validateState(state);
+        assert.strictEqual(validation.valid, true);
+
+        const corrupted = JSON.parse(JSON.stringify(state));
+        corrupted.ast = [{ id: "action:0", type: "define" }];
+        corrupted.graph.dependencies = { "action:0": ["missing-node"] };
+
+        const corruptedValidation = validateState(corrupted);
+        assert.strictEqual(corruptedValidation.valid, false);
+        assert.ok(corruptedValidation.issues.some((issue) => issue.code === "graph-target-missing"));
+      },
+    },
+    {
+      id: "3.12",
+      name: "state consistency check catches yaml ast and rule divergences",
+      run: async () => {
+        const control = makeControlPlane();
+        control.intent.goals = ["A"];
+
+        const ast = parseCommand('choir define goal "A"').ast;
+        const state = buildState({
+          yaml: control,
+          ast,
+          ruleResults: [],
+          plans: control.execution.plans,
+          previous: createEmptyStatePlane(),
+        });
+
+        const ok = validateConsistency({
+          yaml: control,
+          ast,
+          state,
+          ruleResults: [],
+        });
+        assert.strictEqual(ok.valid, true);
+
+        const divergent = JSON.parse(JSON.stringify(state));
+        divergent.intent.goals = ["B"];
+
+        const failed = validateConsistency({
+          yaml: control,
+          ast,
+          state: divergent,
+          ruleResults: [],
+        });
+        assert.strictEqual(failed.valid, false);
+        assert.ok(failed.issues.some((issue) => issue.code === "yaml-intent-divergence"));
+      },
+    },
+    {
+      id: "3.13",
+      name: "state hash is deterministic for equivalent states",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.intent.goals = ["A"];
+
+        const first = hashState(state);
+        const second = hashState(JSON.parse(JSON.stringify(state)));
+
+        assert.strictEqual(first, second);
+      },
+    },
+    {
+      id: "3.14",
+      name: "state snapshots are created and rollback restores exact snapshot",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-snapshot-"));
+
+        try {
+          const controlPath = path.join(root, ".choir", "choir.config.yaml");
+          fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+
+          const control = makeControlPlane();
+          fs.writeFileSync(controlPath, YAML.stringify(control), "utf-8");
+
+          const first = compileDSLAndWrite('choir define goal "A"', control, controlPath, {
+            workspaceRoot: root,
+            actorId: "test-runner",
+          });
+
+          compileDSLAndWrite('choir define goal "B"', first.updatedControlPlane, controlPath, {
+            workspaceRoot: root,
+            actorId: "test-runner",
+          });
+
+          const snapshots = listSnapshots(root);
+          assert.strictEqual(snapshots.length >= 2, true);
+
+          const firstSnapshot = snapshots[0];
+          rollbackState(root, firstSnapshot.id);
+
+          const rolledState = readStatePlane(root);
+          assert.ok(rolledState);
+          assert.deepStrictEqual(rolledState?.intent, firstSnapshot.state.intent);
+
+          const replayed = replaySnapshots(root, snapshots.slice(0, 2).map((snapshot) => snapshot.id));
+          assert.strictEqual(replayed.length, 2);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       },
     },
   ],

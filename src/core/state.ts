@@ -1,7 +1,11 @@
+import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import { Diagnostic } from "./types.js";
 import type { YAMLDiff } from "./policyEngine.js";
+import type { AST as DSLAST, ActionNode } from "./choirRouter.js";
+import type { RuleResult } from "./astValidation.js";
+import type { ControlPlane, Plan } from "../schema.js";
 
 export type AST = {
   rootNodeId: string;
@@ -81,7 +85,92 @@ export type StrategyHistory = {
   outcomeMetrics: StrategyHistoryMetrics;
 };
 
+export type ASTStateNode = {
+  id: string;
+  type: ActionNode["type"];
+};
+
+export type StatePlan = {
+  id: string;
+  status: string;
+  taskIds: string[];
+  nodeRefs: string[];
+};
+
+export type StateIntent = {
+  goals: string[];
+  constraints: string[];
+  nonGoals: string[];
+};
+
+export type RuleViolation = {
+  ruleId: string;
+  severity: "error" | "warning";
+  message: string;
+  actionIndex?: number;
+};
+
+export type StateValidationIssue = {
+  code: string;
+  message: string;
+  path: string;
+};
+
+export type ValidationResult = {
+  valid: boolean;
+  issues: StateValidationIssue[];
+};
+
+export type StateSnapshot = {
+  id: string;
+  timestamp: string;
+  state: StatePlane;
+  hash: string;
+};
+
+export type StateTransition = {
+  from: string;
+  to: string;
+  action: string;
+};
+
+export type StateAudit = {
+  previousHash: string;
+  newHash: string;
+  diff: Record<string, unknown>;
+};
+
+export type ConsistencyInput = {
+  yaml?: ControlPlane;
+  ast?: DSLAST;
+  state: StatePlane;
+  ruleResults?: RuleResult[];
+};
+
+export type BuildStateInput = {
+  yaml?: ControlPlane;
+  ast?: DSLAST;
+  ruleResults?: RuleResult[];
+  plans?: Plan[];
+  previous?: StatePlane;
+};
+
+export type PersistStateOptions = {
+  action?: string;
+  consistency?: Omit<ConsistencyInput, "state">;
+  skipSnapshot?: boolean;
+};
+
 export type StatePlane = {
+  version: string;
+  intent: StateIntent;
+  ast: ASTStateNode[];
+  graph: {
+    dependencies: Record<string, string[]>;
+  };
+  ruleViolations: RuleViolation[];
+  plans: StatePlan[];
+  stateHash: string;
   astIndex: Record<string, AST>;
   symbolGraph: SymbolGraph;
   violations: Diagnostic[];
@@ -94,8 +183,194 @@ export type StatePlane = {
 };
 
 const MAX_STRATEGY_HISTORY = 256;
+const STATE_VERSION = "2.0.0-alpha";
 
 type UnknownRecord = Record<string, unknown>;
+
+function stableSortUnknown(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stableSortUnknown(entry));
+  }
+
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  const sortedEntries = Object.keys(value)
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => [key, stableSortUnknown(value[key])] as const);
+
+  return Object.fromEntries(sortedEntries);
+}
+
+function stableStringify(value: unknown): string {
+  return JSON.stringify(stableSortUnknown(value));
+}
+
+function deepClone<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function stateWithoutHash(state: StatePlane): Omit<StatePlane, "stateHash"> {
+  const { stateHash: _ignored, ...rest } = state;
+  return rest;
+}
+
+function hashStateContent(state: Omit<StatePlane, "stateHash">): string {
+  return createHash("sha256").update(stableStringify(state)).digest("hex");
+}
+
+function formatTimestampForId(timestamp: string): string {
+  return timestamp.replace(/[:.TZ-]/g, "").slice(0, 14);
+}
+
+function normalizeStateIntent(intent?: Partial<StateIntent>): StateIntent {
+  return {
+    goals: sortedUnique((intent?.goals ?? []).filter((entry): entry is string => typeof entry === "string")),
+    constraints: sortedUnique((intent?.constraints ?? []).filter((entry): entry is string => typeof entry === "string")),
+    nonGoals: sortedUnique((intent?.nonGoals ?? []).filter((entry): entry is string => typeof entry === "string")),
+  };
+}
+
+function parseStateIntent(value: unknown): StateIntent {
+  if (!isRecord(value)) {
+    return normalizeStateIntent();
+  }
+
+  return normalizeStateIntent({
+    goals: Array.isArray(value.goals) ? value.goals.filter((entry): entry is string => typeof entry === "string") : [],
+    constraints: Array.isArray(value.constraints)
+      ? value.constraints.filter((entry): entry is string => typeof entry === "string")
+      : [],
+    nonGoals: Array.isArray(value.nonGoals) ? value.nonGoals.filter((entry): entry is string => typeof entry === "string") : [],
+  });
+}
+
+function normalizeAstNodes(nodes: ASTStateNode[]): ASTStateNode[] {
+  return [...nodes]
+    .filter((node) => typeof node.id === "string" && node.id.length > 0 && typeof node.type === "string")
+    .map((node) => ({
+      id: node.id,
+      type: node.type,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function parseAstNodes(value: unknown): ASTStateNode[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const nodes = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    const type = typeof entry.type === "string" ? entry.type.trim() : "";
+    if (!id || !type) {
+      return [];
+    }
+
+    return [{
+      id,
+      type: type as ActionNode["type"],
+    } satisfies ASTStateNode];
+  });
+
+  return normalizeAstNodes(nodes);
+}
+
+function normalizeStatePlans(plans: StatePlan[]): StatePlan[] {
+  return [...plans]
+    .filter((plan) => typeof plan.id === "string" && plan.id.trim().length > 0)
+    .map((plan) => ({
+      id: plan.id,
+      status: typeof plan.status === "string" ? plan.status : "draft",
+      taskIds: sortedUnique((plan.taskIds ?? []).filter((entry): entry is string => typeof entry === "string")),
+      nodeRefs: sortedUnique((plan.nodeRefs ?? []).filter((entry): entry is string => typeof entry === "string")),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+}
+
+function parseStatePlans(value: unknown): StatePlan[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const parsed = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    if (!id) {
+      return [];
+    }
+
+    const status = typeof entry.status === "string" ? entry.status : "draft";
+    const taskIds = Array.isArray(entry.taskIds)
+      ? entry.taskIds.filter((task): task is string => typeof task === "string")
+      : [];
+    const nodeRefs = Array.isArray(entry.nodeRefs)
+      ? entry.nodeRefs.filter((node): node is string => typeof node === "string")
+      : [];
+
+    return [{ id, status, taskIds, nodeRefs } satisfies StatePlan];
+  });
+
+  return normalizeStatePlans(parsed);
+}
+
+function normalizeRuleViolations(violations: RuleViolation[]): RuleViolation[] {
+  return [...violations]
+    .filter((violation) => typeof violation.ruleId === "string" && violation.ruleId.trim().length > 0)
+    .map((violation) => ({
+      ruleId: violation.ruleId,
+      severity: (violation.severity === "error" ? "error" : "warning") as "error" | "warning",
+      message: typeof violation.message === "string" ? violation.message : "",
+      ...(typeof violation.actionIndex === "number" && Number.isFinite(violation.actionIndex)
+        ? { actionIndex: violation.actionIndex }
+        : {}),
+    }))
+    .sort((left, right) =>
+      left.ruleId.localeCompare(right.ruleId)
+      || (left.actionIndex ?? Number.MAX_SAFE_INTEGER) - (right.actionIndex ?? Number.MAX_SAFE_INTEGER)
+      || left.message.localeCompare(right.message)
+    );
+}
+
+function parseRuleViolations(value: unknown): RuleViolation[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const parsed = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const ruleId = typeof entry.ruleId === "string" ? entry.ruleId.trim() : "";
+    const severity = entry.severity === "error" ? "error" : entry.severity === "warning" ? "warning" : null;
+    const message = typeof entry.message === "string" ? entry.message : "";
+    const actionIndex = typeof entry.actionIndex === "number" && Number.isFinite(entry.actionIndex)
+      ? entry.actionIndex
+      : undefined;
+
+    if (!ruleId || !severity) {
+      return [];
+    }
+
+    return [{
+      ruleId,
+      severity,
+      message,
+      ...(actionIndex !== undefined ? { actionIndex } : {}),
+    } satisfies RuleViolation];
+  });
+
+  return normalizeRuleViolations(parsed);
+}
 
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
@@ -567,6 +842,19 @@ function getStatePath(root: string): string {
 
 export function createEmptyStatePlane(): StatePlane {
   return {
+    version: STATE_VERSION,
+    intent: {
+      goals: [],
+      constraints: [],
+      nonGoals: [],
+    },
+    ast: [],
+    graph: {
+      dependencies: {},
+    },
+    ruleViolations: [],
+    plans: [],
+    stateHash: "",
     astIndex: {},
     symbolGraph: {},
     violations: [],
@@ -590,7 +878,16 @@ export function readStatePlane(root: string): StatePlane | null {
     const parsed = JSON.parse(raw) as unknown;
     const record = isRecord(parsed) ? parsed : {};
 
-    return materializeStatePlane({
+    const state = materializeStatePlane({
+      version: typeof record.version === "string" && record.version.trim().length > 0 ? record.version : STATE_VERSION,
+      intent: parseStateIntent(record.intent),
+      ast: parseAstNodes(record.ast),
+      graph: {
+        dependencies: parseGraph(isRecord(record.graph) ? record.graph.dependencies : undefined),
+      },
+      ruleViolations: parseRuleViolations(record.ruleViolations),
+      plans: parseStatePlans(record.plans),
+      stateHash: typeof record.stateHash === "string" ? record.stateHash : "",
       astIndex: parseAstIndex(record.astIndex),
       symbolGraph: parseGraph(record.symbolGraph),
       violations: parseViolations(record.violations),
@@ -609,8 +906,15 @@ export function readStatePlane(root: string): StatePlane | null {
           .filter((entry): entry is PendingApprovalRecord => entry !== null)
         : [],
     });
+
+    const validation = validateState(state);
+    if (!validation.valid) {
+      throw new Error(`Invalid state.json at ${statePath}: ${validation.issues.map((issue) => `${issue.path}:${issue.code}`).join(", ")}`);
+    }
+
+    return state;
   } catch {
-    return null;
+    throw new Error(`Unable to read valid state.json at ${statePath}`);
   }
 }
 
@@ -624,7 +928,7 @@ export function updateExecutionState(
     ...currentState,
     execution: nextExecution,
   });
-  const statePath = persistStatePlane(root, nextState);
+  const statePath = persistStatePlane(root, nextState, { action: "update-execution-state" });
 
   return {
     statePath,
@@ -633,14 +937,36 @@ export function updateExecutionState(
 }
 
 export function materializeStatePlane(input: StatePlane): StatePlane {
-  return {
+  const filesAnalyzed = typeof input.metrics?.filesAnalyzed === "number" && Number.isFinite(input.metrics.filesAnalyzed)
+    ? input.metrics.filesAnalyzed
+    : typeof input.metrics?.filesScanned === "number" && Number.isFinite(input.metrics.filesScanned)
+      ? input.metrics.filesScanned
+      : 0;
+  const rulesEvaluated = typeof input.metrics?.rulesEvaluated === "number" && Number.isFinite(input.metrics.rulesEvaluated)
+    ? input.metrics.rulesEvaluated
+    : 0;
+  const normalizedMetrics = {
+    ...input.metrics,
+    filesAnalyzed,
+    rulesEvaluated,
+  };
+
+  const normalized: Omit<StatePlane, "stateHash"> = {
+    version: typeof input.version === "string" && input.version.trim().length > 0 ? input.version : STATE_VERSION,
+    intent: normalizeStateIntent(input.intent),
+    ast: normalizeAstNodes(input.ast),
+    graph: {
+      dependencies: sortRecordValues(input.graph?.dependencies ?? input.dependencyGraph ?? {}),
+    },
+    ruleViolations: normalizeRuleViolations(input.ruleViolations ?? []),
+    plans: normalizeStatePlans(input.plans ?? []),
     astIndex: sortAstIndex(input.astIndex),
     symbolGraph: sortRecordValues(input.symbolGraph),
     violations: sortViolations(input.violations),
     metrics: Object.fromEntries(
-      Object.keys(input.metrics)
+      Object.keys(normalizedMetrics)
         .sort((a, b) => a.localeCompare(b))
-        .map((key) => [key, input.metrics[key]])
+        .map((key) => [key, (normalizedMetrics as Record<string, number>)[key]])
     ),
     dependencyGraph: sortRecordValues(input.dependencyGraph),
     execution: materializeExecutionState(input.execution),
@@ -648,6 +974,428 @@ export function materializeStatePlane(input: StatePlane): StatePlane {
     approvals: materializeApprovals(input.approvals),
     pendingApprovals: materializePendingApprovals(input.pendingApprovals),
   };
+
+  const stateHash = hashStateContent(normalized);
+
+  return {
+    ...normalized,
+    stateHash,
+  };
+}
+
+function toActionNodeId(index: number): string {
+  return `action:${index}`;
+}
+
+function astNodesFromDslAst(ast?: DSLAST): ASTStateNode[] {
+  if (!ast) {
+    return [];
+  }
+
+  const actions = ast.type === "sequence" ? ast.actions : [ast];
+  return actions.map((action, index) => ({
+    id: toActionNodeId(index),
+    type: action.type,
+  } satisfies ASTStateNode));
+}
+
+function dependenciesFromDslAst(ast?: DSLAST): Record<string, string[]> {
+  if (!ast) {
+    return {};
+  }
+
+  const actions = ast.type === "sequence" ? ast.actions : [ast];
+  const dependencies: Record<string, string[]> = {};
+
+  for (let index = 0; index < actions.length; index += 1) {
+    const nodeId = toActionNodeId(index);
+    const next = index < actions.length - 1 ? [toActionNodeId(index + 1)] : [];
+    dependencies[nodeId] = next;
+  }
+
+  return dependencies;
+}
+
+function statePlansFromControlPlans(plans: Plan[] | undefined, astNodes: ASTStateNode[]): StatePlan[] {
+  const nodes = astNodes.map((node) => node.id);
+  return normalizeStatePlans((plans ?? []).map((plan) => ({
+    id: plan.id,
+    status: plan.status,
+    taskIds: plan.tasks.map((task) => task.id),
+    nodeRefs: nodes,
+  })));
+}
+
+function ruleViolationsFromRuleResults(ruleResults?: RuleResult[]): RuleViolation[] {
+  if (!ruleResults) {
+    return [];
+  }
+
+  return normalizeRuleViolations(ruleResults.map((result) => ({
+    ruleId: result.ruleId,
+    severity: result.severity,
+    message: result.message,
+    ...(typeof result.actionIndex === "number" ? { actionIndex: result.actionIndex } : {}),
+  })));
+}
+
+function validationIssue(code: string, message: string, pathValue: string): StateValidationIssue {
+  return {
+    code,
+    message,
+    path: pathValue,
+  };
+}
+
+function valuesEqual<T>(left: T, right: T): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+export function buildState(input: BuildStateInput): StatePlane {
+  const previous = input.previous ?? createEmptyStatePlane();
+  const astNodes = astNodesFromDslAst(input.ast);
+  const dependencies = dependenciesFromDslAst(input.ast);
+  const intent = input.yaml
+    ? normalizeStateIntent({
+      goals: input.yaml.intent.goals,
+      constraints: input.yaml.intent.constraints,
+      nonGoals: input.yaml.intent["non-goals"],
+    })
+    : normalizeStateIntent(previous.intent);
+
+  const plans = input.plans
+    ? statePlansFromControlPlans(input.plans, astNodes)
+    : input.yaml
+      ? statePlansFromControlPlans(input.yaml.execution.plans, astNodes)
+      : normalizeStatePlans(previous.plans);
+
+  const next = materializeStatePlane({
+    ...previous,
+    version: STATE_VERSION,
+    intent,
+    ast: astNodes.length > 0 ? astNodes : previous.ast,
+    graph: {
+      dependencies: Object.keys(dependencies).length > 0
+        ? dependencies
+        : previous.graph.dependencies,
+    },
+    ruleViolations: input.ruleResults
+      ? ruleViolationsFromRuleResults(input.ruleResults)
+      : previous.ruleViolations,
+    plans,
+  });
+
+  return next;
+}
+
+export function hashState(state: StatePlane): string {
+  return hashStateContent(stateWithoutHash(materializeStatePlane(state)));
+}
+
+export function validateState(state: StatePlane): ValidationResult {
+  const issues: StateValidationIssue[] = [];
+  const normalized = materializeStatePlane(state);
+
+  if (!normalized.version || typeof normalized.version !== "string") {
+    issues.push(validationIssue("missing-version", "Missing state version", "version"));
+  }
+
+  if (!Array.isArray(normalized.intent.goals) || !Array.isArray(normalized.intent.constraints) || !Array.isArray(normalized.intent.nonGoals)) {
+    issues.push(validationIssue("intent-invalid", "Intent arrays are required", "intent"));
+  }
+
+  const nodeIds = new Set(normalized.ast.map((node) => node.id));
+  for (const node of normalized.ast) {
+    if (!node.id || !node.type) {
+      issues.push(validationIssue("ast-node-invalid", "AST node requires id and type", "ast"));
+    }
+  }
+
+  for (const [nodeId, refs] of Object.entries(normalized.graph.dependencies)) {
+    if (!nodeIds.has(nodeId)) {
+      issues.push(validationIssue("graph-source-missing", `Graph source node does not exist: ${nodeId}`, `graph.dependencies.${nodeId}`));
+    }
+
+    for (const ref of refs) {
+      if (!nodeIds.has(ref)) {
+        issues.push(validationIssue("graph-target-missing", `Graph dependency node does not exist: ${ref}`, `graph.dependencies.${nodeId}`));
+      }
+    }
+  }
+
+  for (let index = 0; index < normalized.plans.length; index += 1) {
+    const plan = normalized.plans[index];
+    if (!plan.id) {
+      issues.push(validationIssue("plan-id-missing", "Plan id is required", `plans[${index}].id`));
+    }
+
+    for (const nodeRef of plan.nodeRefs) {
+      if (!nodeIds.has(nodeRef)) {
+        issues.push(validationIssue("plan-node-ref-missing", `Plan nodeRef does not exist: ${nodeRef}`, `plans[${index}].nodeRefs`));
+      }
+    }
+  }
+
+  if (normalized.stateHash !== hashState(normalized)) {
+    issues.push(validationIssue("state-hash-mismatch", "State hash integrity check failed", "stateHash"));
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
+export function validateConsistency(input: ConsistencyInput): ValidationResult {
+  const issues: StateValidationIssue[] = [];
+  const state = materializeStatePlane(input.state);
+
+  if (input.yaml) {
+    const yamlIntent = normalizeStateIntent({
+      goals: input.yaml.intent.goals,
+      constraints: input.yaml.intent.constraints,
+      nonGoals: input.yaml.intent["non-goals"],
+    });
+
+    if (!valuesEqual(yamlIntent, state.intent)) {
+      issues.push(validationIssue("yaml-intent-divergence", "YAML intent diverges from state intent", "intent"));
+    }
+
+    const expectedPlans = statePlansFromControlPlans(input.yaml.execution.plans, state.ast);
+    if (!valuesEqual(expectedPlans, state.plans)) {
+      issues.push(validationIssue("yaml-plan-divergence", "YAML plans diverge from state plans", "plans"));
+    }
+  }
+
+  if (input.ast) {
+    const expectedAst = normalizeAstNodes(astNodesFromDslAst(input.ast));
+    const expectedGraph = sortRecordValues(dependenciesFromDslAst(input.ast));
+
+    if (!valuesEqual(expectedAst, state.ast)) {
+      issues.push(validationIssue("ast-divergence", "State AST projection diverges from DSL AST", "ast"));
+    }
+
+    if (!valuesEqual(expectedGraph, state.graph.dependencies)) {
+      issues.push(validationIssue("graph-divergence", "State dependency graph diverges from DSL AST", "graph.dependencies"));
+    }
+  }
+
+  if (input.ruleResults) {
+    const expectedViolations = ruleViolationsFromRuleResults(input.ruleResults);
+    if (!valuesEqual(expectedViolations, state.ruleViolations)) {
+      issues.push(validationIssue("rule-divergence", "State rule violations diverge from rule output", "ruleViolations"));
+    }
+
+    const maxNodeIndex = state.ast.length - 1;
+    for (let index = 0; index < input.ruleResults.length; index += 1) {
+      const result = input.ruleResults[index];
+      if (result.actionIndex === undefined) {
+        continue;
+      }
+
+      if (result.actionIndex < 0 || result.actionIndex > maxNodeIndex) {
+        issues.push(validationIssue(
+          "rule-action-index-out-of-range",
+          `Rule action index out of range: ${result.actionIndex}`,
+          `ruleResults[${index}].actionIndex`
+        ));
+      }
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
+export function validateFullVsIncrementalState(
+  current: StatePlane,
+  recomputed: StatePlane
+): ValidationResult {
+  const issues: StateValidationIssue[] = [];
+  const left = materializeStatePlane(current);
+  const right = materializeStatePlane(recomputed);
+
+  if (!valuesEqual(left.intent, right.intent)) {
+    issues.push(validationIssue("recompute-intent-divergence", "Incremental state intent differs from full recomputation", "intent"));
+  }
+
+  if (!valuesEqual(left.ast, right.ast)) {
+    issues.push(validationIssue("recompute-ast-divergence", "Incremental state AST differs from full recomputation", "ast"));
+  }
+
+  if (!valuesEqual(left.graph, right.graph)) {
+    issues.push(validationIssue("recompute-graph-divergence", "Incremental state graph differs from full recomputation", "graph"));
+  }
+
+  if (!valuesEqual(left.ruleViolations, right.ruleViolations)) {
+    issues.push(validationIssue("recompute-rule-divergence", "Incremental rule violations differ from full recomputation", "ruleViolations"));
+  }
+
+  if (!valuesEqual(left.plans, right.plans)) {
+    issues.push(validationIssue("recompute-plan-divergence", "Incremental plans differ from full recomputation", "plans"));
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
+function stateSnapshotsPath(root: string): string {
+  return path.join(root, ".choir", "state.snapshots.jsonl");
+}
+
+function stateTransitionsPath(root: string): string {
+  return path.join(root, ".choir", "state.transitions.jsonl");
+}
+
+function stateAuditPath(root: string): string {
+  return path.join(root, ".choir", "state.audit.jsonl");
+}
+
+function readJsonLines<T>(filePath: string): T[] {
+  if (!fs.existsSync(filePath)) {
+    return [];
+  }
+
+  return fs.readFileSync(filePath, "utf-8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as T);
+}
+
+function appendJsonLine(filePath: string, value: unknown): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.appendFileSync(filePath, `${stableStringify(value)}\n`, "utf-8");
+}
+
+function computeStateDiff(previous: StatePlane | null, next: StatePlane): Record<string, unknown> {
+  if (!previous) {
+    return {
+      kind: "initial",
+      nextHash: next.stateHash,
+    };
+  }
+
+  const changedKeys = Object.keys(next)
+    .filter((key) => !valuesEqual((previous as Record<string, unknown>)[key], (next as Record<string, unknown>)[key]))
+    .sort((a, b) => a.localeCompare(b));
+
+  return {
+    changedKeys,
+    beforeHash: previous.stateHash,
+    afterHash: next.stateHash,
+  };
+}
+
+export function validateTransition(previous: StatePlane | null, next: StatePlane, action: string): ValidationResult {
+  const issues: StateValidationIssue[] = [];
+  if (!action || action.trim().length === 0) {
+    issues.push(validationIssue("transition-action-missing", "State transition action is required", "action"));
+  }
+
+  if (!previous) {
+    return {
+      valid: issues.length === 0,
+      issues,
+    };
+  }
+
+  const allowedKeys = new Set([
+    "version",
+    "intent",
+    "ast",
+    "graph",
+    "ruleViolations",
+    "plans",
+    "stateHash",
+    "astIndex",
+    "symbolGraph",
+    "violations",
+    "metrics",
+    "dependencyGraph",
+    "execution",
+    "strategyHistory",
+    "approvals",
+    "pendingApprovals",
+  ]);
+
+  for (const key of Object.keys(next)) {
+    if (!allowedKeys.has(key)) {
+      issues.push(validationIssue("transition-unexpected-field", `Unexpected state field mutation: ${key}`, key));
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+  };
+}
+
+export function saveSnapshot(root: string, state: StatePlane): StateSnapshot {
+  const normalized = materializeStatePlane(state);
+  const timestamp = new Date().toISOString();
+  const snapshot: StateSnapshot = {
+    id: `state-${formatTimestampForId(timestamp)}-${normalized.stateHash.slice(0, 8)}`,
+    timestamp,
+    state: deepClone(normalized),
+    hash: normalized.stateHash,
+  };
+
+  appendJsonLine(stateSnapshotsPath(root), snapshot);
+  return snapshot;
+}
+
+function recordStateTransition(root: string, transition: StateTransition): void {
+  appendJsonLine(stateTransitionsPath(root), transition);
+}
+
+function recordStateAudit(root: string, audit: StateAudit): void {
+  appendJsonLine(stateAuditPath(root), audit);
+}
+
+export function listSnapshots(root: string): StateSnapshot[] {
+  return readJsonLines<StateSnapshot>(stateSnapshotsPath(root));
+}
+
+export function rollbackState(root: string, snapshotId: string): StatePlane {
+  const snapshots = listSnapshots(root);
+  const target = snapshots.find((snapshot) => snapshot.id === snapshotId);
+  if (!target) {
+    throw new Error(`Snapshot not found: ${snapshotId}`);
+  }
+
+  const validated = materializeStatePlane(target.state);
+  const result = validateState(validated);
+  if (!result.valid) {
+    throw new Error(`Snapshot is invalid: ${result.issues.map((issue) => issue.code).join(", ")}`);
+  }
+
+  persistStatePlane(root, validated, {
+    action: "rollback",
+    skipSnapshot: false,
+  });
+
+  return validated;
+}
+
+export function replaySnapshots(root: string, snapshotIds: string[]): StatePlane[] {
+  const snapshotMap = new Map(listSnapshots(root).map((snapshot) => [snapshot.id, snapshot] as const));
+  const states: StatePlane[] = [];
+
+  for (const id of snapshotIds) {
+    const snapshot = snapshotMap.get(id);
+    if (!snapshot) {
+      throw new Error(`Snapshot not found: ${id}`);
+    }
+
+    states.push(materializeStatePlane(snapshot.state));
+  }
+
+  return states;
 }
 
 export function appendStrategyHistory(
@@ -659,7 +1407,7 @@ export function appendStrategyHistory(
     ...current,
     strategyHistory: [...current.strategyHistory, ...entries],
   });
-  const statePath = persistStatePlane(root, nextState);
+  const statePath = persistStatePlane(root, nextState, { action: "append-strategy-history" });
 
   return {
     statePath,
@@ -667,11 +1415,81 @@ export function appendStrategyHistory(
   };
 }
 
-export function persistStatePlane(root: string, state: StatePlane): string {
+function atomicWriteJson(filePath: string, payload: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tempPath = `${filePath}.tmp-${createHash("sha256").update(payload).digest("hex").slice(0, 12)}`;
+  fs.writeFileSync(tempPath, payload, "utf-8");
+  fs.renameSync(tempPath, filePath);
+}
+
+export function persistStatePlane(root: string, state: StatePlane, options?: PersistStateOptions): string {
   const statePath = getStatePath(root);
-  fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(materializeStatePlane(state), null, 2), "utf-8");
-  return statePath;
+  const previousRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf-8") : null;
+  const previousState = previousRaw ? readStatePlane(root) : null;
+
+  const nextState = materializeStatePlane(state);
+  const validation = validateState(nextState);
+  if (!validation.valid) {
+    throw new Error(`State validation failed: ${validation.issues.map((issue) => `[${issue.code}] ${issue.path}`).join(", ")}`);
+  }
+
+  if (options?.consistency) {
+    const consistency = validateConsistency({
+      ...options.consistency,
+      state: nextState,
+    });
+
+    if (!consistency.valid) {
+      throw new Error(`State consistency validation failed: ${consistency.issues.map((issue) => `[${issue.code}] ${issue.path}`).join(", ")}`);
+    }
+  }
+
+  const transitionValidation = validateTransition(previousState, nextState, options?.action ?? "persist-state");
+  if (!transitionValidation.valid) {
+    throw new Error(`Invalid state transition: ${transitionValidation.issues.map((issue) => `[${issue.code}] ${issue.path}`).join(", ")}`);
+  }
+
+  const nextPayload = `${JSON.stringify(nextState, null, 2)}\n`;
+
+  try {
+    atomicWriteJson(statePath, nextPayload);
+    const reloaded = readStatePlane(root);
+    if (!reloaded) {
+      throw new Error("State persistence validation failed: state file missing after write");
+    }
+
+    const postValidation = validateState(reloaded);
+    if (!postValidation.valid) {
+      throw new Error(`State persistence validation failed: ${postValidation.issues.map((issue) => issue.code).join(", ")}`);
+    }
+
+    if (!options?.skipSnapshot) {
+      saveSnapshot(root, reloaded);
+    }
+
+    const previousHash = previousState?.stateHash ?? "GENESIS";
+    const transition: StateTransition = {
+      from: previousHash,
+      to: reloaded.stateHash,
+      action: options?.action ?? "persist-state",
+    };
+    recordStateTransition(root, transition);
+
+    const stateAudit: StateAudit = {
+      previousHash,
+      newHash: reloaded.stateHash,
+      diff: computeStateDiff(previousState, reloaded),
+    };
+    recordStateAudit(root, stateAudit);
+
+    return statePath;
+  } catch (error) {
+    if (previousRaw !== null) {
+      atomicWriteJson(statePath, previousRaw.endsWith("\n") ? previousRaw : `${previousRaw}\n`);
+    }
+
+    throw error;
+  }
 }
 
 export function hasApprovalForDiff(root: string, diffHash: string): boolean {
@@ -694,7 +1512,7 @@ export function upsertPendingApproval(root: string, pending: PendingApprovalReco
     ],
   });
 
-  const statePath = persistStatePlane(root, nextState);
+  const statePath = persistStatePlane(root, nextState, { action: "upsert-pending-approval" });
   return { statePath, state: nextState };
 }
 
@@ -729,7 +1547,7 @@ export function approvePendingDiff(
     pendingApprovals: current.pendingApprovals.filter((entry) => entry.id !== id),
   });
 
-  const statePath = persistStatePlane(root, nextState);
+  const statePath = persistStatePlane(root, nextState, { action: "approve-pending-diff" });
   return {
     statePath,
     state: nextState,
@@ -746,7 +1564,7 @@ export function rejectPendingDiff(root: string, id: string): { statePath: string
     pendingApprovals: nextPending,
   });
 
-  const statePath = persistStatePlane(root, nextState);
+  const statePath = persistStatePlane(root, nextState, { action: "reject-pending-diff" });
   return {
     statePath,
     state: nextState,

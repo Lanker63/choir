@@ -504,6 +504,11 @@ The DSL compiler is transactional and deterministic:
 - Applies AST mutations in memory only after validation/rule checks pass
 - Validates resulting config against schema
 - Writes `.choir/choir.config.yaml` once (or returns no-op)
+- After successful YAML write, builds both incremental and full recomputed state projections
+- Compares incremental vs full projected state deterministically before persistence
+- Falls back to full projected state if incremental/full equivalence check fails
+- Persists state through strict validation and consistency checks (YAML/AST/rule outputs)
+- Uses atomic write + rollback-safe persistence for `.choir/state.json`
 
 Rule engine trace and performance data include:
 
@@ -641,6 +646,8 @@ Idempotency guarantees:
 - Repeating the same single `define` command against existing identical state is deterministic no-op
 - Duplicate `define` values in a single command sequence are rejected (no partial mutation)
 - Incremental rule results are deterministic and equal full recomputation for identical inputs
+- Projected state hashes are deterministic for equivalent state content
+- Incremental projected state equals full recomputed state (or deterministically falls back before persistence)
 - Cache invalidation prevents stale rule outcomes from being reused after AST changes
 - Duplicate plan ids are not re-added
 - Macro expansion with identical inputs produces identical expanded commands
@@ -897,10 +904,25 @@ Choir runs the pipeline on save and publishes diagnostics to **Problems** (`View
 
 Derived system state is written to `.choir/state.json`, including:
 
+- versioned projected state fields (`version`, `intent`, `ast`, `graph`, `ruleViolations`, `plans`, `stateHash`)
 - AST and symbol/dependency metadata
 - diagnostics and metrics
 - execution runtime state (task status, task results, history, preview approvals)
 - strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
+
+State correctness guarantees:
+
+- `state.json` reads are strict; invalid/corrupt state is rejected.
+- Persistence is atomic and rollback-safe (`persistStatePlane`).
+- Pre-write and post-write validation must pass.
+- Optional consistency checks enforce alignment between state and YAML/AST/rule outputs.
+- State transitions are validated and recorded deterministically.
+
+State integrity artifacts:
+
+- snapshots: `.choir/state.snapshots.jsonl`
+- transitions: `.choir/state.transitions.jsonl`
+- state audit trail: `.choir/state.audit.jsonl`
 
 Audit evidence is persisted in `.choir/audit.log.jsonl`.
 
@@ -934,3 +956,4 @@ Interactive init wizard session state (resumable) is persisted in `.choir/init-s
 | Rule Editor appears blank | Open the Choir activity view, then run `Choir: Open Rule Editor` from Command Palette. |
 | No DSL completion/hover in `.choir` files | Confirm the file extension is `.choir`, language mode is `Choir DSL`, and the extension is enabled in the workspace. |
 | `@choir init` exits unexpectedly | Re-run `@choir init`; if state was paused, choose Resume from the saved wizard prompt. |
+| `Unable to read valid state.json` appears | Validate or remove the corrupted `.choir/state.json`, then rerun a pipeline/compile command so Choir can regenerate a valid derived state. |

@@ -32,6 +32,7 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 - Format: JSON (`.choir/state.json`)
 - Owner: System
 - Contains:
+  - Versioned projected state model (`version`, `intent`, `ast`, `graph`, `ruleViolations`, `plans`, `stateHash`)
   - AST indexes
   - Symbol/dependency graphs
   - Diagnostics
@@ -42,6 +43,25 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
   - Fully reproducible from workspace + control plane
   - Not user-authored
   - Deterministically serialized
+  - State hash integrity must verify on every read/write
+  - Persistence must be atomic and rollback-safe
+  - Consistency with YAML/AST/rule outputs must be enforceable at write time
+  - Invalid persisted state must fail fast during read
+
+State correctness layer contract:
+
+- `readStatePlane` validates and rejects invalid/corrupt `state.json`.
+- `persistStatePlane` performs deterministic validation and consistency checks before write.
+- Writes are atomic and include post-write validation; failures rollback to prior bytes.
+- State transitions are validated and recorded deterministically.
+- Snapshot lifecycle is deterministic and includes:
+  - save (`.choir/state.snapshots.jsonl`)
+  - list
+  - rollback
+  - replay
+- Transition/audit side logs are append-only:
+  - `.choir/state.transitions.jsonl`
+  - `.choir/state.audit.jsonl`
 
 ---
 
@@ -763,6 +783,8 @@ For identical inputs, Choir must produce identical:
 - Execution graph/layers/batches
 - Conflict decisions
 - Transaction outcomes
+- State hash values and transition records
+- Snapshot ids and rollback/replay outcomes
 - Audit chain ordering and record hashes
 - Compliance report summaries for identical filter windows
 - Macro library version resolution and lockfile pinning outcomes
@@ -783,6 +805,10 @@ Non-negotiable safeguards:
 11. Intent-level abstractions must not bypass DSL, policy, execution, or audit layers
 12. Incremental rule execution must not return stale cache results; invalidation is required on changed nodes
 13. Incremental results must equal full recomputation; mismatch requires deterministic fallback to full evaluation
+14. `state.json` reads must fail on invalid structure, broken references, or hash mismatch
+15. State writes must be atomic, validated pre/post write, and rollback-safe on failure
+16. Incremental projected state must equal full recomputed state; mismatch requires deterministic full-state fallback
+17. Snapshot rollback/replay must be deterministic and integrity-checked before reuse
 
 ---
 
@@ -791,6 +817,10 @@ Non-negotiable safeguards:
 ```yaml
 YAML = intent + policy + execution plans (authoritative)
 JSON = computed facts + execution runtime state (derived)
+State Integrity = validated hash + consistency checks + transition validation
+State Snapshots = `.choir/state.snapshots.jsonl` (derived rollback points)
+State Transition Log = `.choir/state.transitions.jsonl` (append-only)
+State Audit Log = `.choir/state.audit.jsonl` (append-only)
 Chat = orchestration interface (non-authoritative)
 Init Session = resumable wizard interaction state (`.choir/init-state.json`, non-authoritative)
 Audit = immutable compliance evidence (append-only, hash-chained)

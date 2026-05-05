@@ -4,7 +4,7 @@ import { RuleRegistry } from "../rules/registry.js";
 import { compileControlPlaneToRules } from "../dsl/compiler.js";
 import { Diagnostic, Trace } from "./types.js";
 import { ControlPlane } from "../schema.js";
-import { createEmptyExecutionState, persistStatePlane, readStatePlane } from "./state.js";
+import { buildState, createEmptyExecutionState, createEmptyStatePlane, persistStatePlane, readStatePlane } from "./state.js";
 import { runSemantic } from "../semantic/engine.js";
 import { runCode } from "../code/engine.js";
 import { runStrategy } from "../strategy/engine.js";
@@ -279,7 +279,14 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   const shouldPersistState = input.persistState !== false;
   const previousState = shouldPersistState ? readStatePlane(input.workspace.root) : null;
 
+  const projectedState = buildState({
+    yaml: input.controlPlane,
+    plans: input.controlPlane.execution.plans,
+    previous: previousState ?? createEmptyStatePlane(),
+  });
+
   const nextState = {
+    ...projectedState,
     astIndex: astResult.astIndex,
     symbolGraph: astResult.symbolGraph,
     violations: diagnostics,
@@ -303,7 +310,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   };
 
   const statePath = shouldPersistState
-    ? persistStatePlane(input.workspace.root, nextState)
+    ? persistStatePlane(input.workspace.root, nextState, {
+      action: "pipeline-run",
+      consistency: {
+        yaml: input.controlPlane,
+      },
+    })
     : path.join(input.workspace.root, ".choir", "state.json");
 
   const trace: Trace = {

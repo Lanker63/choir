@@ -4,13 +4,16 @@ import path from "path";
 import * as YAML from "yaml";
 import { generatePlan } from "./orchestration.js";
 import {
+  buildState,
   approvePendingDiff,
   createEmptyStatePlane,
   hasApprovalForDiff,
   listPendingApprovals,
+  persistStatePlane,
   readStatePlane,
   rejectPendingDiff,
   StatePlane,
+  validateFullVsIncrementalState,
   upsertPendingApproval,
 } from "./state.js";
 import {
@@ -902,6 +905,34 @@ export function compileDSLAndWrite(
 
     const config = controlPlaneToChoirConfig(result.updatedControlPlane);
     writeYAML(config, controlPath);
+
+    const stateRoot = options?.workspaceRoot ?? inferPolicyRoot(controlPath, options?.workspaceRoot);
+    const previousState = readStatePlane(stateRoot) ?? createEmptyStatePlane();
+    const incrementalState = buildState({
+      yaml: result.updatedControlPlane,
+      ast: result.trace.ast,
+      ruleResults: result.trace.ruleResults,
+      plans: result.updatedControlPlane.execution.plans,
+      previous: previousState,
+    });
+    const fullState = buildState({
+      yaml: result.updatedControlPlane,
+      ast: result.trace.ast,
+      ruleResults: result.trace.ruleResults,
+      plans: result.updatedControlPlane.execution.plans,
+      previous: createEmptyStatePlane(),
+    });
+    const recomputeCheck = validateFullVsIncrementalState(incrementalState, fullState);
+    const stateToPersist = recomputeCheck.valid ? incrementalState : fullState;
+
+    persistStatePlane(stateRoot, stateToPersist, {
+      action: "compile-dsl",
+      consistency: {
+        yaml: result.updatedControlPlane,
+        ast: result.trace.ast,
+        ruleResults: result.trace.ruleResults,
+      },
+    });
 
     if (workspaceRoot && policyEvaluation.result.requiresApproval) {
       const pendingId = `diff-${diffHash.slice(0, 12)}`;
