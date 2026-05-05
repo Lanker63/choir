@@ -89,6 +89,11 @@ import {
   getDeterministicCompletions,
   validateChoirDocument,
 } from "../../core/choirLanguageModel.js";
+import {
+  expandMacro,
+  getMacro,
+  runMacro,
+} from "../../core/macros.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -873,6 +878,7 @@ const pass2: TestPass = {
           "approve",
           "reject",
           "policy",
+          "macro",
         ]);
 
         const defineTypes = getDeterministicCompletions("choir define ").map((item) => item.label);
@@ -883,6 +889,9 @@ const pass2: TestPass = {
 
         const policyTail = getDeterministicCompletions("choir policy ").map((item) => item.label);
         assert.deepStrictEqual(policyTail, ["status"]);
+
+        const macroTail = getDeterministicCompletions("choir macro ").map((item) => item.label);
+        assert.deepStrictEqual(macroTail, ["list", "show", "identifier"]);
       },
     },
     {
@@ -898,6 +907,111 @@ const pass2: TestPass = {
         assert.strictEqual(diagnostics.length, 1);
         assert.strictEqual(diagnostics[0].line, 2);
         assert.ok(diagnostics[0].message.includes("Expected quoted string"));
+      },
+    },
+    {
+      id: "2.29",
+      name: "dsl parser supports macro command surface",
+      run: async () => {
+        assert.deepStrictEqual(parseCommand("choir macro list").ast, {
+          type: "macro-list",
+        });
+
+        assert.deepStrictEqual(parseCommand("choir macro show enforce-service-boundaries").ast, {
+          type: "macro-show",
+          macroId: "enforce-service-boundaries",
+        });
+
+        assert.deepStrictEqual(
+          parseCommand('choir macro enforce-service-boundaries entity="repository", tier="core"').ast,
+          {
+            type: "macro-run",
+            macroId: "enforce-service-boundaries",
+            args: {
+              entity: "repository",
+              tier: "core",
+            },
+          }
+        );
+      },
+    },
+    {
+      id: "2.30",
+      name: "macro expansion is deterministic with parameter defaults",
+      run: async () => {
+        const macro = getMacro(repoRoot, "enforce-service-boundaries");
+
+        const first = expandMacro(macro, {});
+        const second = expandMacro(macro, {});
+
+        assert.deepStrictEqual(first, second);
+        assert.deepStrictEqual(first, [
+          'choir define goal "enforce clean service boundaries"',
+          'choir define constraint "no direct db access"',
+          "choir plan",
+        ]);
+      },
+    },
+    {
+      id: "2.31",
+      name: "macro execution compiles sequentially through yaml pipeline",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-run-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
+          "macros:",
+          "  - id: setup-boundaries",
+          "    parameters:",
+          "      - name: entity",
+          "        required: false",
+          "        default: service",
+          "    body:",
+          "      - choir define goal \"enforce clean {{entity}} boundaries\"",
+          "      - choir define constraint \"no direct db access\"",
+          "      - choir plan",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        const executed = runMacro(
+          root,
+          "setup-boundaries",
+          { entity: "repository" },
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(executed.decision, "allow");
+        assert.strictEqual(executed.trace.executedSteps, 3);
+        assert.strictEqual(executed.steps.length, 3);
+        assert.strictEqual(fs.existsSync(controlPath), true);
+        assert.ok(executed.updatedControlPlane.intent.goals.includes("enforce clean repository boundaries"));
+        assert.ok(executed.updatedControlPlane.intent.constraints.includes("no direct db access"));
+      },
+    },
+    {
+      id: "2.32",
+      name: "macro composition rejects recursive cycles deterministically",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-recursion-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
+          "macros:",
+          "  - id: a",
+          "    body:",
+          "      - choir macro b",
+          "  - id: b",
+          "    body:",
+          "      - choir macro a",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        assert.throws(
+          () => runMacro(root, "a", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          /Macro recursion detected/
+        );
       },
     },
   ],

@@ -267,7 +267,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -279,6 +279,13 @@ Grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<macro> ::= "macro" "list"
+          | "macro" "show" <identifier>
+          | "macro" <identifier> [<args>]
+
+<args> ::= <key-value> ("," <key-value>)*
+
+<key-value> ::= <identifier> "=" <string>
 
 <string> ::= QUOTED_STRING
 <identifier> ::= [a-zA-Z0-9-_]+
@@ -298,7 +305,7 @@ Choir ships first-class VS Code language support for the DSL.
   - `*.choir` is associated to language id `choir`.
 - Syntax highlighting:
   - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
-  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `then`, and related terminals).
+  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `macro`, `then`, and related terminals).
 - Language configuration:
   - Line comments use `#`.
   - Bracket pairs: `{}`, `()`.
@@ -311,7 +318,7 @@ Choir ships first-class VS Code language support for the DSL.
   - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
   - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
 - Snippets:
-  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, and `policy status`.
+  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, and `macro` commands.
 - Editor trace:
   - Command Palette: `Choir: Show DSL Editor Trace`
   - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
@@ -355,6 +362,25 @@ Supported commands:
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir macro list`
+- `choir macro show <macroId>`
+- `choir macro <macroId> [key="value", ...]`
+
+Macro storage and model:
+
+- Macro registry file: `.choir/macros.yaml`
+- Each macro contains:
+  - `id`
+  - optional `version`
+  - optional `description`
+  - optional `parameters[]` (`name`, `required`, optional `default`)
+  - `body[]` (templated DSL command lines)
+- Expansion pipeline is strict and deterministic:
+  - `Macro -> DSL -> AST -> YAML -> Pipeline`
+- Macros never write YAML directly.
+- Macro body commands are validated with the same DSL parser used by runtime.
+- Macro steps execute sequentially through `compileDSLAndWrite`, so each step passes policy gates and diff/approval checks.
+- Macro composition is supported (`choir macro ...` inside macro bodies) with deterministic recursion detection and depth limit.
 
 Mutation behavior:
 
@@ -405,6 +431,7 @@ Idempotency guarantees:
 - Same input and same starting YAML produce identical output YAML
 - Duplicate intent entries are deduplicated and stably sorted
 - Duplicate plan ids are not re-added
+- Macro expansion with identical inputs produces identical expanded commands
 
 ---
 

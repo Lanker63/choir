@@ -1,0 +1,12 @@
+macros:
+  - id: enforce-service-boundaries
+    version: "1.0.0"
+    description: "Enforce service-level boundary defaults"
+    parameters:
+      - name: entity
+        required: false
+        default: "service"
+    body:
+      - choir define goal "enforce clean {{entity}} boundaries"
+      - choir define constraint "no direct db access"
+      - choir plan

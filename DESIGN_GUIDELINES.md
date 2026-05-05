@@ -77,7 +77,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -89,6 +89,13 @@ DSL command grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<macro> ::= "macro" "list"
+          | "macro" "show" <identifier>
+          | "macro" <identifier> [<args>]
+
+<args> ::= <key-value> ("," <key-value>)*
+
+<key-value> ::= <identifier> "=" <string>
 ```
 
 Router constraints:
@@ -98,6 +105,14 @@ Router constraints:
 - Compiler maps AST nodes directly to YAML mutations.
 - No direct runtime mutation outside YAML during DSL compilation.
 - Config is validated before write; write is single-step (no partial updates).
+
+Macro constraints:
+
+- Macro expansion must produce valid DSL commands only.
+- Macros must never mutate YAML directly.
+- Macro execution must flow through existing DSL compiler and policy gate path.
+- Macro expansion and execution ordering must be deterministic.
+- Macro composition is permitted with recursion detection and bounded depth.
 
 ## VS Code Language Support Contract (`.choir`)
 
@@ -173,6 +188,18 @@ Supported command surface (via `@choir`):
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir macro list`
+- `choir macro show <macroId>`
+- `choir macro <macroId> [key="value", ...]`
+
+Macro execution contract:
+
+- Macro registry source: `.choir/macros.yaml`.
+- Macros define reusable DSL command bodies with optional parameter templates (`{{name}}`).
+- Runtime flow: `Macro -> DSL -> AST -> YAML -> Pipeline`.
+- Each expanded command is compiled sequentially through existing `compileDSLAndWrite` behavior.
+- Every expanded command remains subject to policy decision (`allow | require-approval | deny`).
+- Execution trace records expanded commands, step count, and per-step decisions.
 
 Mutation contract:
 

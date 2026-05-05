@@ -11,6 +11,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <approve>
   | <reject>
   | <policy-status>
+  | <macro>
 
 <define> ::= "define" <define-type> <string>
 
@@ -38,6 +39,14 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <policy-status> ::= "policy" "status"
 
+<macro> ::= "macro" "list"
+          | "macro" "show" <identifier>
+          | "macro" <identifier> [<args>]
+
+<args> ::= <key-value> ("," <key-value>)*
+
+<key-value> ::= <identifier> "=" <string>
+
 <plan-ref> ::= "plan" <identifier>
 
 <string> ::= QUOTED_STRING
@@ -47,7 +56,8 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 export type Token =
   | { type: "keyword"; value: string }
   | { type: "string"; value: string }
-  | { type: "identifier"; value: string };
+  | { type: "identifier"; value: string }
+  | { type: "symbol"; value: "=" | "," };
 
 export const CHOIR_ROOT_KEYWORD = "choir" as const;
 
@@ -62,7 +72,10 @@ export const CHOIR_ACTION_KEYWORDS = [
   "approve",
   "reject",
   "policy",
+  "macro",
 ] as const;
+
+export const CHOIR_MACRO_META_KEYWORDS = ["list", "show"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
 export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "violations", "hotspots"] as const;
@@ -146,6 +159,21 @@ export type PolicyStatusNode = {
   type: "policy-status";
 };
 
+export type MacroListNode = {
+  type: "macro-list";
+};
+
+export type MacroShowNode = {
+  type: "macro-show";
+  macroId: string;
+};
+
+export type MacroRunNode = {
+  type: "macro-run";
+  macroId: string;
+  args: Record<string, string>;
+};
+
 export type ActionNode =
   | DefineNode
   | AnalyzeNode
@@ -156,7 +184,10 @@ export type ActionNode =
   | ExportNode
   | ApproveNode
   | RejectNode
-  | PolicyStatusNode;
+  | PolicyStatusNode
+  | MacroListNode
+  | MacroShowNode
+  | MacroRunNode;
 
 export type SequenceNode = {
   type: "sequence";
@@ -285,6 +316,12 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
+    if (char === "=" || char === ",") {
+      tokens.push({ type: "symbol", value: char });
+      cursor += 1;
+      continue;
+    }
+
     throw new Error(`Invalid character in Choir DSL: ${char}`);
   }
 
@@ -342,9 +379,70 @@ class Parser {
         return this.parseReject();
       case "policy":
         return this.parsePolicyStatus();
+      case "macro":
+        return this.parseMacro();
       default:
         throw new Error(`Unsupported Choir DSL action: ${next.value}`);
     }
+  }
+
+  private parseMacro(): MacroListNode | MacroShowNode | MacroRunNode {
+    this.expectKeyword("macro");
+
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      throw new Error("Expected macro id or 'list'|'show' after 'macro'");
+    }
+
+    const nextValue = next.value.toLowerCase();
+
+    if ((next.type === "identifier" || next.type === "keyword") && nextValue === "list") {
+      this.take();
+      return { type: "macro-list" };
+    }
+
+    if ((next.type === "identifier" || next.type === "keyword") && nextValue === "show") {
+      this.take();
+      return {
+        type: "macro-show",
+        macroId: this.expectIdentifier(),
+      };
+    }
+
+    const macroId = this.expectIdentifier();
+    const args: Record<string, string> = {};
+
+    while (true) {
+      const current = this.peek();
+      if (!current || (current.type === "keyword" && current.value === "then")) {
+        break;
+      }
+
+      const key = this.expectIdentifierLike();
+      this.expectSymbol("=");
+      const value = this.expectString();
+
+      if (Object.prototype.hasOwnProperty.call(args, key)) {
+        throw new Error(`Duplicate macro argument: ${key}`);
+      }
+
+      args[key] = value;
+
+      if (!this.consumeSymbol(",")) {
+        const afterArg = this.peek();
+        if (!afterArg || (afterArg.type === "keyword" && afterArg.value === "then")) {
+          break;
+        }
+
+        throw new Error("Expected ',' between macro arguments");
+      }
+    }
+
+    return {
+      type: "macro-run",
+      macroId,
+      args,
+    };
   }
 
   private parseDefine(): DefineNode {
@@ -516,9 +614,41 @@ class Parser {
     return token.value;
   }
 
+  private expectIdentifierLike(): string {
+    const token = this.take();
+    if (!token || (token.type !== "identifier" && token.type !== "keyword")) {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected identifier, found ${found}`);
+    }
+
+    if (!CHOIR_IDENTIFIER_PATTERN.test(token.value)) {
+      throw new Error(`Invalid identifier: ${token.value}`);
+    }
+
+    return token.value;
+  }
+
+  private expectSymbol(expected: "=" | ","): void {
+    const token = this.take();
+    if (!token || token.type !== "symbol" || token.value !== expected) {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected symbol '${expected}', found ${found}`);
+    }
+  }
+
   private consumeKeyword(value: string): boolean {
     const token = this.peek();
     if (!token || token.type !== "keyword" || token.value !== value) {
+      return false;
+    }
+
+    this.index += 1;
+    return true;
+  }
+
+  private consumeSymbol(value: "=" | ","): boolean {
+    const token = this.peek();
+    if (!token || token.type !== "symbol" || token.value !== value) {
       return false;
     }
 
@@ -580,6 +710,23 @@ function validateActionNode(node: ActionNode): boolean {
 
   if (node.type === "policy-status") {
     return true;
+  }
+
+  if (node.type === "macro-list") {
+    return true;
+  }
+
+  if (node.type === "macro-show") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.macroId);
+  }
+
+  if (node.type === "macro-run") {
+    if (!CHOIR_IDENTIFIER_PATTERN.test(node.macroId)) {
+      return false;
+    }
+
+    const entries = Object.entries(node.args ?? {});
+    return entries.every(([key, value]) => CHOIR_IDENTIFIER_PATTERN.test(key) && typeof value === "string");
   }
 
   return node.type === "status";
@@ -673,6 +820,21 @@ async function compileAction<TContext>(
     case "policy-status":
       trace.steps.push("system.policy.status");
       trace.compiledActions.push("system.policy.status");
+      return;
+
+    case "macro-list":
+      trace.steps.push("system.macro.list");
+      trace.compiledActions.push("system.macro.list");
+      return;
+
+    case "macro-show":
+      trace.steps.push("system.macro.show");
+      trace.compiledActions.push("system.macro.show");
+      return;
+
+    case "macro-run":
+      trace.steps.push("system.macro.run");
+      trace.compiledActions.push("system.macro.run");
       return;
   }
 }

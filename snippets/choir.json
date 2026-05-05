@@ -68,5 +68,26 @@
       "choir policy status"
     ],
     "description": "Show pending policy approvals"
+  },
+  "Run Macro": {
+    "prefix": "macro",
+    "body": [
+      "choir macro $1"
+    ],
+    "description": "Run a macro by id"
+  },
+  "List Macros": {
+    "prefix": "macro-list",
+    "body": [
+      "choir macro list"
+    ],
+    "description": "List configured macros"
+  },
+  "Show Macro": {
+    "prefix": "macro-show",
+    "body": [
+      "choir macro show $1"
+    ],
+    "description": "Show macro details"
   }
 }

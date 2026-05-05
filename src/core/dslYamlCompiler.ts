@@ -256,6 +256,10 @@ function compileActionToYAML(
     };
   }
 
+  if (action.type === "macro-list" || action.type === "macro-show" || action.type === "macro-run") {
+    throw new Error("Macro commands must be expanded into concrete Choir DSL commands before YAML compilation");
+  }
+
   // analyze/preview/execute/status are non-mutating in YAML compiler mode.
   return next;
 }

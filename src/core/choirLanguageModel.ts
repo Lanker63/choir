@@ -5,6 +5,7 @@ import {
   CHOIR_EXPORT_FORMAT_KEYWORD,
   CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_IDENTIFIER_PATTERN,
+  CHOIR_MACRO_META_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_POLICY_STATUS_KEYWORD,
@@ -47,12 +48,20 @@ type ParserState =
   | "approve-id"
   | "reject-id"
   | "policy-status"
+  | "macro-next"
+  | "macro-show-id"
+  | "macro-id"
+  | "macro-args-or-end"
+  | "macro-arg-equals"
+  | "macro-arg-value"
+  | "macro-after-arg"
   | "expect-then-or-end";
 
 type ExpectedTerminal =
   | { type: "keyword"; value: string }
   | { type: "string" }
-  | { type: "identifier" };
+  | { type: "identifier" }
+  | { type: "symbol"; value: "=" | "," };
 
 type CompletionLexResult = {
   tokens: Token[];
@@ -66,6 +75,7 @@ type CompletionLexResult = {
 const DSL_KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
   ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_MACRO_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
@@ -99,6 +109,9 @@ const KEYWORD_HOVER: Record<string, string> = {
   plans: "Export plan section.",
   approve: "Approve a pending policy-gated diff id.",
   reject: "Reject a pending policy-gated diff id.",
+  macro: "Run reusable deterministic DSL macro scripts.",
+  list: "List available macros from .choir/macros.yaml.",
+  show: "Show macro metadata and body.",
   then: "Deterministic sequence operator for action chaining.",
 };
 
@@ -225,6 +238,12 @@ function tokenizeForCompletion(input: string): CompletionLexResult {
       continue;
     }
 
+    if (char === "=" || char === ",") {
+      tokens.push({ type: "symbol", value: char });
+      cursor += 1;
+      continue;
+    }
+
     return {
       tokens,
       invalid: true,
@@ -244,7 +263,14 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
   while (queue.length > 0) {
     const state = queue.shift() as ParserState;
 
-    if (state === "plan-tail" || state === "preview-tail" || state === "execute-tail" || state === "export-section-or-end") {
+    if (
+      state === "plan-tail"
+      || state === "preview-tail"
+      || state === "execute-tail"
+      || state === "export-section-or-end"
+      || state === "macro-args-or-end"
+      || state === "macro-after-arg"
+    ) {
       if (!closure.has("expect-then-or-end")) {
         closure.add("expect-then-or-end");
         queue.push("expect-then-or-end");
@@ -260,13 +286,45 @@ function transition(state: ParserState, token: Token): ParserState[] {
     if (state === "define-string" || state === "plan-target-string") {
       return ["expect-then-or-end"];
     }
+
+    if (state === "macro-arg-value") {
+      return ["macro-after-arg"];
+    }
+
     return [];
   }
 
   if (token.type === "identifier") {
-    if (state === "preview-id" || state === "execute-id" || state === "approve-id" || state === "reject-id") {
+    if (
+      state === "preview-id"
+      || state === "execute-id"
+      || state === "approve-id"
+      || state === "reject-id"
+      || state === "macro-show-id"
+    ) {
       return ["expect-then-or-end"];
     }
+
+    if (state === "macro-next") {
+      return ["macro-args-or-end"];
+    }
+
+    if (state === "macro-args-or-end") {
+      return ["macro-arg-equals"];
+    }
+
+    return [];
+  }
+
+  if (token.type === "symbol") {
+    if (state === "macro-arg-equals" && token.value === "=") {
+      return ["macro-arg-value"];
+    }
+
+    if (state === "macro-after-arg" && token.value === ",") {
+      return ["macro-args-or-end"];
+    }
+
     return [];
   }
 
@@ -307,7 +365,23 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["reject-id"];
     }
 
+    if (token.value === "macro") {
+      return ["macro-next"];
+    }
+
     return ["policy-status"];
+  }
+
+  if (state === "macro-next") {
+    if (token.value === "list") {
+      return ["expect-then-or-end"];
+    }
+
+    if (token.value === "show") {
+      return ["macro-show-id"];
+    }
+
+    return [];
   }
 
   if (state === "define-type") {
@@ -400,6 +474,29 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
     return [{ type: "keyword", value: CHOIR_POLICY_STATUS_KEYWORD }];
   }
 
+  if (state === "macro-next") {
+    return [
+      ...CHOIR_MACRO_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword } as const)),
+      { type: "identifier" as const },
+    ];
+  }
+
+  if (state === "macro-show-id" || state === "macro-id" || state === "macro-args-or-end") {
+    return [{ type: "identifier" }];
+  }
+
+  if (state === "macro-arg-equals") {
+    return [{ type: "symbol", value: "=" }];
+  }
+
+  if (state === "macro-arg-value") {
+    return [{ type: "string" }];
+  }
+
+  if (state === "macro-after-arg") {
+    return [{ type: "symbol", value: "," }];
+  }
+
   if (state === "expect-then-or-end") {
     return [{ type: "keyword", value: CHOIR_SEQUENCE_KEYWORD }];
   }
@@ -432,7 +529,11 @@ function expectedTerminals(tokens: Token[]): ExpectedTerminal[] {
 
   for (const state of closure) {
     for (const terminal of expectedForState(state)) {
-      const key = terminal.type === "keyword" ? `keyword:${terminal.value}` : terminal.type;
+      const key = terminal.type === "keyword"
+        ? `keyword:${terminal.value}`
+        : terminal.type === "symbol"
+          ? `symbol:${terminal.value}`
+          : terminal.type;
       if (seen.has(key)) {
         continue;
       }
@@ -454,6 +555,16 @@ function buildCompletionItems(expected: ExpectedTerminal[]): ChoirCompletion[] {
         label: token.value,
         insertText: token.value,
         detail: "Choir DSL keyword",
+      });
+      continue;
+    }
+
+    if (token.type === "symbol") {
+      items.push({
+        kind: "keyword",
+        label: token.value,
+        insertText: token.value,
+        detail: "Choir DSL symbol",
       });
       continue;
     }

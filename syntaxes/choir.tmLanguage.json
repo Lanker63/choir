@@ -13,7 +13,11 @@
     },
     {
       "name": "keyword.control.choir",
-      "match": "\\b(choir|define|goal|constraint|non-goal|analyze|workspace|violations|hotspots|plan|for|preview|execute|status|export|dsl|all|intent|policy|plans|approve|reject|then)\\b"
+      "match": "\\b(choir|define|goal|constraint|non-goal|analyze|workspace|violations|hotspots|plan|for|preview|execute|status|export|dsl|all|intent|policy|plans|approve|reject|macro|list|show|then)\\b"
+    },
+    {
+      "name": "keyword.operator.assignment.choir",
+      "match": "=|,"
     },
     {
       "name": "variable.other.identifier.choir",

@@ -10,6 +10,7 @@ import {
     rejectDiff,
 } from "./core/dslYamlCompiler.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
+import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import {
     formatDSL,
     generateDSL,
@@ -78,6 +79,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir plan for \"service boundaries\"",
         "- choir export dsl",
         "- choir export dsl intent",
+        "- choir macro list",
+        "- choir macro show <macroId>",
+        "- choir macro <macroId> entity=\"service\"",
         "- choir approve <diffId>",
         "- choir reject <diffId>",
         "- choir policy status",
@@ -121,9 +125,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "approve"
                     || action.type === "reject"
                     || action.type === "policy-status"
+                    || action.type === "macro-list"
+                    || action.type === "macro-show"
+                    || action.type === "macro-run"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|macro` cannot be chained with `then`.");
                 return;
             }
 
@@ -146,6 +153,91 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             try {
+                if (parsed.ast.type === "macro-list") {
+                    const macros = listMacros(workspaceRoot);
+                    if (macros.length === 0) {
+                        stream.markdown("No macros found. Create `.choir/macros.yaml` with a `macros:` list.");
+                        return;
+                    }
+
+                    const lines = macros.map((macro) => {
+                        const details = [
+                            macro.version ? `v${macro.version}` : undefined,
+                            macro.description,
+                        ].filter((value) => typeof value === "string" && value.length > 0).join(" - ");
+
+                        return details.length > 0
+                            ? `- ${macro.id}: ${details}`
+                            : `- ${macro.id}`;
+                    });
+
+                    stream.markdown([
+                        `Macros (${macros.length}):`,
+                        ...lines,
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "macro-show") {
+                    const macro = getMacro(workspaceRoot, parsed.ast.macroId);
+                    const parameterLines = (macro.parameters ?? []).length === 0
+                        ? ["- none"]
+                        : (macro.parameters ?? []).map((parameter) => {
+                            const defaultValue = parameter.default ? ` default=\"${parameter.default}\"` : "";
+                            return `- ${parameter.name} (required=${parameter.required})${defaultValue}`;
+                        });
+
+                    const bodyLines = macro.body.map((line) => `- ${line}`);
+
+                    stream.markdown([
+                        `Macro: ${macro.id}`,
+                        macro.version ? `- version: ${macro.version}` : "",
+                        macro.description ? `- description: ${macro.description}` : "",
+                        "",
+                        "Parameters:",
+                        ...parameterLines,
+                        "",
+                        "Body:",
+                        ...bodyLines,
+                    ].filter((line) => line.length > 0).join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "macro-run") {
+                    const executed = runMacro(
+                        workspaceRoot,
+                        parsed.ast.macroId,
+                        parsed.ast.args,
+                        control,
+                        controlPath,
+                        { workspaceRoot }
+                    );
+
+                    const stepLines = executed.steps.length === 0
+                        ? ["- none"]
+                        : executed.steps.map((step, index) => {
+                            const detail = [
+                                `decision=${step.decision}`,
+                                `changed=${step.changed}`,
+                                step.diffHash ? `diffHash=${step.diffHash}` : "",
+                                step.pendingApprovalId ? `pending=${step.pendingApprovalId}` : "",
+                            ].filter((part) => part.length > 0).join(", ");
+
+                            return `- ${index + 1}. ${step.command} (${detail})`;
+                        });
+
+                    stream.markdown([
+                        `Macro executed: ${parsed.ast.macroId}`,
+                        `- decision: ${executed.decision}`,
+                        `- expandedCommands: ${executed.trace.expandedCommands.length}`,
+                        `- executedSteps: ${executed.trace.executedSteps}`,
+                        "",
+                        "Step results:",
+                        ...stepLines,
+                    ].join("\n"));
+                    return;
+                }
+
                 if (parsed.ast.type === "export") {
                     const section = parsed.ast.section;
                     const config = controlPlaneToChoirConfig(control);
