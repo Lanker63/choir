@@ -70,19 +70,28 @@ Internal roles remain isolated modules:
 
 Router model:
 
-`User -> @choir -> deterministic intent router -> internal role handler -> pipeline`
+`User -> @choir -> DSL tokenizer/parser -> AST validator -> compiler -> internal role handler -> pipeline`
 
-Legacy aliases are supported for compatibility:
+DSL command grammar:
 
-- `@choir.architect`
-- `@choir.analyst`
-- `@choir.enforcer`
-- `@choir.conductor`
+```bnf
+<command> ::= "choir" <action> ("then" <action>)*
+
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
+
+<define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
+<analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
+<plan> ::= "plan" ["for" <string>]
+<preview> ::= "preview" ["plan" <identifier>]
+<execute> ::= "execute" ["plan" <identifier>]
+<status> ::= "status"
+```
 
 Router constraints:
 
-- Router performs deterministic classification and routing only.
-- Router must not embed business logic.
+- No heuristic or natural-language intent classification.
+- Parser is strict and deterministic; invalid syntax is rejected.
+- Compiler maps AST nodes directly to role actions.
 - Capability boundaries are enforced before role handlers run.
 
 ---
@@ -104,13 +113,12 @@ Router constraints:
 
 Supported command surface (via `@choir`):
 
-- `plan`
-- `plan for goal: <goal>`
-- `approve <planId>`
-- `preview [planId]`
-- `execute <previewHash>`
-- `execute <planId> <previewHash>`
-- `status`
+- `choir define goal|constraint|non-goal "..."`
+- `choir analyze workspace|violations|hotspots`
+- `choir plan [for "..."]`
+- `choir preview [plan <planId>]`
+- `choir execute [plan <planId>]`
+- `choir status`
 
 ## Deterministic State → Plan Synthesis
 

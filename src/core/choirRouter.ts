@@ -1,19 +1,124 @@
-export type Intent =
-  | "define-intent"
-  | "analyze"
-  | "plan"
-  | "execute"
-  | "preview"
-  | "status";
+export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action>)*
 
-export type RoleName = "architect" | "analyst" | "enforcer" | "conductor";
+<action> ::=
+    <define>
+  | <analyze>
+  | <plan>
+  | <preview>
+  | <execute>
+  | <status>
 
-export type CapabilityAction = "modify-yaml" | "read-state" | "modify-code" | "plan" | "schedule";
+<define> ::= "define" <define-type> <string>
 
-export type NormalizedCommand = {
-  raw: string;
-  normalized: string;
-  tokens: string[];
+<define-type> ::= "goal" | "constraint" | "non-goal"
+
+<analyze> ::= "analyze" <analyze-target>
+
+<analyze-target> ::= "workspace" | "violations" | "hotspots"
+
+<plan> ::= "plan" ["for" <string>]
+
+<preview> ::= "preview" [<plan-ref>]
+
+<execute> ::= "execute" [<plan-ref>]
+
+<status> ::= "status"
+
+<plan-ref> ::= "plan" <identifier>
+
+<string> ::= QUOTED_STRING
+
+<identifier> ::= [a-zA-Z0-9-_]+`;
+
+export type Token =
+  | { type: "keyword"; value: string }
+  | { type: "string"; value: string }
+  | { type: "identifier"; value: string };
+
+const KEYWORDS = new Set([
+  "choir",
+  "define",
+  "goal",
+  "constraint",
+  "non-goal",
+  "analyze",
+  "workspace",
+  "violations",
+  "hotspots",
+  "plan",
+  "for",
+  "preview",
+  "execute",
+  "status",
+  "then",
+]);
+
+const IDENTIFIER_PATTERN = /^[a-zA-Z0-9-_]+$/;
+
+export type DefineType = "goal" | "constraint" | "non-goal";
+export type AnalyzeTarget = "workspace" | "violations" | "hotspots";
+
+export type PlanRef = {
+  type: "plan-ref";
+  identifier: string;
+};
+
+export type DefineNode = {
+  type: "define";
+  defineType: DefineType;
+  value: string;
+};
+
+export type AnalyzeNode = {
+  type: "analyze";
+  target: AnalyzeTarget;
+};
+
+export type PlanNode = {
+  type: "plan";
+  target?: string;
+};
+
+export type PreviewNode = {
+  type: "preview";
+  planRef?: PlanRef;
+};
+
+export type ExecuteNode = {
+  type: "execute";
+  planRef?: PlanRef;
+};
+
+export type StatusNode = {
+  type: "status";
+};
+
+export type ActionNode =
+  | DefineNode
+  | AnalyzeNode
+  | PlanNode
+  | PreviewNode
+  | ExecuteNode
+  | StatusNode;
+
+export type SequenceNode = {
+  type: "sequence";
+  actions: ActionNode[];
+};
+
+export type AST = ActionNode | SequenceNode;
+
+export type RoleName = "architect" | "analyst" | "conductor";
+
+export type CapabilityAction = "modify-yaml" | "read-state" | "plan" | "schedule";
+
+export type Intent = AST["type"];
+
+export type DSLTrace = {
+  input: string;
+  tokens: Token[];
+  ast: AST;
+  compiledAction: string;
 };
 
 export type RouterTrace = {
@@ -21,24 +126,21 @@ export type RouterTrace = {
   rolesInvoked: string[];
   steps: string[];
   decisions: string[];
+  dslTrace: DSLTrace;
 };
 
 export type RouterRoleHandlers<TContext> = {
   architect: {
-    handle: (input: string, context: TContext) => Promise<void>;
+    define: (node: DefineNode, context: TContext) => Promise<void>;
   };
   analyst: {
-    handle: (input: string, context: TContext) => Promise<void>;
+    analyze: (node: AnalyzeNode, context: TContext) => Promise<void>;
     status: (context: TContext) => Promise<void>;
   };
-  enforcer: {
-    handle: (input: string, context: TContext) => Promise<void>;
-  };
   conductor: {
-    handle: (input: string, context: TContext) => Promise<void>;
-    plan: (input: string, context: TContext) => Promise<void>;
-    preview: (input: string, context: TContext) => Promise<void>;
-    execute: (input: string, context: TContext) => Promise<void>;
+    plan: (node: PlanNode, context: TContext) => Promise<void>;
+    preview: (node: PreviewNode, context: TContext) => Promise<void>;
+    execute: (node: ExecuteNode, context: TContext) => Promise<void>;
   };
 };
 
@@ -46,40 +148,328 @@ const CAPABILITY_RULES: Record<RoleName, CapabilityAction[]> = {
   architect: ["modify-yaml"],
   analyst: ["read-state"],
   conductor: ["plan", "schedule"],
-  enforcer: ["modify-code"],
 };
 
-function tokenize(input: string): string[] {
-  return input
-    .split(/\s+/)
-    .map((token) => token.trim())
-    .filter((token) => token.length > 0);
+function isWordCharacter(value: string): boolean {
+  return /[a-zA-Z0-9_-]/.test(value);
 }
 
-export function normalizeInput(input: string): NormalizedCommand {
-  const raw = input.trim();
-  const normalized = raw.toLowerCase();
-  return {
-    raw,
-    normalized,
-    tokens: tokenize(normalized),
-  };
+function parseQuotedString(input: string, start: number): { value: string; end: number } {
+  let cursor = start + 1;
+  let value = "";
+
+  while (cursor < input.length) {
+    const char = input[cursor];
+    if (char === "\\") {
+      const next = input[cursor + 1];
+      if (next === undefined) {
+        throw new Error("Unterminated string escape sequence");
+      }
+
+      if (next === "\\" || next === "\"") {
+        value += next;
+      } else if (next === "n") {
+        value += "\n";
+      } else if (next === "t") {
+        value += "\t";
+      } else {
+        throw new Error(`Unsupported escape sequence: \\${next}`);
+      }
+
+      cursor += 2;
+      continue;
+    }
+
+    if (char === "\"") {
+      return { value, end: cursor + 1 };
+    }
+
+    value += char;
+    cursor += 1;
+  }
+
+  throw new Error("Unterminated quoted string");
 }
 
-export function classifyIntent(input: string): Intent {
-  const normalized = input.toLowerCase().trim();
+export function tokenize(input: string): Token[] {
+  const tokens: Token[] = [];
+  let cursor = 0;
 
-  if (/^preview\b/.test(normalized)) return "preview";
-  if (/^(execute|run)\b/.test(normalized)) return "execute";
-  if (/^plan\b/.test(normalized)) return "plan";
+  while (cursor < input.length) {
+    const char = input[cursor];
 
-  if (normalized.includes("goal") || normalized.includes("constraint")) return "define-intent";
-  if (normalized.includes("analyze") || normalized.includes("summary")) return "analyze";
-  if (normalized.includes("preview")) return "preview";
-  if (normalized.includes("execute") || normalized.includes("run")) return "execute";
-  if (normalized.includes("plan")) return "plan";
+    if (/\s/.test(char)) {
+      cursor += 1;
+      continue;
+    }
 
-  return "status";
+    if (char === "\"") {
+      const parsed = parseQuotedString(input, cursor);
+      tokens.push({ type: "string", value: parsed.value });
+      cursor = parsed.end;
+      continue;
+    }
+
+    if (isWordCharacter(char)) {
+      let end = cursor + 1;
+      while (end < input.length && isWordCharacter(input[end])) {
+        end += 1;
+      }
+
+      const raw = input.slice(cursor, end);
+      const normalized = raw.toLowerCase();
+      if (KEYWORDS.has(normalized)) {
+        tokens.push({ type: "keyword", value: normalized });
+      } else {
+        tokens.push({ type: "identifier", value: raw });
+      }
+
+      cursor = end;
+      continue;
+    }
+
+    throw new Error(`Invalid character in Choir DSL: ${char}`);
+  }
+
+  return tokens;
+}
+
+class Parser {
+  private index = 0;
+
+  constructor(private readonly tokens: Token[]) {}
+
+  parse(): AST {
+    this.expectKeyword("choir");
+
+    const actions: ActionNode[] = [this.parseAction()];
+    while (this.consumeKeyword("then")) {
+      actions.push(this.parseAction());
+    }
+
+    this.expectEnd();
+    if (actions.length === 1) {
+      return actions[0];
+    }
+
+    return {
+      type: "sequence",
+      actions,
+    };
+  }
+
+  private parseAction(): ActionNode {
+    const next = this.peek();
+    if (!next || next.type !== "keyword") {
+      throw new Error("Expected Choir DSL action keyword");
+    }
+
+    switch (next.value) {
+      case "define":
+        return this.parseDefine();
+      case "analyze":
+        return this.parseAnalyze();
+      case "plan":
+        return this.parsePlan();
+      case "preview":
+        return this.parsePreview();
+      case "execute":
+        return this.parseExecute();
+      case "status":
+        return this.parseStatus();
+      default:
+        throw new Error(`Unsupported Choir DSL action: ${next.value}`);
+    }
+  }
+
+  private parseDefine(): DefineNode {
+    this.expectKeyword("define");
+    const defineType = this.expectOneOfKeywords(["goal", "constraint", "non-goal"]) as DefineType;
+    const value = this.expectString();
+
+    return {
+      type: "define",
+      defineType,
+      value,
+    };
+  }
+
+  private parseAnalyze(): AnalyzeNode {
+    this.expectKeyword("analyze");
+    const target = this.expectOneOfKeywords(["workspace", "violations", "hotspots"]) as AnalyzeTarget;
+
+    return {
+      type: "analyze",
+      target,
+    };
+  }
+
+  private parsePlan(): PlanNode {
+    this.expectKeyword("plan");
+    if (this.consumeKeyword("for")) {
+      return {
+        type: "plan",
+        target: this.expectString(),
+      };
+    }
+
+    return {
+      type: "plan",
+    };
+  }
+
+  private parsePlanRef(): PlanRef {
+    this.expectKeyword("plan");
+    const identifier = this.expectIdentifier();
+    return {
+      type: "plan-ref",
+      identifier,
+    };
+  }
+
+  private parsePreview(): PreviewNode {
+    this.expectKeyword("preview");
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return { type: "preview" };
+    }
+
+    if (next.type !== "keyword" || next.value !== "plan") {
+      throw new Error("Expected optional plan reference: 'plan <identifier>'");
+    }
+
+    return {
+      type: "preview",
+      planRef: this.parsePlanRef(),
+    };
+  }
+
+  private parseExecute(): ExecuteNode {
+    this.expectKeyword("execute");
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return { type: "execute" };
+    }
+
+    if (next.type !== "keyword" || next.value !== "plan") {
+      throw new Error("Expected optional plan reference: 'plan <identifier>'");
+    }
+
+    return {
+      type: "execute",
+      planRef: this.parsePlanRef(),
+    };
+  }
+
+  private parseStatus(): StatusNode {
+    this.expectKeyword("status");
+    return { type: "status" };
+  }
+
+  private expectKeyword(expected: string): void {
+    const token = this.take();
+    if (!token || token.type !== "keyword" || token.value !== expected) {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected keyword '${expected}', found ${found}`);
+    }
+  }
+
+  private expectOneOfKeywords(expected: string[]): string {
+    const token = this.take();
+    if (!token || token.type !== "keyword" || !expected.includes(token.value)) {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected one of [${expected.join(", ")}], found ${found}`);
+    }
+
+    return token.value;
+  }
+
+  private expectString(): string {
+    const token = this.take();
+    if (!token || token.type !== "string") {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected quoted string, found ${found}`);
+    }
+
+    return token.value;
+  }
+
+  private expectIdentifier(): string {
+    const token = this.take();
+    if (!token || token.type !== "identifier") {
+      const found = token ? `${token.type}:${token.value}` : "<end>";
+      throw new Error(`Expected identifier, found ${found}`);
+    }
+
+    if (!IDENTIFIER_PATTERN.test(token.value)) {
+      throw new Error(`Invalid identifier: ${token.value}`);
+    }
+
+    return token.value;
+  }
+
+  private consumeKeyword(value: string): boolean {
+    const token = this.peek();
+    if (!token || token.type !== "keyword" || token.value !== value) {
+      return false;
+    }
+
+    this.index += 1;
+    return true;
+  }
+
+  private expectEnd(): void {
+    if (this.peek()) {
+      const token = this.peek() as Token;
+      throw new Error(`Unexpected token after command: ${token.type}:${token.value}`);
+    }
+  }
+
+  private peek(): Token | undefined {
+    return this.tokens[this.index];
+  }
+
+  private take(): Token | undefined {
+    const token = this.tokens[this.index];
+    if (token) {
+      this.index += 1;
+    }
+    return token;
+  }
+}
+
+export function parse(tokens: Token[]): AST {
+  return new Parser(tokens).parse();
+}
+
+function validateActionNode(node: ActionNode): boolean {
+  if (node.type === "define") {
+    return (node.defineType === "goal" || node.defineType === "constraint" || node.defineType === "non-goal")
+      && typeof node.value === "string"
+      && node.value.length > 0;
+  }
+
+  if (node.type === "analyze") {
+    return node.target === "workspace" || node.target === "violations" || node.target === "hotspots";
+  }
+
+  if (node.type === "plan") {
+    return node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
+  }
+
+  if (node.type === "preview" || node.type === "execute") {
+    return node.planRef === undefined || IDENTIFIER_PATTERN.test(node.planRef.identifier);
+  }
+
+  return node.type === "status";
+}
+
+export function validGrammar(ast: AST): boolean {
+  if (ast.type === "sequence") {
+    return ast.actions.length > 0 && ast.actions.every((action) => validateActionNode(action));
+  }
+
+  return validateActionNode(ast);
 }
 
 export function enforceCapabilities(role: RoleName, action: CapabilityAction): void {
@@ -89,142 +479,93 @@ export function enforceCapabilities(role: RoleName, action: CapabilityAction): v
   }
 }
 
-function trimPrefix(input: string, prefix: string): string {
-  const sliced = input.slice(prefix.length).trim();
-  return sliced.length > 0 ? sliced : "status";
-}
+type CompilationTrace = {
+  rolesInvoked: string[];
+  steps: string[];
+  compiledActions: string[];
+};
 
-function extractLegacyRoute(input: string): { role: RoleName; stripped: string } | null {
-  const normalized = input.toLowerCase();
-
-  if (normalized.startsWith("@choir.architect")) {
-    return { role: "architect", stripped: trimPrefix(input, "@choir.architect") };
-  }
-
-  if (normalized.startsWith("@choir.analyst")) {
-    return { role: "analyst", stripped: trimPrefix(input, "@choir.analyst") };
-  }
-
-  if (normalized.startsWith("@choir.enforcer")) {
-    return { role: "enforcer", stripped: trimPrefix(input, "@choir.enforcer") };
-  }
-
-  if (normalized.startsWith("@choir.conductor")) {
-    return { role: "conductor", stripped: trimPrefix(input, "@choir.conductor") };
-  }
-
-  return null;
-}
-
-function isHighLevelCommand(command: NormalizedCommand): boolean {
-  return command.tokens[0] === "enforce" && command.tokens.length > 1;
-}
-
-function toConductorCommand(intent: Intent, command: NormalizedCommand): string {
-  if (intent === "plan") {
-    return command.normalized.includes("plan") ? command.raw : "plan";
-  }
-
-  if (intent === "preview") {
-    return command.normalized.includes("preview") ? command.raw : "preview";
-  }
-
-  if (intent === "execute") {
-    return command.normalized.includes("execute") ? command.raw : "execute";
-  }
-
-  return "status";
-}
-
-export async function routeIntent<TContext>(
+async function compileAction<TContext>(
   handlers: RouterRoleHandlers<TContext>,
-  intent: Intent,
-  input: string,
-  context: TContext
-): Promise<RouterTrace> {
-  const rolesInvoked: string[] = [];
-  const steps: string[] = [];
-  const decisions: string[] = [];
-
-  switch (intent) {
-    case "define-intent":
-      await handlers.architect.handle(input, context);
-      rolesInvoked.push("architect");
-      steps.push("architect.handle");
-      decisions.push("Routed define-intent to architect");
-      break;
+  action: ActionNode,
+  context: TContext,
+  trace: CompilationTrace
+): Promise<void> {
+  switch (action.type) {
+    case "define":
+      await handlers.architect.define(action, context);
+      trace.rolesInvoked.push("architect");
+      trace.steps.push("architect.define");
+      trace.compiledActions.push("architect.define");
+      return;
 
     case "analyze":
-      await handlers.analyst.handle(input, context);
-      rolesInvoked.push("analyst");
-      steps.push("analyst.handle");
-      decisions.push("Routed analyze intent to analyst");
-      break;
+      await handlers.analyst.analyze(action, context);
+      trace.rolesInvoked.push("analyst");
+      trace.steps.push("analyst.analyze");
+      trace.compiledActions.push("analyst.analyze");
+      return;
 
     case "plan":
-      await handlers.conductor.plan(input, context);
-      rolesInvoked.push("conductor");
-      steps.push("conductor.plan");
-      decisions.push("Routed plan intent to conductor.plan");
-      break;
+      await handlers.conductor.plan(action, context);
+      trace.rolesInvoked.push("conductor");
+      trace.steps.push("conductor.plan");
+      trace.compiledActions.push("conductor.plan");
+      return;
 
     case "preview":
-      await handlers.conductor.preview(input, context);
-      rolesInvoked.push("conductor");
-      steps.push("conductor.preview");
-      decisions.push("Routed preview intent to conductor.preview");
-      break;
+      await handlers.conductor.preview(action, context);
+      trace.rolesInvoked.push("conductor");
+      trace.steps.push("conductor.preview");
+      trace.compiledActions.push("conductor.preview");
+      return;
 
     case "execute":
-      await handlers.conductor.execute(input, context);
-      rolesInvoked.push("conductor");
-      steps.push("conductor.execute");
-      decisions.push("Routed execute intent to conductor.execute");
-      break;
+      await handlers.conductor.execute(action, context);
+      trace.rolesInvoked.push("conductor");
+      trace.steps.push("conductor.execute");
+      trace.compiledActions.push("conductor.execute");
+      return;
 
     case "status":
       await handlers.analyst.status(context);
-      rolesInvoked.push("analyst");
-      steps.push("analyst.status");
-      decisions.push("Defaulted to analyst.status");
-      break;
+      trace.rolesInvoked.push("analyst");
+      trace.steps.push("analyst.status");
+      trace.compiledActions.push("analyst.status");
+      return;
   }
-
-  return {
-    intent,
-    rolesInvoked,
-    steps,
-    decisions,
-  };
 }
 
-async function routeHighLevelCommand<TContext>(
+export async function compile<TContext>(
+  ast: AST,
   handlers: RouterRoleHandlers<TContext>,
-  command: NormalizedCommand,
   context: TContext
-): Promise<RouterTrace> {
-  const objective = command.tokens.slice(1).join(" ").trim();
-  const architectInput = objective.length > 0 ? `add constraint: ${objective}` : command.raw;
-
-  await handlers.architect.handle(architectInput, context);
-  await handlers.analyst.handle("find violations", context);
-  await handlers.conductor.plan("plan", context);
-  await handlers.conductor.preview("preview", context);
-
-  return {
-    intent: "plan",
-    rolesInvoked: ["architect", "analyst", "conductor", "conductor"],
-    steps: [
-      "architect.handle",
-      "analyst.handle",
-      "conductor.plan",
-      "conductor.preview",
-    ],
-    decisions: [
-      `Detected high-level command: ${command.raw}`,
-      "Applied deterministic multi-role orchestration",
-    ],
+): Promise<CompilationTrace> {
+  const trace: CompilationTrace = {
+    rolesInvoked: [],
+    steps: [],
+    compiledActions: [],
   };
+
+  if (ast.type === "sequence") {
+    for (const action of ast.actions) {
+      await compileAction(handlers, action, context, trace);
+    }
+    return trace;
+  }
+
+  await compileAction(handlers, ast, context, trace);
+  return trace;
+}
+
+export function parseCommand(input: string): { tokens: Token[]; ast: AST } {
+  const tokens = tokenize(input);
+  const ast = parse(tokens);
+  if (!validGrammar(ast)) {
+    throw new Error("Invalid Choir DSL command");
+  }
+
+  return { tokens, ast };
 }
 
 export class ChoirAgent<TContext> {
@@ -232,57 +573,23 @@ export class ChoirAgent<TContext> {
 
   async handle(input: string, context: TContext): Promise<RouterTrace> {
     const trimmed = input.trim();
-    const legacy = extractLegacyRoute(trimmed);
+    const parsed = parseCommand(trimmed);
+    const compiled = await compile(parsed.ast, this.handlers, context);
 
-    if (legacy) {
-      if (legacy.role === "architect") {
-        await this.handlers.architect.handle(legacy.stripped, context);
-        return {
-          intent: "define-intent",
-          rolesInvoked: ["architect"],
-          steps: ["architect.handle"],
-          decisions: ["Legacy alias route: @choir.architect"],
-        };
-      }
-
-      if (legacy.role === "analyst") {
-        await this.handlers.analyst.handle(legacy.stripped, context);
-        return {
-          intent: "analyze",
-          rolesInvoked: ["analyst"],
-          steps: ["analyst.handle"],
-          decisions: ["Legacy alias route: @choir.analyst"],
-        };
-      }
-
-      if (legacy.role === "enforcer") {
-        await this.handlers.enforcer.handle(legacy.stripped, context);
-        return {
-          intent: "execute",
-          rolesInvoked: ["enforcer"],
-          steps: ["enforcer.handle"],
-          decisions: ["Legacy alias route: @choir.enforcer"],
-        };
-      }
-
-      await this.handlers.conductor.handle(legacy.stripped, context);
-      return {
-        intent: classifyIntent(legacy.stripped),
-        rolesInvoked: ["conductor"],
-        steps: ["conductor.handle"],
-        decisions: ["Legacy alias route: @choir.conductor"],
-      };
-    }
-
-    const normalized = normalizeInput(trimmed);
-
-    if (isHighLevelCommand(normalized)) {
-      return routeHighLevelCommand(this.handlers, normalized, context);
-    }
-
-    const intent = classifyIntent(normalized.normalized);
-    const routedInput = toConductorCommand(intent, normalized);
-
-    return routeIntent(this.handlers, intent, routedInput, context);
+    return {
+      intent: parsed.ast.type,
+      rolesInvoked: compiled.rolesInvoked,
+      steps: compiled.steps,
+      decisions: [
+        "Parsed using strict Choir DSL grammar",
+        "Compiled DSL AST into deterministic role actions",
+      ],
+      dslTrace: {
+        input: trimmed,
+        tokens: parsed.tokens,
+        ast: parsed.ast,
+        compiledAction: compiled.compiledActions.join(" -> "),
+      },
+    };
   }
 }

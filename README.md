@@ -259,58 +259,65 @@ Primary interface from VS Code Chat:
 
 - `@choir`
 
-Legacy aliases are still supported for compatibility:
+Choir commands are now a strict DSL (alpha mode, no natural-language command parsing).
 
-- `@choir.architect`
-- `@choir.enforcer`
-- `@choir.analyst`
-- `@choir.conductor`
+Grammar:
 
-`@choir` routes deterministically by intent to internal role handlers and enforces capability boundaries per role.
+```bnf
+<command> ::= "choir" <action> ("then" <action>)*
+
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
+
+<define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
+<analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
+<plan> ::= "plan" ["for" <string>]
+<preview> ::= "preview" ["plan" <identifier>]
+<execute> ::= "execute" ["plan" <identifier>]
+<status> ::= "status"
+
+<string> ::= QUOTED_STRING
+<identifier> ::= [a-zA-Z0-9-_]+
+```
+
+`@choir` parses commands into AST and compiles AST into deterministic internal role actions with capability boundaries.
 
 ### Internal Architect Role
 
-Reads and writes `.choir/choir.config.yaml` using natural language updates.
+Defines intent values in `.choir/choir.config.yaml`.
 
 Examples:
 
-- `Show control plane`
-- `Set mission: ...`
-- `Set vision: ...`
-- `Add goal: ...`
-- `Add constraint: ...`
-- `Add non-goal: ...`
-- `Remove goal: ...`
-- `Remove constraint: ...`
-- `Remove non-goal: ...`
+- `choir define goal "enforce service boundaries"`
+- `choir define constraint "no direct db access"`
+- `choir define non-goal "distributed app"`
 
 ### Internal Enforcer Role
 
-Runs the enforcement pipeline and reports current diagnostics.
+Not directly user-addressable in DSL.
 
 ### Internal Analyst Role
 
-Provides workspace summaries and hotspots.
+Provides deterministic analysis and status output.
 
 ### Internal Conductor Role
 
-Builds, approves, executes, and reports plan status.
+Builds, previews, and executes plans from DSL commands.
 
 Supported commands:
 
-- `plan`
-- `plan for goal: <goal>`
-- `approve <planId>`
-- `preview [planId]`
-- `execute <previewHash>`
-- `execute <planId> <previewHash>`
-- `status`
+- `choir plan`
+- `choir plan for "service boundaries"`
+- `choir preview`
+- `choir preview plan <planId>`
+- `choir execute`
+- `choir execute plan <planId>`
+- `choir status`
 
 Execution behavior:
 
-- `preview [planId]`: score/select plans, evaluate strategies, and render exact simulation-derived file diffs + preview hash
-- `execute <previewHash>`: execute selected plan(s) only if recomputed preview hash matches
-- `execute <planId> <previewHash>`: execute that approved plan only if recomputed preview hash matches
+- `choir plan`: synthesizes a deterministic plan and auto-approves it for DSL flow
+- `choir preview [plan <id>]`: scores/selects plans, evaluates strategies, and writes approved preview metadata to state
+- `choir execute [plan <id>]`: executes only when approved preview metadata in state matches recomputed preview hash
 
 ---
 

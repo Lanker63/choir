@@ -54,15 +54,17 @@ import {
   validatePlanStillApplies,
 } from "../../core/strategyMemory.js";
 import {
+  CHOIR_DSL_GRAMMAR,
   ChoirAgent,
-  classifyIntent,
+  compile,
   enforceCapabilities,
-  normalizeInput,
-  routeIntent,
+  parse,
+  parseCommand,
+  tokenize,
+  validGrammar,
 } from "../../core/choirRouter.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
-import { parseConductorCommand } from "../../conductorCommands.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
 import {
   buildConflictMatrix,
@@ -380,110 +382,102 @@ const pass2: TestPass = {
     },
     {
       id: "2.6",
-      name: "conductor parser handles plan commands deterministically",
+      name: "choir DSL tokenizer is deterministic",
       run: async () => {
         assert.deepStrictEqual(
-          parseConductorCommand("plan for goal: enforce service boundaries"),
-          { kind: "plan", goal: "enforce service boundaries" }
+          tokenize("choir define goal \"enforce service boundaries\""),
+          [
+            { type: "keyword", value: "choir" },
+            { type: "keyword", value: "define" },
+            { type: "keyword", value: "goal" },
+            { type: "string", value: "enforce service boundaries" },
+          ]
         );
-        assert.deepStrictEqual(
-          parseConductorCommand("PLAN"),
-          { kind: "plan" }
-        );
+
+        assert.ok(CHOIR_DSL_GRAMMAR.includes("<command> ::= \"choir\" <action>"));
       },
     },
     {
       id: "2.7",
-      name: "conductor parser handles approve/preview/execute/status/help",
+      name: "choir DSL parser builds AST and supports then-pipeline",
       run: async () => {
-        assert.deepStrictEqual(parseConductorCommand("approve plan-123"), { kind: "approve", planId: "plan-123" });
-        assert.deepStrictEqual(parseConductorCommand("approve"), { kind: "approve", planId: undefined });
-        assert.deepStrictEqual(parseConductorCommand("preview plan-123"), { kind: "preview", planId: "plan-123" });
-        assert.deepStrictEqual(parseConductorCommand("preview"), { kind: "preview", planId: undefined });
-        const previewHash = "a".repeat(64);
-        assert.deepStrictEqual(parseConductorCommand(`execute ${previewHash}`), { kind: "execute", previewId: previewHash });
-        assert.deepStrictEqual(parseConductorCommand(`execute plan-123 ${previewHash}`), { kind: "execute", planId: "plan-123", previewId: previewHash });
-        assert.deepStrictEqual(parseConductorCommand("execute plan-123"), { kind: "execute", planId: "plan-123" });
-        assert.deepStrictEqual(parseConductorCommand("status"), { kind: "status" });
-        assert.deepStrictEqual(parseConductorCommand("something else"), { kind: "help" });
+        const tokens = tokenize("choir define goal \"enforce service boundaries\"");
+        assert.deepStrictEqual(parse(tokens), {
+          type: "define",
+          defineType: "goal",
+          value: "enforce service boundaries",
+        });
+
+        const sequence = parseCommand("choir plan for \"service boundaries\" then preview then execute");
+        assert.deepStrictEqual(sequence.ast, {
+          type: "sequence",
+          actions: [
+            { type: "plan", target: "service boundaries" },
+            { type: "preview" },
+            { type: "execute" },
+          ],
+        });
+        assert.strictEqual(validGrammar(sequence.ast), true);
       },
     },
     {
       id: "2.8",
-      name: "router classification and normalization are deterministic",
+      name: "choir DSL rejects invalid syntax deterministically",
       run: async () => {
-        assert.deepStrictEqual(normalizeInput("  Preview PLAN-1  "), {
-          raw: "Preview PLAN-1",
-          normalized: "preview plan-1",
-          tokens: ["preview", "plan-1"],
-        });
-
-        assert.strictEqual(classifyIntent("add goal: secure platform"), "define-intent");
-        assert.strictEqual(classifyIntent("show summary"), "analyze");
-        assert.strictEqual(classifyIntent("plan for goal: enforce service boundaries"), "plan");
-        assert.strictEqual(classifyIntent("plan"), "plan");
-        assert.strictEqual(classifyIntent("preview plan-1"), "preview");
-        assert.strictEqual(classifyIntent("run this plan"), "execute");
-        assert.strictEqual(classifyIntent("what now"), "status");
+        assert.throws(() => parseCommand("plan"), /Expected keyword 'choir'/);
+        assert.throws(() => parseCommand("choir define \"goal\" enforce"), /Expected one of/);
+        assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
+        assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
       },
     },
     {
       id: "2.9",
-      name: "choir agent router preserves deterministic role isolation and chaining",
+      name: "choir DSL compiler routes AST actions deterministically",
       run: async () => {
         const calls: string[] = [];
         const handlers = {
           architect: {
-            handle: async (input: string) => {
-              calls.push(`architect:${input}`);
+            define: async (node: { defineType: string; value: string }) => {
+              calls.push(`architect.define:${node.defineType}:${node.value}`);
             },
           },
           analyst: {
-            handle: async (input: string) => {
-              calls.push(`analyst:${input}`);
+            analyze: async (node: { target: string }) => {
+              calls.push(`analyst.analyze:${node.target}`);
             },
             status: async () => {
-              calls.push("analyst:status");
-            },
-          },
-          enforcer: {
-            handle: async (input: string) => {
-              calls.push(`enforcer:${input}`);
+              calls.push("analyst.status");
             },
           },
           conductor: {
-            handle: async (input: string) => {
-              calls.push(`conductor:handle:${input}`);
+            plan: async (node: { target?: string }) => {
+              calls.push(`conductor.plan:${node.target ?? ""}`);
             },
-            plan: async (input: string) => {
-              calls.push(`conductor:plan:${input}`);
+            preview: async (node: { planRef?: { identifier: string } }) => {
+              calls.push(`conductor.preview:${node.planRef?.identifier ?? ""}`);
             },
-            preview: async (input: string) => {
-              calls.push(`conductor:preview:${input}`);
-            },
-            execute: async (input: string) => {
-              calls.push(`conductor:execute:${input}`);
+            execute: async (node: { planRef?: { identifier: string } }) => {
+              calls.push(`conductor.execute:${node.planRef?.identifier ?? ""}`);
             },
           },
         };
 
+        const parsed = parseCommand("choir plan for \"service boundaries\" then preview then execute");
+        const compiled = await compile(parsed.ast, handlers, {});
+        assert.deepStrictEqual(compiled.compiledActions, [
+          "conductor.plan",
+          "conductor.preview",
+          "conductor.execute",
+        ]);
+
         const agent = new ChoirAgent(handlers);
-        const traceA = await agent.handle("plan", {});
-        const traceB = await agent.handle("plan", {});
+        const traceA = await agent.handle("choir define goal \"secure service boundary\"", {});
+        const traceB = await agent.handle("choir define goal \"secure service boundary\"", {});
 
         assert.deepStrictEqual(traceA, traceB);
-        assert.ok(traceA.rolesInvoked.includes("conductor"));
-
-        const legacyTrace = await agent.handle("@choir.architect add constraint: no direct db access", {});
-        assert.strictEqual(legacyTrace.rolesInvoked[0], "architect");
-
-        const chainedTrace = await agent.handle("enforce service boundaries", {});
-        assert.deepStrictEqual(chainedTrace.rolesInvoked, ["architect", "analyst", "conductor", "conductor"]);
-
-        const before = calls.length;
-        const routed = await routeIntent(handlers, "status", "status", {});
-        assert.strictEqual(routed.rolesInvoked[0], "analyst");
-        assert.strictEqual(calls.length, before + 1);
+        assert.strictEqual(traceA.rolesInvoked[0], "architect");
+        assert.ok(traceA.dslTrace.compiledAction.includes("architect.define"));
+        assert.ok(calls.includes("architect.define:goal:secure service boundary"));
       },
     },
     {
@@ -492,12 +486,12 @@ const pass2: TestPass = {
       run: async () => {
         enforceCapabilities("architect", "modify-yaml");
         enforceCapabilities("analyst", "read-state");
-        enforceCapabilities("enforcer", "modify-code");
         enforceCapabilities("conductor", "plan");
+        enforceCapabilities("conductor", "schedule");
 
-        assert.throws(() => enforceCapabilities("architect", "modify-code"), /Capability violation/);
+        assert.throws(() => enforceCapabilities("architect", "schedule"), /Capability violation/);
         assert.throws(() => enforceCapabilities("analyst", "modify-yaml"), /Capability violation/);
-        assert.throws(() => enforceCapabilities("enforcer", "plan"), /Capability violation/);
+        assert.throws(() => enforceCapabilities("conductor", "modify-yaml"), /Capability violation/);
       },
     },
   ],
