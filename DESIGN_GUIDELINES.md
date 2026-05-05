@@ -1,6 +1,6 @@
 # Choir Design Guidelines
 
-Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, applies speculative execution with rollback-safe transactional batches, and records immutable audit evidence for compliance reporting.
+Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, applies speculative execution with rollback-safe transactional batches, records immutable audit evidence for compliance reporting, and supports versioned macro libraries for team-wide standards reuse.
 
 ---
 
@@ -78,7 +78,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -90,6 +90,17 @@ DSL command grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<import> ::= "import" <library-spec>
+
+<library> ::= "library" "list"
+            | "library" "install" <library-spec>
+            | "library" "update" <identifier>
+            | "library" "lock"
+
+<library-spec> ::= <identifier> "@" <version-selector>
+<version-selector> ::= MAJOR "." MINOR "." PATCH
+                     | MAJOR "." MINOR "." "x"
+                     | MAJOR "." "x"
 <audit> ::= "audit" "log"
           | "audit" "report"
           | "audit" "query" [<audit-filters>]
@@ -103,6 +114,7 @@ DSL command grammar:
 <args> ::= <key-value> ("," <key-value>)*
 
 <key-value> ::= <identifier> "=" <string>
+<identifier> ::= [a-zA-Z0-9._-]+
 ```
 
 Router constraints:
@@ -120,6 +132,10 @@ Macro constraints:
 - Macro execution must flow through existing DSL compiler and policy gate path.
 - Macro expansion and execution ordering must be deterministic.
 - Macro composition is permitted with recursion detection and bounded depth.
+- Macro libraries are versioned by semver and immutable per published version.
+- Unversioned macros are invalid and must be rejected.
+- Library macros are namespaced as `<library>.<macroId>` to prevent collisions.
+- Library macro execution must resolve through lockfile-pinned versions.
 
 ## VS Code Language Support Contract (`.choir`)
 
@@ -195,6 +211,11 @@ Supported command surface (via `@choir`):
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir import <library>@<version-selector>`
+- `choir library list`
+- `choir library install <library>@<version-selector>`
+- `choir library update <library>`
+- `choir library lock`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -204,18 +225,23 @@ Supported command surface (via `@choir`):
 
 Macro execution contract:
 
-- Macro registry source: `.choir/macros.yaml`.
+- Local macro registry source: `.choir/macros.yaml`.
+- Library source root: `.choir/libraries/<library>/<version>/macros.yaml`.
+- Resolved library versions are pinned in `.choir/lock.yaml`.
 - Macros define reusable DSL command bodies with optional parameter templates (`{{name}}`).
 - Runtime flow: `Macro -> DSL -> AST -> YAML -> Pipeline`.
 - Each expanded command is compiled sequentially through existing `compileDSLAndWrite` behavior.
 - Every expanded command remains subject to policy decision (`allow | require-approval | deny`).
 - Execution trace records expanded commands, step count, and per-step decisions.
+- Version selector forms are deterministic: exact (`1.0.0`), latest patch (`1.0.x`), latest minor (`1.x`).
+- Selectors always resolve to an exact local version with no network calls.
+- Library evolution rejects breaking changes without a MAJOR version bump.
 
 Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
-- `analyze|preview|execute|status|audit` are non-mutating in YAML compiler mode.
+- `analyze|preview|execute|status|audit|import|library` are non-mutating in YAML compiler mode.
 
 Projection contract:
 
@@ -227,15 +253,17 @@ Audit and compliance contract:
 
 - Audit storage is append-only in `.choir/audit.log.jsonl`.
 - Every record includes a deterministic `chainIndex`, `previousHash`, and `hash` to form an immutable hash chain (`GENESIS` anchor for first record).
-- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`.
+- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`.
 - Querying is deterministic and supports filters by role, environment, action, and bounded time range (`from` + `to`).
 - Compliance reports are deterministic summaries over queried records with anomaly detection and export formats `json`, `yaml`, and `pdf`.
 - Report exports are written under `.choir/reports/`.
+- Macro-driven compilation includes library provenance metadata (`macroLibrary`, `version`, `macroId`, `resolvedVersion`) in audit records.
 
 Policy gate contract:
 
 - Proposed YAML changes are diffed before write (`YAMLDiff[]`).
 - Policy decision model is context-aware: `decision = f(yamlDiff, role, environment)`.
+- Macro-aware policy evaluation extends context to macro execution identity: `decision = f(yamlDiff, role, environment, macroId)`.
 - Policy sources are layered and deterministic:
   - Org: `/org/policies.dsl`
   - Repo: `.choir/policies.dsl`
@@ -245,6 +273,7 @@ Policy gate contract:
 - Policy evaluation is deterministic and uses merged compiled declarative rules with scoped role/environment matching.
 - Role context is trusted and derived by system role mapping (not user-provided command args).
 - Environment context is trusted runtime detection (`CI`, `NODE_ENV`, optional deployment env) and must not be user-spoofable through DSL input.
+- Macro context is trusted runtime resolution from lockfile-pinned library macros, not user-spoofable free text during policy evaluation.
 - Resolution precedence is deterministic and strict: `deny > require-approval > allow`.
 - Parent policies always apply.
 - Child layers cannot override parent `deny`.
@@ -271,6 +300,7 @@ Policy DSL grammar contract:
 
 <clause> ::= "diff.path" "=" <string>
            | "diff.operation" "=" ("add" | "remove" | "update")
+           | "macro" "=" <string>
            | "role" "=" ("architect" | "analyst" | "conductor" | "enforcer")
            | "environment" "=" ("local" | "ci" | "staging" | "production")
            | "contains" <string>
@@ -633,6 +663,7 @@ For identical inputs, Choir must produce identical:
 - Transaction outcomes
 - Audit chain ordering and record hashes
 - Compliance report summaries for identical filter windows
+- Macro library version resolution and lockfile pinning outcomes
 
 Non-negotiable safeguards:
 
@@ -644,6 +675,7 @@ Non-negotiable safeguards:
 6. Adaptive strategy feedback is persisted only in `.choir/state.json` (`strategyHistory`)
 7. Policy context cannot be user-spoofed: role is system-derived and environment is runtime-derived
 8. Audit evidence is append-only, hash-chained, and emitted for all significant policy and execution decisions
+9. Macro library execution is lockfile-pinned and version-deterministic
 
 ---
 
@@ -654,4 +686,5 @@ YAML = intent + policy + execution plans (authoritative)
 JSON = computed facts + execution runtime state (derived)
 Chat = orchestration interface (non-authoritative)
 Audit = immutable compliance evidence (append-only, hash-chained)
+Lock = resolved macro library versions for reproducible execution
 ```

@@ -109,6 +109,14 @@ import {
   getMacro,
   runMacro,
 } from "../../core/macros.js";
+import {
+  detectBreakingChanges,
+  installLibrary,
+  lockLibraries,
+  readMacroLock,
+  resolveLibraryVersion,
+  updateLibrary,
+} from "../../core/macroLibraries.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -915,6 +923,26 @@ const pass2: TestPass = {
             environment: "ci",
           },
         });
+        assert.deepStrictEqual(parseCommand("choir import core@1.0.x").ast, {
+          type: "import-library",
+          library: "core",
+          versionSelector: "1.0.x",
+        });
+        assert.deepStrictEqual(parseCommand("choir library list").ast, {
+          type: "library-list",
+        });
+        assert.deepStrictEqual(parseCommand("choir library install core@1.x").ast, {
+          type: "library-install",
+          library: "core",
+          versionSelector: "1.x",
+        });
+        assert.deepStrictEqual(parseCommand("choir library update core").ast, {
+          type: "library-update",
+          library: "core",
+        });
+        assert.deepStrictEqual(parseCommand("choir library lock").ast, {
+          type: "library-lock",
+        });
       },
     },
     {
@@ -936,6 +964,8 @@ const pass2: TestPass = {
           "approve",
           "reject",
           "policy",
+          "import",
+          "library",
           "audit",
           "macro",
         ]);
@@ -954,6 +984,12 @@ const pass2: TestPass = {
 
         const auditTail = getDeterministicCompletions("choir audit ").map((item) => item.label);
         assert.deepStrictEqual(auditTail, ["log", "report", "query"]);
+
+        const importTail = getDeterministicCompletions("choir import ").map((item) => item.label);
+        assert.deepStrictEqual(importTail, ["identifier"]);
+
+        const libraryTail = getDeterministicCompletions("choir library ").map((item) => item.label);
+        assert.deepStrictEqual(libraryTail, ["list", "install", "update", "lock"]);
       },
     },
     {
@@ -1023,6 +1059,7 @@ const pass2: TestPass = {
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
           "macros:",
           "  - id: setup-boundaries",
+          "    version: 1.0.0",
           "    parameters:",
           "      - name: entity",
           "        required: false",
@@ -1061,9 +1098,11 @@ const pass2: TestPass = {
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
           "macros:",
           "  - id: a",
+          "    version: 1.0.0",
           "    body:",
           "      - choir macro b",
           "  - id: b",
+          "    version: 1.0.0",
           "    body:",
           "      - choir macro a",
           "",
@@ -1689,6 +1728,238 @@ const pass2: TestPass = {
         assert.strictEqual(executionRecords.length, 1);
         assert.strictEqual(executionRecords[0].auditEvent.result, "success");
         assert.strictEqual(executionRecords[0].executionTrace?.planId, built.executionPlan.batches[0].id);
+      },
+    },
+    {
+      id: "2.52",
+      name: "macro library version selectors resolve deterministically",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-resolve-"));
+
+        const writeLibrary = (name: string, version: string, bodyLine: string) => {
+          const dir = path.join(root, ".choir", "libraries", name, version);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, "macros.yaml"), [
+            `name: ${name}`,
+            `version: ${version}`,
+            "metadata:",
+            `  description: ${name}`,
+            "macros:",
+            "  - id: enforce-service-boundaries",
+            "    body:",
+            `      - ${bodyLine}`,
+            "",
+          ].join("\n"), "utf-8");
+        };
+
+        writeLibrary("core", "1.0.0", 'choir define goal "v1"');
+        writeLibrary("core", "1.0.2", 'choir define goal "v102"');
+        writeLibrary("core", "1.1.0", 'choir define goal "v110"');
+
+        assert.strictEqual(resolveLibraryVersion(root, "core", "1.0.0"), "1.0.0");
+        assert.strictEqual(resolveLibraryVersion(root, "core", "1.0.x"), "1.0.2");
+        assert.strictEqual(resolveLibraryVersion(root, "core", "1.x"), "1.1.0");
+        assert.strictEqual(resolveLibraryVersion(root, "core", "1.0.x"), resolveLibraryVersion(root, "core", "1.0.x"));
+      },
+    },
+    {
+      id: "2.53",
+      name: "library install update and lock are reproducible",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-lock-"));
+
+        const writeLibrary = (version: string) => {
+          const dir = path.join(root, ".choir", "libraries", "core", version);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, "macros.yaml"), [
+            "name: core",
+            `version: ${version}`,
+            "metadata:",
+            "  description: core",
+            "macros:",
+            "  - id: enforce-service-boundaries",
+            "    body:",
+            `      - choir define goal \"core-${version}\"`,
+            "",
+          ].join("\n"), "utf-8");
+        };
+
+        writeLibrary("1.0.0");
+        writeLibrary("1.0.1");
+        writeLibrary("2.0.0");
+
+        const installed = installLibrary(root, "core@1.0.x");
+        assert.strictEqual(installed.resolvedVersion, "1.0.1");
+        assert.strictEqual(readMacroLock(root).libraries.core, "1.0.1");
+
+        const updated = updateLibrary(root, "core");
+        assert.strictEqual(updated.resolvedVersion, "2.0.0");
+        assert.strictEqual(readMacroLock(root).libraries.core, "2.0.0");
+
+        const locked = lockLibraries(root);
+        assert.strictEqual(locked.libraries.core, "2.0.0");
+      },
+    },
+    {
+      id: "2.54",
+      name: "namespaced library macro execution logs audit metadata",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-run-"));
+        const libraryDir = path.join(root, ".choir", "libraries", "core", "1.0.0");
+        fs.mkdirSync(libraryDir, { recursive: true });
+        fs.writeFileSync(path.join(libraryDir, "macros.yaml"), [
+          "name: core",
+          "version: 1.0.0",
+          "metadata:",
+          "  description: core",
+          "macros:",
+          "  - id: enforce-service-boundaries",
+          "    body:",
+          "      - choir define goal \"enforce service boundaries\"",
+          "",
+        ].join("\n"), "utf-8");
+
+        installLibrary(root, "core@1.0.0");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        const run = runMacro(
+          root,
+          "core.enforce-service-boundaries",
+          {},
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(run.decision, "allow");
+        assert.strictEqual(run.trace.libraryTrace.library, "core");
+        assert.strictEqual(run.trace.libraryTrace.version, "1.0.0");
+
+        const compileRecords = queryAudit(root, { action: "compile-dsl" });
+        assert.strictEqual(
+          compileRecords.some((record) => {
+            const metadata = (record.auditEvent.metadata ?? {}) as Record<string, unknown>;
+            return metadata.macroLibrary === "core"
+              && metadata.version === "1.0.0"
+              && metadata.macroId === "enforce-service-boundaries";
+          }),
+          true
+        );
+
+        const macroRunRecords = queryAudit(root, { action: "macro-execution" });
+        assert.strictEqual(macroRunRecords.length, 1);
+      },
+    },
+    {
+      id: "2.55",
+      name: "policy engine supports macro selector deterministically",
+      run: async () => {
+        const baseline = controlPlaneToChoirConfig(makeControlPlane());
+        const next = makeControlPlane();
+        next.intent.goals = ["macro-policy-target"];
+        const diffs = computeDiff(baseline, controlPlaneToChoirConfig(next));
+
+        const policySet = toPolicySet([
+          {
+            id: "macro-only-approval",
+            match: {
+              macro: "core.enforce-service-boundaries",
+            },
+            effect: {
+              type: "require-approval",
+            },
+          },
+        ]);
+
+        const matching = evaluatePolicies(diffs, policySet, {
+          role: "architect",
+          environment: "local",
+          macroId: "core.enforce-service-boundaries",
+        });
+        const nonMatching = evaluatePolicies(diffs, policySet, {
+          role: "architect",
+          environment: "local",
+          macroId: "core.other-macro",
+        });
+
+        assert.strictEqual(matching.trace.decision, "require-approval");
+        assert.strictEqual(nonMatching.trace.decision, "allow");
+        assert.deepStrictEqual(
+          evaluatePolicies(diffs, policySet, {
+            role: "architect",
+            environment: "local",
+            macroId: "core.enforce-service-boundaries",
+          }),
+          matching
+        );
+      },
+    },
+    {
+      id: "2.56",
+      name: "breaking library changes require major bump",
+      run: async () => {
+        const oldLibrary = {
+          name: "core",
+          version: "1.0.0",
+          metadata: {},
+          macros: [
+            {
+              id: "enforce-service-boundaries",
+              parameters: [
+                { name: "entity", required: false, default: "service" },
+              ],
+              body: ['choir define goal "old"'],
+            },
+          ],
+        };
+
+        const nextLibrary = {
+          name: "core",
+          version: "1.1.0",
+          metadata: {},
+          macros: [
+            {
+              id: "enforce-service-boundaries",
+              parameters: [
+                { name: "entity", required: true },
+              ],
+              body: ['choir define goal "new"'],
+            },
+          ],
+        };
+
+        const breaking = detectBreakingChanges(oldLibrary, nextLibrary);
+        assert.strictEqual(breaking.breaking, true);
+        assert.strictEqual(breaking.reasons.length > 0, true);
+
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-breaking-"));
+        const writeLibrary = (version: string, required: boolean) => {
+          const dir = path.join(root, ".choir", "libraries", "core", version);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(path.join(dir, "macros.yaml"), [
+            "name: core",
+            `version: ${version}`,
+            "metadata:",
+            "  description: core",
+            "macros:",
+            "  - id: enforce-service-boundaries",
+            "    parameters:",
+            "      - name: entity",
+            `        required: ${required ? "true" : "false"}`,
+            ...(required ? [] : ["        default: service"]),
+            "    body:",
+            `      - choir define goal \"core-${version}\"`,
+            "",
+          ].join("\n"), "utf-8");
+        };
+
+        writeLibrary("1.0.0", false);
+        writeLibrary("1.1.0", true);
+
+        assert.throws(
+          () => resolveLibraryVersion(root, "core", "1.x"),
+          /Breaking change detected/
+        );
       },
     },
   ],

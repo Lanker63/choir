@@ -154,9 +154,18 @@ const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"])
 const ApprovalPolicyRuleSchema = z.object({
     id: z.string().min(1),
     match: z.object({
-        path: z.string().min(1),
-        operation: ApprovalPolicyOperationSchema,
-    }).strict(),
+        path: z.string().min(1).optional(),
+        operation: ApprovalPolicyOperationSchema.optional(),
+        macro: z.string().min(1).optional(),
+    }).strict().superRefine((match, context) => {
+        if (!match.path && !match.operation && !match.macro) {
+            context.addIssue({
+                code: "custom",
+                message: "Policy match requires at least one selector: path, operation, or macro",
+                path: [],
+            });
+        }
+    }),
     scope: z.object({
         roles: z.array(PolicyRoleSchema).optional(),
         environments: z.array(PolicyEnvironmentSchema).optional(),

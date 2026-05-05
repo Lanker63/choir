@@ -11,6 +11,8 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <approve>
   | <reject>
   | <policy-status>
+  | <import>
+  | <library>
   | <audit>
   | <macro>
 
@@ -40,6 +42,19 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <policy-status> ::= "policy" "status"
 
+<import> ::= "import" <library-spec>
+
+<library> ::= "library" "list"
+            | "library" "install" <library-spec>
+            | "library" "update" <identifier>
+            | "library" "lock"
+
+<library-spec> ::= <identifier> "@" <version-selector>
+
+<version-selector> ::= MAJOR "." MINOR "." PATCH
+                     | MAJOR "." MINOR "." "x"
+                     | MAJOR "." "x"
+
 <audit> ::= "audit" "log"
           | "audit" "report"
           | "audit" "query" [<audit-filters>]
@@ -60,13 +75,13 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <string> ::= QUOTED_STRING
 
-<identifier> ::= [a-zA-Z0-9-_]+`;
+<identifier> ::= [a-zA-Z0-9._-]+`;
 
 export type Token =
   | { type: "keyword"; value: string }
   | { type: "string"; value: string }
   | { type: "identifier"; value: string }
-  | { type: "symbol"; value: "=" | "," };
+  | { type: "symbol"; value: "=" | "," | "@" };
 
 export const CHOIR_ROOT_KEYWORD = "choir" as const;
 
@@ -81,11 +96,14 @@ export const CHOIR_ACTION_KEYWORDS = [
   "approve",
   "reject",
   "policy",
+  "import",
+  "library",
   "audit",
   "macro",
 ] as const;
 
 export const CHOIR_MACRO_META_KEYWORDS = ["list", "show"] as const;
+export const CHOIR_LIBRARY_META_KEYWORDS = ["list", "install", "update", "lock"] as const;
 export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["goal", "constraint", "non-goal"] as const;
@@ -96,10 +114,13 @@ export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
 export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
+export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
+export const CHOIR_VERSION_SELECTOR_PATTERN = /^(?:\d+\.\d+\.\d+|\d+\.\d+\.x|\d+\.x)$/;
 
 const KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
   ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_LIBRARY_META_KEYWORDS,
   ...CHOIR_AUDIT_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
@@ -109,7 +130,7 @@ const KEYWORDS = new Set<string>([
   CHOIR_SEQUENCE_KEYWORD,
 ]);
 
-export const CHOIR_IDENTIFIER_PATTERN = /^[a-zA-Z0-9-_]+$/;
+export const CHOIR_IDENTIFIER_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export type DefineType = "goal" | "constraint" | "non-goal";
 export type AnalyzeTarget = "workspace" | "violations" | "hotspots";
@@ -171,6 +192,31 @@ export type PolicyStatusNode = {
   type: "policy-status";
 };
 
+export type ImportLibraryNode = {
+  type: "import-library";
+  library: string;
+  versionSelector: string;
+};
+
+export type LibraryListNode = {
+  type: "library-list";
+};
+
+export type LibraryInstallNode = {
+  type: "library-install";
+  library: string;
+  versionSelector: string;
+};
+
+export type LibraryUpdateNode = {
+  type: "library-update";
+  library: string;
+};
+
+export type LibraryLockNode = {
+  type: "library-lock";
+};
+
 export type AuditQueryFilters = {
   role?: string;
   environment?: string;
@@ -218,6 +264,11 @@ export type ActionNode =
   | ApproveNode
   | RejectNode
   | PolicyStatusNode
+  | ImportLibraryNode
+  | LibraryListNode
+  | LibraryInstallNode
+  | LibraryUpdateNode
+  | LibraryLockNode
   | AuditLogNode
   | AuditReportNode
   | AuditQueryNode
@@ -275,7 +326,7 @@ const CAPABILITY_RULES: Record<RoleName, CapabilityAction[]> = {
 };
 
 function isWordCharacter(value: string): boolean {
-  return /[a-zA-Z0-9_-]/.test(value);
+  return /[a-zA-Z0-9_.-]/.test(value);
 }
 
 function parseQuotedString(input: string, start: number): { value: string; end: number } {
@@ -352,7 +403,7 @@ export function tokenize(input: string): Token[] {
       continue;
     }
 
-    if (char === "=" || char === ",") {
+    if (char === "=" || char === "," || char === "@") {
       tokens.push({ type: "symbol", value: char });
       cursor += 1;
       continue;
@@ -415,6 +466,10 @@ class Parser {
         return this.parseReject();
       case "policy":
         return this.parsePolicyStatus();
+      case "import":
+        return this.parseImportLibrary();
+      case "library":
+        return this.parseLibrary();
       case "audit":
         return this.parseAudit();
       case "macro":
@@ -610,6 +665,62 @@ class Parser {
     return { type: "policy-status" };
   }
 
+  private parseLibrarySpec(): { library: string; versionSelector: string } {
+    const library = this.expectIdentifierLike();
+    this.expectSymbol("@");
+    const versionSelector = this.expectIdentifierLike();
+
+    if (!CHOIR_VERSION_SELECTOR_PATTERN.test(versionSelector)) {
+      throw new Error(`Invalid library version selector: ${versionSelector}`);
+    }
+
+    return {
+      library,
+      versionSelector,
+    };
+  }
+
+  private parseImportLibrary(): ImportLibraryNode {
+    this.expectKeyword("import");
+    const spec = this.parseLibrarySpec();
+    return {
+      type: "import-library",
+      library: spec.library,
+      versionSelector: spec.versionSelector,
+    };
+  }
+
+  private parseLibrary(): LibraryListNode | LibraryInstallNode | LibraryUpdateNode | LibraryLockNode {
+    this.expectKeyword("library");
+    const mode = this.expectIdentifierLike().toLowerCase();
+
+    if (mode === "list") {
+      return { type: "library-list" };
+    }
+
+    if (mode === "install") {
+      const spec = this.parseLibrarySpec();
+      return {
+        type: "library-install",
+        library: spec.library,
+        versionSelector: spec.versionSelector,
+      };
+    }
+
+    if (mode === "update") {
+      return {
+        type: "library-update",
+        library: this.expectIdentifierLike(),
+      };
+    }
+
+    if (mode === "lock") {
+      return { type: "library-lock" };
+    }
+
+    throw new Error("Expected library command: list|install|update|lock");
+  }
+
   private parseAudit(): AuditLogNode | AuditReportNode | AuditQueryNode {
     this.expectKeyword("audit");
     const mode = this.expectIdentifierLike().toLowerCase();
@@ -741,7 +852,7 @@ class Parser {
     throw new Error(`Expected identifier or quoted string, found ${token.type}:${token.value}`);
   }
 
-  private expectSymbol(expected: "=" | ","): void {
+  private expectSymbol(expected: "=" | "," | "@"): void {
     const token = this.take();
     if (!token || token.type !== "symbol" || token.value !== expected) {
       const found = token ? `${token.type}:${token.value}` : "<end>";
@@ -759,7 +870,7 @@ class Parser {
     return true;
   }
 
-  private consumeSymbol(value: "=" | ","): boolean {
+  private consumeSymbol(value: "=" | "," | "@"): boolean {
     const token = this.peek();
     if (!token || token.type !== "symbol" || token.value !== value) {
       return false;
@@ -823,6 +934,22 @@ function validateActionNode(node: ActionNode): boolean {
 
   if (node.type === "policy-status") {
     return true;
+  }
+
+  if (node.type === "import-library") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.library) && CHOIR_VERSION_SELECTOR_PATTERN.test(node.versionSelector);
+  }
+
+  if (node.type === "library-list" || node.type === "library-lock") {
+    return true;
+  }
+
+  if (node.type === "library-install") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.library) && CHOIR_VERSION_SELECTOR_PATTERN.test(node.versionSelector);
+  }
+
+  if (node.type === "library-update") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.library);
   }
 
   if (node.type === "audit-log" || node.type === "audit-report") {
@@ -948,6 +1075,31 @@ async function compileAction<TContext>(
     case "policy-status":
       trace.steps.push("system.policy.status");
       trace.compiledActions.push("system.policy.status");
+      return;
+
+    case "import-library":
+      trace.steps.push("system.library.import");
+      trace.compiledActions.push("system.library.import");
+      return;
+
+    case "library-list":
+      trace.steps.push("system.library.list");
+      trace.compiledActions.push("system.library.list");
+      return;
+
+    case "library-install":
+      trace.steps.push("system.library.install");
+      trace.compiledActions.push("system.library.install");
+      return;
+
+    case "library-update":
+      trace.steps.push("system.library.update");
+      trace.compiledActions.push("system.library.update");
+      return;
+
+    case "library-lock":
+      trace.steps.push("system.library.lock");
+      trace.compiledActions.push("system.library.lock");
       return;
 
     case "audit-log":

@@ -24,6 +24,7 @@ import {
   tokenize,
   validGrammar,
 } from "./choirRouter.js";
+import { MacroLibraryTrace } from "./macroLibraries.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
 import {
   Environment,
@@ -409,11 +410,20 @@ function compileActionToYAML(
     };
   }
 
-  if (action.type === "macro-list" || action.type === "macro-show" || action.type === "macro-run") {
+  if (
+    action.type === "macro-list"
+    || action.type === "macro-show"
+    || action.type === "macro-run"
+    || action.type === "import-library"
+    || action.type === "library-list"
+    || action.type === "library-install"
+    || action.type === "library-update"
+    || action.type === "library-lock"
+  ) {
     throw new Error("Macro commands must be expanded into concrete Choir DSL commands before YAML compilation");
   }
 
-  // analyze/preview/execute/status are non-mutating in YAML compiler mode.
+  // analyze/preview/execute/status/audit are non-mutating in YAML compiler mode.
   return next;
 }
 
@@ -532,6 +542,7 @@ export function compileDSLAndWrite(
   options?: {
     workspaceRoot?: string;
     actorId?: string;
+    macroTrace?: MacroLibraryTrace;
   }
 ): {
   updatedControlPlane: ControlPlane;
@@ -579,6 +590,11 @@ export function compileDSLAndWrite(
     const ctx: ExecutionContext = {
       role,
       environment,
+      ...(options?.macroTrace
+        ? {
+          macroId: `${options.macroTrace.library}.${options.macroTrace.macroId}`,
+        }
+        : {}),
     };
 
     const actions = result.trace.ast.type === "sequence"
@@ -601,6 +617,14 @@ export function compileDSLAndWrite(
           changed: false,
           decision: "no-change",
           command: input,
+          ...(options?.macroTrace
+            ? {
+              macroLibrary: options.macroTrace.library,
+              version: options.macroTrace.version,
+              macroId: options.macroTrace.macroId,
+              resolvedVersion: options.macroTrace.resolvedVersion,
+            }
+            : {}),
         },
         decisionTrace: {
           policiesEvaluated: [],
@@ -654,6 +678,14 @@ export function compileDSLAndWrite(
       metadata: {
         diffHash,
         command: input,
+        ...(options?.macroTrace
+          ? {
+            macroLibrary: options.macroTrace.library,
+            version: options.macroTrace.version,
+            macroId: options.macroTrace.macroId,
+            resolvedVersion: options.macroTrace.resolvedVersion,
+          }
+          : {}),
       },
       decisionTrace,
     });
@@ -672,6 +704,14 @@ export function compileDSLAndWrite(
           command: input,
           decision: "deny",
           violations: policyEvaluation.result.violations,
+          ...(options?.macroTrace
+            ? {
+              macroLibrary: options.macroTrace.library,
+              version: options.macroTrace.version,
+              macroId: options.macroTrace.macroId,
+              resolvedVersion: options.macroTrace.resolvedVersion,
+            }
+            : {}),
         },
         decisionTrace,
       });
@@ -701,6 +741,14 @@ export function compileDSLAndWrite(
             command: input,
             decision: "require-approval",
             pendingApprovalId: `diff-${diffHash.slice(0, 12)}`,
+            ...(options?.macroTrace
+              ? {
+                macroLibrary: options.macroTrace.library,
+                version: options.macroTrace.version,
+                macroId: options.macroTrace.macroId,
+                resolvedVersion: options.macroTrace.resolvedVersion,
+              }
+              : {}),
           },
           decisionTrace,
         });
@@ -739,6 +787,14 @@ export function compileDSLAndWrite(
             command: input,
             decision: "require-approval",
             pendingApprovalId: pendingId,
+            ...(options?.macroTrace
+              ? {
+                macroLibrary: options.macroTrace.library,
+                version: options.macroTrace.version,
+                macroId: options.macroTrace.macroId,
+                resolvedVersion: options.macroTrace.resolvedVersion,
+              }
+              : {}),
           },
           decisionTrace,
         });
@@ -766,6 +822,14 @@ export function compileDSLAndWrite(
         diffHash,
         command: input,
         decision: "allow",
+        ...(options?.macroTrace
+          ? {
+            macroLibrary: options.macroTrace.library,
+            version: options.macroTrace.version,
+            macroId: options.macroTrace.macroId,
+            resolvedVersion: options.macroTrace.resolvedVersion,
+          }
+          : {}),
       },
       decisionTrace,
     });
@@ -797,6 +861,14 @@ export function compileDSLAndWrite(
       metadata: {
         command: input,
         error: message,
+        ...(options?.macroTrace
+          ? {
+            macroLibrary: options.macroTrace.library,
+            version: options.macroTrace.version,
+            macroId: options.macroTrace.macroId,
+            resolvedVersion: options.macroTrace.resolvedVersion,
+          }
+          : {}),
       },
       decisionTrace: {
         policiesEvaluated: [],

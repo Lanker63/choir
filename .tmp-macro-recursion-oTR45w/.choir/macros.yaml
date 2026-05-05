@@ -1,0 +1,9 @@
+macros:
+  - id: a
+    version: 1.0.0
+    body:
+      - choir macro b
+  - id: b
+    version: 1.0.0
+    body:
+      - choir macro a

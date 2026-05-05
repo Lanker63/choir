@@ -2,6 +2,13 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { z } from "zod";
+import { recordAudit } from "./audit.js";
+import {
+  MacroLibraryTrace,
+  Macro,
+  resolveLibraryMacro,
+} from "./macroLibraries.js";
+import { detectEnvironment } from "./policyEngine.js";
 import { ControlPlane } from "../schema.js";
 import { parseCommand } from "./choirRouter.js";
 import {
@@ -10,26 +17,13 @@ import {
   compileDSLAndWrite,
 } from "./dslYamlCompiler.js";
 
-export type MacroParameter = {
-  name: string;
-  required: boolean;
-  default?: string;
-};
-
-export type Macro = {
-  id: string;
-  version?: string;
-  description?: string;
-  parameters?: MacroParameter[];
-  body: string[];
-};
-
 export type MacroRegistry = {
   macros: Macro[];
 };
 
 export type MacroTrace = {
   macroId: string;
+  libraryTrace: MacroLibraryTrace;
   expandedCommands: string[];
   executedSteps: number;
   results: string[];
@@ -37,6 +31,7 @@ export type MacroTrace = {
 
 export type MacroStepResult = {
   command: string;
+  macroTrace: MacroLibraryTrace;
   decision: CompilationDecision;
   changed: boolean;
   diffHash?: string;
@@ -52,6 +47,7 @@ export type MacroRunResult = {
 };
 
 const MACRO_PARAMETER_NAME_PATTERN = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+const SEMVER_PATTERN = /^(\d+)\.(\d+)\.(\d+)$/;
 const MAX_MACRO_DEPTH = 8;
 
 const MacroParameterSchema = z.object({
@@ -100,6 +96,12 @@ function ensureUniqueMacroIds(registry: MacroRegistry): void {
   }
 }
 
+function ensureVersionedMacro(macro: Macro): void {
+  if (!macro.version || !SEMVER_PATTERN.test(macro.version)) {
+    throw new Error(`Unversioned macro is not allowed: ${macro.id}`);
+  }
+}
+
 function ensureUniqueParameterNames(macro: Macro): void {
   const seen = new Set<string>();
   for (const parameter of macro.parameters ?? []) {
@@ -125,6 +127,11 @@ export function loadMacroRegistry(root: string): MacroRegistry {
   ensureUniqueMacroIds(sorted);
   for (const macro of sorted.macros) {
     ensureUniqueParameterNames(macro);
+    ensureVersionedMacro(macro);
+
+    for (const line of macro.body) {
+      parseCommand(line);
+    }
   }
 
   return sorted;
@@ -135,12 +142,20 @@ export function listMacros(root: string): Macro[] {
 }
 
 export function getMacro(root: string, macroId: string): Macro {
-  const macro = loadMacroRegistry(root).macros.find((entry) => entry.id === macroId);
-  if (!macro) {
+  if (macroId.includes(".")) {
+    try {
+      return resolveLibraryMacro(root, macroId).macro;
+    } catch {
+      // Fall through to local registry lookup.
+    }
+  }
+
+  const local = loadMacroRegistry(root).macros.find((entry) => entry.id === macroId || `${entry.id}` === macroId);
+  if (!local) {
     throw new Error(`Macro not found: ${macroId}`);
   }
 
-  return macro;
+  return local;
 }
 
 export function validateParams(macro: Macro, args: Record<string, string>): void {
@@ -200,10 +215,46 @@ type MacroExecutionContext = {
   controlPath: string;
   workspaceRoot?: string;
   controlPlane: ControlPlane;
+  rootMacroTrace: MacroLibraryTrace;
   expandedCommands: string[];
   steps: MacroStepResult[];
   results: string[];
 };
+
+type ResolvedMacro = {
+  macro: Macro;
+  trace: MacroLibraryTrace;
+  qualifiedId: string;
+};
+
+function resolveMacroReference(root: string, requestedId: string): ResolvedMacro {
+  if (requestedId.includes(".")) {
+    const resolved = resolveLibraryMacro(root, requestedId);
+    return {
+      macro: resolved.macro,
+      trace: resolved.trace,
+      qualifiedId: `${resolved.trace.library}.${resolved.trace.macroId}`,
+    };
+  }
+
+  const local = loadMacroRegistry(root).macros.find((entry) => entry.id === requestedId);
+  if (!local) {
+    throw new Error(`Macro not found: ${requestedId}`);
+  }
+
+  ensureVersionedMacro(local);
+
+  return {
+    macro: local,
+    trace: {
+      library: "local",
+      version: local.version as string,
+      macroId: local.id,
+      resolvedVersion: local.version as string,
+    },
+    qualifiedId: `local.${local.id}`,
+  };
+}
 
 function executeMacroRecursive(
   macroId: string,
@@ -216,28 +267,42 @@ function executeMacroRecursive(
     throw new Error(`Macro recursion limit exceeded (${MAX_MACRO_DEPTH})`);
   }
 
-  if (stack.includes(macroId)) {
-    const cycle = [...stack, macroId].join(" -> ");
+  const resolved = resolveMacroReference(context.root, macroId);
+  if (stack.includes(resolved.qualifiedId)) {
+    const cycle = [...stack, resolved.qualifiedId].join(" -> ");
     throw new Error(`Macro recursion detected: ${cycle}`);
   }
 
-  const macro = getMacro(context.root, macroId);
-  const expanded = expandMacro(macro, args);
+  const expanded = expandMacro(resolved.macro, args);
 
   for (const command of expanded) {
     const parsed = parseCommand(command);
     context.expandedCommands.push(command);
 
-    if (parsed.ast.type === "macro-list" || parsed.ast.type === "macro-show") {
-      throw new Error(`Macro body cannot include choir ${parsed.ast.type === "macro-list" ? "macro list" : "macro show"}`);
+    if (
+      parsed.ast.type === "macro-list"
+      || parsed.ast.type === "macro-show"
+      || parsed.ast.type === "import-library"
+      || parsed.ast.type === "library-list"
+      || parsed.ast.type === "library-install"
+      || parsed.ast.type === "library-update"
+      || parsed.ast.type === "library-lock"
+    ) {
+      throw new Error(`Macro body cannot include non-execution macro command: ${command}`);
     }
 
     if (parsed.ast.type === "macro-run") {
+      const nestedMacroId = parsed.ast.macroId.includes(".")
+        ? parsed.ast.macroId
+        : (resolved.trace.library !== "local"
+          ? `${resolved.trace.library}.${parsed.ast.macroId}`
+          : parsed.ast.macroId);
+
       const nestedDecision = executeMacroRecursive(
-        parsed.ast.macroId,
+        nestedMacroId,
         parsed.ast.args,
         context,
-        [...stack, macroId],
+        [...stack, resolved.qualifiedId],
         depth + 1
       );
 
@@ -250,10 +315,13 @@ function executeMacroRecursive(
 
     const compiled = compileDSLAndWrite(command, context.controlPlane, context.controlPath, {
       workspaceRoot: context.workspaceRoot,
+      actorId: "macro-engine",
+      macroTrace: resolved.trace,
     });
 
     context.steps.push({
       command,
+      macroTrace: resolved.trace,
       decision: compiled.decision,
       changed: compiled.changed,
       diffHash: compiled.diffHash,
@@ -291,11 +359,14 @@ export function runMacro(
     workspaceRoot?: string;
   }
 ): MacroRunResult {
+  const rootMacro = resolveMacroReference(root, macroId);
+
   const context: MacroExecutionContext = {
     root,
     controlPath,
     workspaceRoot: options?.workspaceRoot,
     controlPlane,
+    rootMacroTrace: rootMacro.trace,
     expandedCommands: [],
     steps: [],
     results: [],
@@ -303,11 +374,40 @@ export function runMacro(
 
   const decision = executeMacroRecursive(macroId, args, context, [], 0);
 
+  recordAudit(options?.workspaceRoot ?? root, {
+    auditEvent: {
+      id: "",
+      timestamp: "",
+      actor: {
+        role: "architect",
+        id: "macro-engine",
+      },
+      environment: detectEnvironment(),
+      action: "macro-execution",
+      resource: `macro.${context.rootMacroTrace.library}.${context.rootMacroTrace.macroId}`,
+      result: decision === "deny" || decision === "require-approval" ? "failure" : "success",
+      metadata: {
+        macroLibrary: context.rootMacroTrace.library,
+        version: context.rootMacroTrace.version,
+        macroId: context.rootMacroTrace.macroId,
+        resolvedVersion: context.rootMacroTrace.resolvedVersion,
+        decision,
+        executedSteps: context.steps.length,
+      },
+    },
+    decisionTrace: {
+      policiesEvaluated: [],
+      finalDecision: decision === "require-approval" ? "require-approval" : (decision === "deny" ? "deny" : "allow"),
+      reasoning: `Macro execution finished with decision=${decision}`,
+    },
+  });
+
   return {
     updatedControlPlane: context.controlPlane,
     decision,
     trace: {
       macroId,
+      libraryTrace: context.rootMacroTrace,
       expandedCommands: context.expandedCommands,
       executedSteps: context.steps.length,
       results: context.results,

@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), and records immutable audit/compliance evidence for significant actions.
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, and supports versioned macro libraries for team-wide standards reuse.
 
 ---
 
@@ -113,6 +113,7 @@ Org Policies (/org/policies.dsl)
 Policy DSL rule model supports:
 
 - diff selectors: `diff.path`, `diff.operation`
+- macro selectors: `macro`
 - scope selectors: `role`, `environment`
 - predicates: `contains`, `count > <number>`
 - effects: `allow`, `deny`, `require-approval`
@@ -133,6 +134,7 @@ Policy DSL grammar:
 
 <clause> ::= "diff.path" "=" <string>
            | "diff.operation" "=" ("add" | "remove" | "update")
+           | "macro" "=" <string>
            | "role" "=" ("architect" | "analyst" | "conductor" | "enforcer")
            | "environment" "=" ("local" | "ci" | "staging" | "production")
            | "contains" <string>
@@ -357,7 +359,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <audit> | <macro>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -369,6 +371,18 @@ Grammar:
 <approve> ::= "approve" <identifier>
 <reject> ::= "reject" <identifier>
 <policy-status> ::= "policy" "status"
+<import> ::= "import" <library-spec>
+
+<library> ::= "library" "list"
+            | "library" "install" <library-spec>
+            | "library" "update" <identifier>
+            | "library" "lock"
+
+<library-spec> ::= <identifier> "@" <version-selector>
+
+<version-selector> ::= MAJOR "." MINOR "." PATCH
+                     | MAJOR "." MINOR "." "x"
+                     | MAJOR "." "x"
 <audit> ::= "audit" "log"
           | "audit" "report"
           | "audit" "query" [<audit-filters>]
@@ -385,7 +399,7 @@ Grammar:
 <key-value> ::= <identifier> "=" <string>
 
 <string> ::= QUOTED_STRING
-<identifier> ::= [a-zA-Z0-9-_]+
+<identifier> ::= [a-zA-Z0-9._-]+
 ```
 
 `@choir` parses commands into AST and compiles AST into deterministic YAML mutations.
@@ -402,7 +416,7 @@ Choir ships first-class VS Code language support for the DSL.
   - `*.choir` is associated to language id `choir`.
 - Syntax highlighting:
   - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
-  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
+  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `import`, `library`, `install`, `update`, `lock`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
 - Language configuration:
   - Line comments use `#`.
   - Bracket pairs: `{}`, `()`.
@@ -459,6 +473,11 @@ Supported commands:
 - `choir approve <diffId>`
 - `choir reject <diffId>`
 - `choir policy status`
+- `choir import <library>@<version-selector>`
+- `choir library list`
+- `choir library install <library>@<version-selector>`
+- `choir library update <library>`
+- `choir library lock`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -468,10 +487,12 @@ Supported commands:
 
 Macro storage and model:
 
-- Macro registry file: `.choir/macros.yaml`
+- Local macro registry file: `.choir/macros.yaml`
+- Library manifests: `.choir/libraries/<library>/<version>/macros.yaml`
+- Resolved library versions: `.choir/lock.yaml`
 - Each macro contains:
   - `id`
-  - optional `version`
+  - required `version` (semver)
   - optional `description`
   - optional `parameters[]` (`name`, `required`, optional `default`)
   - `body[]` (templated DSL command lines)
@@ -481,12 +502,16 @@ Macro storage and model:
 - Macro body commands are validated with the same DSL parser used by runtime.
 - Macro steps execute sequentially through `compileDSLAndWrite`, so each step passes policy gates and diff/approval checks.
 - Macro composition is supported (`choir macro ...` inside macro bodies) with deterministic recursion detection and depth limit.
+- Library macros are namespaced as `<library>.<macroId>`.
+- Library selectors resolve deterministically to exact versions: `1.0.0`, `1.0.x`, `1.x`.
+- Resolution is local-only and lockfile-pinned (no network lookups).
+- Breaking changes between library versions require MAJOR version bumps.
 
 Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
-- `choir analyze|preview|execute|status|audit ...`: accepted by grammar, non-mutating in YAML compiler mode
+- `choir analyze|preview|execute|status|audit|import|library ...`: accepted by grammar, non-mutating in YAML compiler mode
 
 YAML -> DSL projection behavior:
 
@@ -498,10 +523,12 @@ YAML -> DSL projection behavior:
 Policy approval gate behavior:
 
 - Decision model: `decision = f(yamlDiff, role, environment)`
+- Macro-aware decision model: `decision = f(yamlDiff, role, environment, macroId)`
 - Every YAML mutation diff is evaluated deterministically against an effective merged policy set from org/repo/environment Policy DSL layers
 - Source merge order is deterministic and fixed: `org -> repo -> environment`
 - Role is trusted system context (derived from command/action role mapping), not user-provided DSL input
 - Environment is trusted runtime context (`CI`, `NODE_ENV`, optional `CHOIR_ENVIRONMENT`), not DSL input
+- Macro context is trusted runtime resolution from lockfile-pinned macro library execution, not free-form user input during policy evaluation
 - Deterministic precedence is enforced: `deny > require-approval > allow`
 - No policy source is mutated during evaluation
 - No hidden overrides are allowed
@@ -553,7 +580,46 @@ Idempotency guarantees:
 - Duplicate intent entries are deduplicated and stably sorted
 - Duplicate plan ids are not re-added
 - Macro expansion with identical inputs produces identical expanded commands
+- Lockfile-pinned macro library execution produces identical version resolution for identical `.choir/lock.yaml`
 - Identical `(yamlDiff, role, environment, org+repo policies, runtime environment)` inputs always produce identical policy decisions
+
+---
+
+## Macro Libraries
+
+Choir supports local, versioned macro libraries for cross-repository reuse.
+
+Storage model:
+
+- `.choir/libraries/<library>/<version>/macros.yaml`
+- Versions are immutable; publish a new version directory instead of editing in place
+- Library manifests include: `name`, `version`, `metadata`, `macros[]`
+
+Lockfile model:
+
+- `.choir/lock.yaml` stores resolved exact versions
+- Example:
+
+```yaml
+libraries:
+  core: 1.0.0
+  architecture: 2.1.0
+```
+
+Library commands:
+
+- `choir import core@1.0.x`
+- `choir library list`
+- `choir library install core@1.0.0`
+- `choir library update core`
+- `choir library lock`
+
+Determinism guarantees:
+
+- No unversioned macros
+- No nondeterministic library resolution
+- Same locked version produces the same macro behavior
+- No direct macro execution path bypasses DSL compilation/policy gate
 
 ---
 
@@ -575,6 +641,7 @@ Audited action types include:
 - `approval-granted`
 - `approval-rejected`
 - `execute-plan`
+- `macro-execution`
 
 Audit query/report command surface:
 
@@ -595,6 +662,7 @@ Report model highlights:
 - Summary fields: `totalEvents`, `approvalsRequired`, `denials`
 - Findings fields: `violations`, `anomalies`
 - Anomalies are derived from failed audit events
+- Macro-driven compile records include library provenance metadata (`macroLibrary`, `version`, `macroId`, `resolvedVersion`)
 
 ---
 
@@ -625,6 +693,10 @@ Derived system state is written to `.choir/state.json`, including:
 - strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
 
 Audit evidence is persisted in `.choir/audit.log.jsonl`.
+
+Macro library manifests are stored under `.choir/libraries/`.
+
+Macro library lock resolution is stored in `.choir/lock.yaml`.
 
 Compliance reports are exported to `.choir/reports/` when `choir audit report` is invoked.
 

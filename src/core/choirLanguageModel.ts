@@ -6,12 +6,15 @@ import {
   CHOIR_EXPORT_FORMAT_KEYWORD,
   CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_IDENTIFIER_PATTERN,
+  CHOIR_LIBRARY_META_KEYWORDS,
   CHOIR_MACRO_META_KEYWORDS,
+  CHOIR_LIBRARY_AT_SYMBOL,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_POLICY_STATUS_KEYWORD,
   CHOIR_ROOT_KEYWORD,
   CHOIR_SEQUENCE_KEYWORD,
+  CHOIR_VERSION_SELECTOR_PATTERN,
   Token,
   parseCommand,
 } from "./choirRouter.js";
@@ -49,6 +52,14 @@ type ParserState =
   | "approve-id"
   | "reject-id"
   | "policy-status"
+  | "import-library-id"
+  | "import-at"
+  | "import-version"
+  | "library-next"
+  | "library-install-library"
+  | "library-install-at"
+  | "library-install-version"
+  | "library-update-library"
   | "audit-next"
   | "audit-query-key"
   | "audit-query-equals"
@@ -67,7 +78,7 @@ type ExpectedTerminal =
   | { type: "keyword"; value: string }
   | { type: "string" }
   | { type: "identifier" }
-  | { type: "symbol"; value: "=" | "," };
+  | { type: "symbol"; value: "=" | "," | "@" };
 
 type CompletionLexResult = {
   tokens: Token[];
@@ -81,6 +92,7 @@ type CompletionLexResult = {
 const DSL_KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
   ...CHOIR_ACTION_KEYWORDS,
+  ...CHOIR_LIBRARY_META_KEYWORDS,
   ...CHOIR_AUDIT_META_KEYWORDS,
   ...CHOIR_MACRO_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
@@ -120,14 +132,19 @@ const KEYWORD_HOVER: Record<string, string> = {
   plans: "Export plan section.",
   approve: "Approve a pending policy-gated diff id.",
   reject: "Reject a pending policy-gated diff id.",
+  import: "Resolve and lock a macro library version selector.",
+  library: "Manage local macro libraries and lockfile resolution.",
+  install: "Install a library selector into .choir/lock.yaml.",
+  update: "Update a locked library to latest available local version.",
+  lock: "Validate and normalize .choir/lock.yaml deterministically.",
   macro: "Run reusable deterministic DSL macro scripts.",
-  list: "List available macros from .choir/macros.yaml.",
+  list: "List available items in current context (macros or libraries).",
   show: "Show macro metadata and body.",
   then: "Deterministic sequence operator for action chaining.",
 };
 
 function isWordCharacter(char: string): boolean {
-  return /[a-zA-Z0-9_-]/.test(char);
+  return /[a-zA-Z0-9_.-]/.test(char);
 }
 
 function stripCommentOutsideQuotes(input: string): string {
@@ -249,7 +266,7 @@ function tokenizeForCompletion(input: string): CompletionLexResult {
       continue;
     }
 
-    if (char === "=" || char === ",") {
+    if (char === "=" || char === "," || char === "@") {
       tokens.push({ type: "symbol", value: char });
       cursor += 1;
       continue;
@@ -318,8 +335,29 @@ function transition(state: ParserState, token: Token): ParserState[] {
       || state === "approve-id"
       || state === "reject-id"
       || state === "macro-show-id"
+      || state === "library-update-library"
     ) {
       return ["expect-then-or-end"];
+    }
+
+    if (state === "import-library-id") {
+      return ["import-at"];
+    }
+
+    if (state === "import-version") {
+      return CHOIR_VERSION_SELECTOR_PATTERN.test(token.value)
+        ? ["expect-then-or-end"]
+        : [];
+    }
+
+    if (state === "library-install-library") {
+      return ["library-install-at"];
+    }
+
+    if (state === "library-install-version") {
+      return CHOIR_VERSION_SELECTOR_PATTERN.test(token.value)
+        ? ["expect-then-or-end"]
+        : [];
     }
 
     if (state === "macro-next") {
@@ -342,6 +380,14 @@ function transition(state: ParserState, token: Token): ParserState[] {
   }
 
   if (token.type === "symbol") {
+    if (state === "import-at" && token.value === CHOIR_LIBRARY_AT_SYMBOL) {
+      return ["import-version"];
+    }
+
+    if (state === "library-install-at" && token.value === CHOIR_LIBRARY_AT_SYMBOL) {
+      return ["library-install-version"];
+    }
+
     if (state === "macro-arg-equals" && token.value === "=") {
       return ["macro-arg-value"];
     }
@@ -411,6 +457,12 @@ function transition(state: ParserState, token: Token): ParserState[] {
     if (token.value === "reject") {
       return ["reject-id"];
     }
+    if (token.value === "import") {
+      return ["import-library-id"];
+    }
+    if (token.value === "library") {
+      return ["library-next"];
+    }
 
     if (token.value === "macro") {
       return ["macro-next"];
@@ -442,6 +494,22 @@ function transition(state: ParserState, token: Token): ParserState[] {
 
     if (token.value === "show") {
       return ["macro-show-id"];
+    }
+
+    return [];
+  }
+
+  if (state === "library-next") {
+    if (token.value === "list" || token.value === "lock") {
+      return ["expect-then-or-end"];
+    }
+
+    if (token.value === "install") {
+      return ["library-install-library"];
+    }
+
+    if (token.value === "update") {
+      return ["library-update-library"];
     }
 
     return [];
@@ -525,6 +593,18 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
     return [{ type: "identifier" }];
   }
 
+  if (state === "import-library-id" || state === "library-install-library" || state === "library-update-library") {
+    return [{ type: "identifier" }];
+  }
+
+  if (state === "import-at" || state === "library-install-at") {
+    return [{ type: "symbol", value: CHOIR_LIBRARY_AT_SYMBOL }];
+  }
+
+  if (state === "import-version" || state === "library-install-version") {
+    return [{ type: "identifier" }];
+  }
+
   if (state === "export-format") {
     return [{ type: "keyword", value: CHOIR_EXPORT_FORMAT_KEYWORD }];
   }
@@ -539,6 +619,10 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
 
   if (state === "audit-next") {
     return CHOIR_AUDIT_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
+  }
+
+  if (state === "library-next") {
+    return CHOIR_LIBRARY_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
   }
 
   if (state === "audit-query-key") {
@@ -673,7 +757,7 @@ function buildCompletionItems(expected: ExpectedTerminal[]): ChoirCompletion[] {
       kind: "identifier",
       label: "identifier",
       insertText: "${1:identifier}",
-      detail: "Identifier: [a-zA-Z0-9-_]+",
+      detail: "Identifier: [a-zA-Z0-9._-]+",
     });
   }
 
@@ -741,7 +825,7 @@ export function getDeterministicCompletions(linePrefix: string): ChoirCompletion
         kind: "identifier",
         label: "identifier",
         insertText: "${1:identifier}",
-        detail: "Identifier: [a-zA-Z0-9-_]+",
+        detail: "Identifier: [a-zA-Z0-9._-]+",
       });
     }
   }

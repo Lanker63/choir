@@ -10,6 +10,7 @@ export type InheritanceOperator = "assign" | "append" | "remove";
 export type ExecutionContext = {
   role: Role;
   environment: Environment;
+  macroId?: string;
 };
 
 export type PolicyRule = {
@@ -24,6 +25,7 @@ export type PolicyRule = {
   match: {
     path?: string;
     operation?: "add" | "remove" | "update";
+    macro?: string;
   };
   scope?: {
     roles?: Role[];
@@ -303,7 +305,13 @@ function matchesCondition(rule: PolicyRule, diff: YAMLDiff): boolean {
   return true;
 }
 
-function matches(rule: PolicyRule, diff: YAMLDiff): boolean {
+function matches(rule: PolicyRule, diff: YAMLDiff, ctx: ExecutionContext): boolean {
+  if (rule.match.macro) {
+    if (!ctx.macroId || ctx.macroId !== rule.match.macro) {
+      return false;
+    }
+  }
+
   if (rule.match.operation && rule.match.operation !== diff.operation) {
     return false;
   }
@@ -355,7 +363,7 @@ export function evaluatePolicies(
         continue;
       }
 
-      if (!matches(rule, diff)) {
+      if (!matches(rule, diff, ctx)) {
         continue;
       }
 
@@ -446,6 +454,7 @@ export function toPolicySet(rules: ApprovalPolicyRule[]): PolicySet {
         match: {
           ...(rule.match.path ? { path: rule.match.path } : {}),
           ...(rule.match.operation ? { operation: rule.match.operation } : {}),
+          ...(rule.match.macro ? { macro: rule.match.macro } : {}),
         },
         ...(rule.scope
           ? {

@@ -15,6 +15,7 @@ type DiffOperation = "add" | "remove" | "update";
 type PolicyClause =
   | { kind: "diff.path"; value: string }
   | { kind: "diff.operation"; value: DiffOperation }
+  | { kind: "macro"; value: string }
   | { kind: "role"; value: Role }
   | { kind: "environment"; value: Environment }
   | { kind: "contains"; value: string }
@@ -24,6 +25,7 @@ type PolicyRuleAST = {
   match: {
     path?: string;
     operation?: DiffOperation;
+    macro?: string;
   };
   scope?: {
     role?: Role;
@@ -327,11 +329,11 @@ class Parser {
       effect: effectWord as PolicyEffect,
     };
 
-    let hasDiffClause = false;
+    let hasMatcherClause = false;
 
     for (const clause of clauses) {
       if (clause.kind === "diff.path") {
-        hasDiffClause = true;
+        hasMatcherClause = true;
         if (rule.match.path) {
           throw parseError("Duplicate diff.path clause", this.previous());
         }
@@ -340,11 +342,20 @@ class Parser {
       }
 
       if (clause.kind === "diff.operation") {
-        hasDiffClause = true;
+        hasMatcherClause = true;
         if (rule.match.operation) {
           throw parseError("Duplicate diff.operation clause", this.previous());
         }
         rule.match.operation = clause.value;
+        continue;
+      }
+
+      if (clause.kind === "macro") {
+        hasMatcherClause = true;
+        if (rule.match.macro) {
+          throw parseError("Duplicate macro clause", this.previous());
+        }
+        rule.match.macro = clause.value;
         continue;
       }
 
@@ -378,8 +389,8 @@ class Parser {
       };
     }
 
-    if (!hasDiffClause) {
-      throw parseError("Each rule must include at least one diff matcher (diff.path or diff.operation)", this.current());
+    if (!hasMatcherClause) {
+      throw parseError("Each rule must include at least one matcher (diff.path, diff.operation, or macro)", this.current());
     }
 
     return rule;
@@ -406,6 +417,13 @@ class Parser {
         throw parseError(`Invalid diff.operation: ${value}`, this.previous());
       }
       return { kind: "diff.operation", value: value as DiffOperation };
+    }
+
+    if (token.value === "macro") {
+      this.take();
+      this.expectSymbol("=");
+      const value = this.expectString("Expected quoted macro id after macro =");
+      return { kind: "macro", value };
     }
 
     if (token.value === "role") {
@@ -546,6 +564,7 @@ function normalizedConflictSignature(rule: PolicyRule): string {
     match: {
       path: rule.match.path ?? null,
       operation: rule.match.operation ?? null,
+      macro: rule.match.macro ?? null,
     },
     scope: {
       roles: [...(rule.scope?.roles ?? [])].sort((a, b) => a.localeCompare(b)),
@@ -576,8 +595,8 @@ function compileFromSource(asts: PolicyAST[], source: PolicySource): CompiledPol
 
   return orderedPolicies.flatMap((ast) => {
     return ast.rules.map((rule, index) => {
-      if (!rule.match.path && !rule.match.operation) {
-        throw new Error(`Policy ${ast.id} rule ${index + 1} must include diff.path or diff.operation`);
+      if (!rule.match.path && !rule.match.operation && !rule.match.macro) {
+        throw new Error(`Policy ${ast.id} rule ${index + 1} must include diff.path, diff.operation, or macro`);
       }
 
       return {
@@ -589,6 +608,7 @@ function compileFromSource(asts: PolicyAST[], source: PolicySource): CompiledPol
         match: {
           ...(rule.match.path ? { path: rule.match.path } : {}),
           ...(rule.match.operation ? { operation: rule.match.operation } : {}),
+          ...(rule.match.macro ? { macro: rule.match.macro } : {}),
         },
         ...(rule.scope
           ? {

@@ -8,6 +8,14 @@ import {
     queryAudit,
 } from "./core/audit.js";
 import {
+    installLibrary,
+    listMacroLibraryCatalog,
+    loadMacroLibrary,
+    lockLibraries,
+    readMacroLock,
+    updateLibrary,
+} from "./core/macroLibraries.js";
+import {
     approveDiff,
     CompilationTrace,
     compileDSLAndWrite,
@@ -88,6 +96,11 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir macro list",
         "- choir macro show <macroId>",
         "- choir macro <macroId> entity=\"service\"",
+        "- choir import core@1.0.x",
+        "- choir library list",
+        "- choir library install core@1.0.0",
+        "- choir library update core",
+        "- choir library lock",
         "- choir approve <diffId>",
         "- choir reject <diffId>",
         "- choir policy status",
@@ -134,6 +147,11 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "approve"
                     || action.type === "reject"
                     || action.type === "policy-status"
+                    || action.type === "import-library"
+                    || action.type === "library-list"
+                    || action.type === "library-install"
+                    || action.type === "library-update"
+                    || action.type === "library-lock"
                     || action.type === "audit-log"
                     || action.type === "audit-report"
                     || action.type === "audit-query"
@@ -142,7 +160,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-run"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|audit|macro` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|audit|macro` cannot be chained with `then`.");
                 return;
             }
 
@@ -166,25 +184,119 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
             try {
                 if (parsed.ast.type === "macro-list") {
-                    const macros = listMacros(workspaceRoot);
-                    if (macros.length === 0) {
-                        stream.markdown("No macros found. Create `.choir/macros.yaml` with a `macros:` list.");
-                        return;
-                    }
+                    const localMacros = listMacros(workspaceRoot);
+                    const lock = readMacroLock(workspaceRoot);
+                    const lockedLibraryEntries = Object.entries(lock.libraries)
+                        .sort(([left], [right]) => left.localeCompare(right));
 
-                    const lines = macros.map((macro) => {
+                    const libraryMacroLines = lockedLibraryEntries.flatMap(([library, version]) => {
+                        const loaded = loadMacroLibrary(workspaceRoot, library, version);
+                        return loaded.macros.map((macro) => {
+                            const details = [
+                                `v${version}`,
+                                macro.description,
+                            ].filter((value) => typeof value === "string" && value.length > 0).join(" - ");
+
+                            return details.length > 0
+                                ? `- ${library}.${macro.id}: ${details}`
+                                : `- ${library}.${macro.id}`;
+                        });
+                    });
+
+                    const localMacroLines = localMacros.map((macro) => {
                         const details = [
                             macro.version ? `v${macro.version}` : undefined,
                             macro.description,
                         ].filter((value) => typeof value === "string" && value.length > 0).join(" - ");
 
                         return details.length > 0
-                            ? `- ${macro.id}: ${details}`
-                            : `- ${macro.id}`;
+                            ? `- local.${macro.id}: ${details}`
+                            : `- local.${macro.id}`;
+                    });
+
+                    const lines = [
+                        ...libraryMacroLines,
+                        ...localMacroLines,
+                    ];
+
+                    if (lines.length === 0) {
+                        stream.markdown("No macros found. Install a library or create `.choir/macros.yaml`.");
+                        return;
+                    }
+
+                    stream.markdown([
+                        `Macros (${lines.length}):`,
+                        ...lines,
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "import-library") {
+                    const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
+                    const installed = installLibrary(workspaceRoot, spec);
+                    stream.markdown([
+                        `Library imported: ${installed.library}`,
+                        `- requested: ${installed.requested}`,
+                        `- resolved: ${installed.resolvedVersion}`,
+                        "- lockfile: .choir/lock.yaml",
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "library-install") {
+                    const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
+                    const installed = installLibrary(workspaceRoot, spec);
+                    stream.markdown([
+                        `Library installed: ${installed.library}`,
+                        `- requested: ${installed.requested}`,
+                        `- resolved: ${installed.resolvedVersion}`,
+                        "- lockfile: .choir/lock.yaml",
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "library-update") {
+                    const updated = updateLibrary(workspaceRoot, parsed.ast.library);
+                    stream.markdown([
+                        `Library updated: ${updated.library}`,
+                        `- resolved: ${updated.resolvedVersion}`,
+                        "- lockfile: .choir/lock.yaml",
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "library-lock") {
+                    const locked = lockLibraries(workspaceRoot);
+                    const lines = Object.entries(locked.libraries)
+                        .sort(([left], [right]) => left.localeCompare(right))
+                        .map(([library, version]) => `- ${library}: ${version}`);
+
+                    stream.markdown([
+                        "Library lock refreshed.",
+                        ...(lines.length > 0 ? lines : ["- no locked libraries"]),
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "library-list") {
+                    const catalog = listMacroLibraryCatalog(workspaceRoot);
+                    const lock = readMacroLock(workspaceRoot);
+
+                    if (catalog.length === 0) {
+                        stream.markdown("No local macro libraries found under `.choir/libraries`.");
+                        return;
+                    }
+
+                    const lines = catalog.map((entry) => {
+                        const locked = lock.libraries[entry.name];
+                        const versionList = entry.versions.join(", ");
+                        return locked
+                            ? `- ${entry.name}: [${versionList}] (locked=${locked})`
+                            : `- ${entry.name}: [${versionList}]`;
                     });
 
                     stream.markdown([
-                        `Macros (${macros.length}):`,
+                        `Libraries (${catalog.length}):`,
                         ...lines,
                     ].join("\n"));
                     return;
