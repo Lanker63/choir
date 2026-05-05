@@ -122,7 +122,7 @@ DSL command grammar:
 <action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
-<analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
+<analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
@@ -248,7 +248,7 @@ Supported command surface (via `@choir`):
 
 - `@choir init [--template backend|frontend]` (interactive shortcut; emits DSL then compiles)
 - `choir define mission|vision|goal|constraint|non-goal "..."`
-- `choir analyze workspace|violations|hotspots`
+- `choir analyze workspace|hotspots|summary`
 - `choir plan [for "..."]`
 - `choir plan approve <planId>`
 - `choir preview [plan <planId>]`

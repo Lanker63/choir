@@ -24,7 +24,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <analyze> ::= "analyze" <analyze-target>
 
-<analyze-target> ::= "workspace" | "violations" | "hotspots"
+<analyze-target> ::= "workspace" | "hotspots" | "summary"
 
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
@@ -116,7 +116,7 @@ export const CHOIR_CI_META_KEYWORDS = ["run"] as const;
 export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["mission", "vision", "goal", "constraint", "non-goal"] as const;
-export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "violations", "hotspots"] as const;
+export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "hotspots", "summary"] as const;
 export const CHOIR_EXPORT_SECTION_KEYWORDS = ["all", "intent", "policy", "plans"] as const;
 export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
 export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
@@ -142,7 +142,7 @@ const KEYWORDS = new Set<string>([
 export const CHOIR_IDENTIFIER_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
 export type DefineType = "mission" | "vision" | "goal" | "constraint" | "non-goal";
-export type AnalyzeTarget = "workspace" | "violations" | "hotspots";
+export type AnalyzeTarget = "workspace" | "hotspots" | "summary";
 
 export type PlanRef = {
   type: "plan-ref";
@@ -323,11 +323,19 @@ export type DSLTrace = {
   compiledAction: string;
 };
 
+export type CommandTrace = {
+  input: string;
+  tokens: Token[];
+  ast: AST;
+  routedTo: string;
+};
+
 export type RouterTrace = {
   intent: Intent;
   rolesInvoked: string[];
   steps: string[];
   decisions: string[];
+  commandTrace: CommandTrace;
   dslTrace: DSLTrace;
 };
 
@@ -342,9 +350,13 @@ export type RouterRoleHandlers<TContext> = {
   conductor: {
     plan: (node: PlanNode, context: TContext) => Promise<void>;
     preview: (node: PreviewNode, context: TContext) => Promise<void>;
+  };
+  enforcer: {
     execute: (node: ExecuteNode, context: TContext) => Promise<void>;
   };
 };
+
+export type RoutedRole = "architect" | "analyst" | "conductor" | "enforcer" | "system";
 
 const CAPABILITY_RULES: Record<RoleName, CapabilityAction[]> = {
   architect: ["modify-yaml"],
@@ -440,6 +452,63 @@ export function tokenize(input: string): Token[] {
   }
 
   return tokens;
+}
+
+export function splitByThen(input: string): string[] {
+  const segments: string[] = [];
+  let start = 0;
+  let index = 0;
+  let inString = false;
+  let escaped = false;
+
+  while (index < input.length) {
+    const char = input[index];
+
+    if (escaped) {
+      escaped = false;
+      index += 1;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      index += 1;
+      continue;
+    }
+
+    if (!inString && input.slice(index, index + 4).toLowerCase() === "then") {
+      const before = index === 0 ? " " : input[index - 1];
+      const after = index + 4 >= input.length ? " " : input[index + 4];
+      const beforeBoundary = /\s/.test(before);
+      const afterBoundary = /\s/.test(after);
+
+      if (beforeBoundary && afterBoundary) {
+        const segment = input.slice(start, index).trim();
+        if (segment.length > 0) {
+          segments.push(segment);
+        }
+
+        start = index + 4;
+        index = start;
+        continue;
+      }
+    }
+
+    index += 1;
+  }
+
+  const last = input.slice(start).trim();
+  if (last.length > 0) {
+    segments.push(last);
+  }
+
+  return segments;
 }
 
 class Parser {
@@ -1011,7 +1080,7 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "analyze") {
-    return node.target === "workspace" || node.target === "violations" || node.target === "hotspots";
+    return node.target === "workspace" || node.target === "hotspots" || node.target === "summary";
   }
 
   if (node.type === "plan") {
@@ -1111,6 +1180,42 @@ export function validGrammar(ast: AST): boolean {
   return validateActionNode(ast);
 }
 
+export function validateAST(ast: AST): void {
+  if (!validGrammar(ast)) {
+    throw new Error("Invalid Choir DSL command");
+  }
+}
+
+export function routeActionToRole(action: ActionNode): RoutedRole {
+  switch (action.type) {
+    case "define":
+      return "architect";
+    case "analyze":
+    case "status":
+      return "analyst";
+    case "plan":
+    case "preview":
+    case "macro-run":
+    case "abstraction-run":
+      return "conductor";
+    case "execute":
+      return "enforcer";
+    default:
+      return "system";
+  }
+}
+
+export function routeAST(ast: AST): string {
+  if (ast.type === "sequence") {
+    const roles = ast.actions
+      .map((action) => routeActionToRole(action))
+      .filter((role, index, list) => list.indexOf(role) === index);
+    return roles.join(" -> ");
+  }
+
+  return routeActionToRole(ast);
+}
+
 export function enforceCapabilities(role: RoleName, action: CapabilityAction): void {
   const allowed = CAPABILITY_RULES[role] ?? [];
   if (!allowed.includes(action)) {
@@ -1165,10 +1270,10 @@ async function compileAction<TContext>(
       return;
 
     case "execute":
-      await handlers.conductor.execute(action, context);
-      trace.rolesInvoked.push("conductor");
-      trace.steps.push("conductor.execute");
-      trace.compiledActions.push("conductor.execute");
+      await handlers.enforcer.execute(action, context);
+      trace.rolesInvoked.push("enforcer");
+      trace.steps.push("enforcer.execute");
+      trace.compiledActions.push("enforcer.execute");
       return;
 
     case "status":
@@ -1290,9 +1395,7 @@ export async function compile<TContext>(
 export function parseCommand(input: string): { tokens: Token[]; ast: AST } {
   const tokens = tokenize(input);
   const ast = parse(tokens);
-  if (!validGrammar(ast)) {
-    throw new Error("Invalid Choir DSL command");
-  }
+  validateAST(ast);
 
   return { tokens, ast };
 }
@@ -1311,8 +1414,15 @@ export class ChoirAgent<TContext> {
       steps: compiled.steps,
       decisions: [
         "Parsed using strict Choir DSL grammar",
+        "Routed from typed AST without keyword heuristics",
         "Compiled DSL AST into deterministic role actions",
       ],
+      commandTrace: {
+        input: trimmed,
+        tokens: parsed.tokens,
+        ast: parsed.ast,
+        routedTo: routeAST(parsed.ast),
+      },
       dslTrace: {
         input: trimmed,
         tokens: parsed.tokens,

@@ -61,7 +61,10 @@ import {
   enforceCapabilities,
   parse,
   parseCommand,
+  routeAST,
+  splitByThen,
   tokenize,
+  validateAST,
   validGrammar,
 } from "../../core/choirRouter.js";
 import {
@@ -516,11 +519,23 @@ const pass2: TestPass = {
       id: "2.7",
       name: "choir DSL parser builds AST and supports then-pipeline",
       run: async () => {
+        assert.deepStrictEqual(splitByThen('choir define goal "A" then plan then execute'), [
+          'choir define goal "A"',
+          "plan",
+          "execute",
+        ]);
+
         const tokens = tokenize("choir define goal \"enforce service boundaries\"");
         assert.deepStrictEqual(parse(tokens), {
           type: "define",
           defineType: "goal",
           value: "enforce service boundaries",
+        });
+
+        const analyzeTokens = tokenize("choir analyze summary");
+        assert.deepStrictEqual(parse(analyzeTokens), {
+          type: "analyze",
+          target: "summary",
         });
 
         const sequence = parseCommand("choir plan for \"service boundaries\" then preview then execute");
@@ -533,6 +548,7 @@ const pass2: TestPass = {
           ],
         });
         assert.strictEqual(validGrammar(sequence.ast), true);
+        validateAST(sequence.ast);
       },
     },
     {
@@ -541,6 +557,7 @@ const pass2: TestPass = {
       run: async () => {
         assert.throws(() => parseCommand("plan"), /Expected keyword 'choir'/);
         assert.throws(() => parseCommand("choir define \"goal\" enforce"), /Expected one of/);
+        assert.throws(() => parseCommand("choir define goal"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
       },
@@ -571,18 +588,21 @@ const pass2: TestPass = {
             preview: async (node: { planRef?: { identifier: string } }) => {
               calls.push(`conductor.preview:${node.planRef?.identifier ?? ""}`);
             },
+          },
+          enforcer: {
             execute: async (node: { planRef?: { identifier: string } }) => {
-              calls.push(`conductor.execute:${node.planRef?.identifier ?? ""}`);
+              calls.push(`enforcer.execute:${node.planRef?.identifier ?? ""}`);
             },
           },
         };
 
         const parsed = parseCommand("choir plan for \"service boundaries\" then preview then execute");
+        assert.strictEqual(routeAST(parsed.ast), "conductor -> enforcer");
         const compiled = await compile(parsed.ast, handlers, {});
         assert.deepStrictEqual(compiled.compiledActions, [
           "conductor.plan",
           "conductor.preview",
-          "conductor.execute",
+          "enforcer.execute",
         ]);
 
         const agent = new ChoirAgent(handlers);
@@ -591,6 +611,7 @@ const pass2: TestPass = {
 
         assert.deepStrictEqual(traceA, traceB);
         assert.strictEqual(traceA.rolesInvoked[0], "architect");
+        assert.strictEqual(traceA.commandTrace.routedTo, "architect");
         assert.ok(traceA.dslTrace.compiledAction.includes("architect.define"));
         assert.ok(calls.includes("architect.define:goal:secure service boundary"));
       },
@@ -993,6 +1014,9 @@ const pass2: TestPass = {
 
         const defineTypes = getDeterministicCompletions("choir define ").map((item) => item.label);
         assert.deepStrictEqual(defineTypes, ["mission", "vision", "goal", "constraint", "non-goal"]);
+
+        const analyzeTypes = getDeterministicCompletions("choir analyze ").map((item) => item.label);
+        assert.deepStrictEqual(analyzeTypes, ["workspace", "hotspots", "summary"]);
 
         const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
         assert.deepStrictEqual(planTail, ["for", "then"]);

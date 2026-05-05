@@ -394,7 +394,7 @@ Grammar:
 <action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
-<analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
+<analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
