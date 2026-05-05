@@ -8,6 +8,9 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <execute>
   | <status>
   | <export>
+  | <approve>
+  | <reject>
+  | <policy-status>
 
 <define> ::= "define" <define-type> <string>
 
@@ -28,6 +31,12 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <export> ::= "export" "dsl" [<export-section>]
 
 <export-section> ::= "all" | "intent" | "policy" | "plans"
+
+<approve> ::= "approve" <identifier>
+
+<reject> ::= "reject" <identifier>
+
+<policy-status> ::= "policy" "status"
 
 <plan-ref> ::= "plan" <identifier>
 
@@ -61,6 +70,9 @@ const KEYWORDS = new Set([
   "intent",
   "policy",
   "plans",
+  "approve",
+  "reject",
+  "policy",
   "then",
 ]);
 
@@ -112,6 +124,20 @@ export type ExportNode = {
   section: ExportSection;
 };
 
+export type ApproveNode = {
+  type: "approve";
+  diffId: string;
+};
+
+export type RejectNode = {
+  type: "reject";
+  diffId: string;
+};
+
+export type PolicyStatusNode = {
+  type: "policy-status";
+};
+
 export type ActionNode =
   | DefineNode
   | AnalyzeNode
@@ -119,7 +145,10 @@ export type ActionNode =
   | PreviewNode
   | ExecuteNode
   | StatusNode
-  | ExportNode;
+  | ExportNode
+  | ApproveNode
+  | RejectNode
+  | PolicyStatusNode;
 
 export type SequenceNode = {
   type: "sequence";
@@ -299,6 +328,12 @@ class Parser {
         return this.parseStatus();
       case "export":
         return this.parseExport();
+      case "approve":
+        return this.parseApprove();
+      case "reject":
+        return this.parseReject();
+      case "policy":
+        return this.parsePolicyStatus();
       default:
         throw new Error(`Unsupported Choir DSL action: ${next.value}`);
     }
@@ -409,6 +444,28 @@ class Parser {
     };
   }
 
+  private parseApprove(): ApproveNode {
+    this.expectKeyword("approve");
+    return {
+      type: "approve",
+      diffId: this.expectIdentifier(),
+    };
+  }
+
+  private parseReject(): RejectNode {
+    this.expectKeyword("reject");
+    return {
+      type: "reject",
+      diffId: this.expectIdentifier(),
+    };
+  }
+
+  private parsePolicyStatus(): PolicyStatusNode {
+    this.expectKeyword("policy");
+    this.expectKeyword("status");
+    return { type: "policy-status" };
+  }
+
   private expectKeyword(expected: string): void {
     const token = this.take();
     if (!token || token.type !== "keyword" || token.value !== expected) {
@@ -509,6 +566,14 @@ function validateActionNode(node: ActionNode): boolean {
       && (node.section === "all" || node.section === "intent" || node.section === "policy" || node.section === "plans");
   }
 
+  if (node.type === "approve" || node.type === "reject") {
+    return IDENTIFIER_PATTERN.test(node.diffId);
+  }
+
+  if (node.type === "policy-status") {
+    return true;
+  }
+
   return node.type === "status";
 }
 
@@ -585,6 +650,21 @@ async function compileAction<TContext>(
     case "export":
       trace.steps.push("system.export");
       trace.compiledActions.push("system.export.dsl");
+      return;
+
+    case "approve":
+      trace.steps.push("system.policy.approve");
+      trace.compiledActions.push("system.policy.approve");
+      return;
+
+    case "reject":
+      trace.steps.push("system.policy.reject");
+      trace.compiledActions.push("system.policy.reject");
+      return;
+
+    case "policy-status":
+      trace.steps.push("system.policy.status");
+      trace.compiledActions.push("system.policy.status");
       return;
   }
 }

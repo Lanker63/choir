@@ -3,7 +3,16 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { generatePlan } from "./orchestration.js";
-import { createEmptyStatePlane, readStatePlane, StatePlane } from "./state.js";
+import {
+  approvePendingDiff,
+  createEmptyStatePlane,
+  hasApprovalForDiff,
+  listPendingApprovals,
+  readStatePlane,
+  rejectPendingDiff,
+  StatePlane,
+  upsertPendingApproval,
+} from "./state.js";
 import {
   AST,
   ActionNode,
@@ -12,6 +21,7 @@ import {
   validGrammar,
 } from "./choirRouter.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
+import { computeDiff, evaluatePolicies, hashDiff, toPolicySet } from "./policyEngine.js";
 
 export type ChoirConfig = {
   version: string;
@@ -24,6 +34,7 @@ export type ChoirConfig = {
   };
   policy: {
     rules: ControlPlane["policy"]["rules"];
+    approvalRules: ControlPlane["policy"]["approvalRules"];
     priorityOverrides?: ControlPlane["policy"]["priorityOverrides"];
   };
   execution: {
@@ -42,6 +53,8 @@ export type CompilationTrace = {
   ast: AST;
   changes: CompilationChange[];
 };
+
+export type CompilationDecision = "allow" | "deny" | "require-approval" | "no-change";
 
 type CompilerContext = {
   state: StatePlane;
@@ -79,6 +92,7 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
     },
     policy: {
       rules: [...config.policy.rules],
+      approvalRules: [...config.policy.approvalRules].sort((left, right) => left.id.localeCompare(right.id)),
       ...(config.policy.priorityOverrides ? { priorityOverrides: config.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -101,6 +115,7 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     },
     policy: {
       rules: control.policy.rules,
+      approvalRules: control.policy.approvalRules,
       ...(control.policy.priorityOverrides ? { priorityOverrides: control.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -122,6 +137,7 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     },
     policy: {
       rules: canonical.policy.rules,
+      approvalRules: canonical.policy.approvalRules,
       ...(canonical.policy.priorityOverrides ? { priorityOverrides: canonical.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -287,6 +303,7 @@ export function serializeYAML(config: ChoirConfig): string {
     },
     policy: {
       rules: [...control.policy.rules],
+      approvalRules: [...control.policy.approvalRules].sort((left, right) => left.id.localeCompare(right.id)),
       ...(control.policy.priorityOverrides ? { priorityOverrides: control.policy.priorityOverrides } : {}),
     },
     execution: {
@@ -357,18 +374,140 @@ export function compileDSLAndWrite(
   controlPath: string,
   options?: {
     workspaceRoot?: string;
+    commandActor?: string;
   }
 ): {
   updatedControlPlane: ControlPlane;
   changed: boolean;
   trace: CompilationTrace;
+  decision: CompilationDecision;
+  diffHash?: string;
+  pendingApprovalId?: string;
+  policyResult?: {
+    allowed: boolean;
+    requiresApproval: boolean;
+    violations: { ruleId: string; message: string }[];
+  };
+  policyTrace?: {
+    diffCount: number;
+    rulesMatched: string[];
+    requiresApproval: boolean;
+    denied: boolean;
+    decision: string;
+  };
 } {
   const result = compileDSL(input, controlPlane, options);
   if (!result.changed) {
-    return result;
+    return {
+      ...result,
+      decision: "no-change",
+    };
+  }
+
+  const beforeConfig = controlPlaneToChoirConfig(controlPlane);
+  const afterConfig = controlPlaneToChoirConfig(result.updatedControlPlane);
+  const diffs = computeDiff(beforeConfig, afterConfig);
+  const diffHash = hashDiff(diffs);
+
+  const policySet = toPolicySet(controlPlane.policy.approvalRules ?? []);
+  const policyEvaluation = evaluatePolicies(diffs, policySet);
+
+  if (!policyEvaluation.result.allowed) {
+    return {
+      ...result,
+      decision: "deny",
+      diffHash,
+      policyResult: policyEvaluation.result,
+      policyTrace: policyEvaluation.trace,
+    };
+  }
+
+  const workspaceRoot = options?.workspaceRoot;
+  if (policyEvaluation.result.requiresApproval) {
+    if (!workspaceRoot) {
+      return {
+        ...result,
+        decision: "require-approval",
+        diffHash,
+        pendingApprovalId: `diff-${diffHash.slice(0, 12)}`,
+        policyResult: policyEvaluation.result,
+        policyTrace: policyEvaluation.trace,
+      };
+    }
+
+    const approved = hasApprovalForDiff(workspaceRoot, diffHash);
+    if (!approved) {
+      const pendingId = `diff-${diffHash.slice(0, 12)}`;
+      upsertPendingApproval(workspaceRoot, {
+        id: pendingId,
+        diffHash,
+        diffs,
+        createdAt: new Date().toISOString(),
+        command: input,
+      });
+
+      return {
+        ...result,
+        decision: "require-approval",
+        diffHash,
+        pendingApprovalId: pendingId,
+        policyResult: policyEvaluation.result,
+        policyTrace: policyEvaluation.trace,
+      };
+    }
   }
 
   const config = controlPlaneToChoirConfig(result.updatedControlPlane);
   writeYAML(config, controlPath);
-  return result;
+
+  if (workspaceRoot && policyEvaluation.result.requiresApproval) {
+    const pendingId = `diff-${diffHash.slice(0, 12)}`;
+    rejectPendingDiff(workspaceRoot, pendingId);
+  }
+
+  return {
+    ...result,
+    decision: "allow",
+    diffHash,
+    policyResult: policyEvaluation.result,
+    policyTrace: policyEvaluation.trace,
+  };
+}
+
+export function approveDiff(
+  root: string,
+  diffId: string,
+  approvedBy: string
+): { approved: boolean; diffHash?: string } {
+  const approved = approvePendingDiff(root, diffId, approvedBy, new Date().toISOString());
+  if (!approved.approved) {
+    return { approved: false };
+  }
+
+  return {
+    approved: true,
+    diffHash: approved.approved.diffHash,
+  };
+}
+
+export function rejectDiff(root: string, diffId: string): { removed: boolean } {
+  const rejected = rejectPendingDiff(root, diffId);
+  return {
+    removed: rejected.removed,
+  };
+}
+
+export function policyStatus(root: string): {
+  pending: Array<{ id: string; diffHash: string; createdAt: string; command: string }>;
+} {
+  const pending = listPendingApprovals(root)
+    .map((entry) => ({
+      id: entry.id,
+      diffHash: entry.diffHash,
+      createdAt: entry.createdAt,
+      command: entry.command,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return { pending };
 }

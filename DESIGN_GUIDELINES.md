@@ -77,7 +77,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -86,6 +86,9 @@ DSL command grammar:
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
 <export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
+<approve> ::= "approve" <identifier>
+<reject> ::= "reject" <identifier>
+<policy-status> ::= "policy" "status"
 ```
 
 Router constraints:
@@ -122,6 +125,9 @@ Supported command surface (via `@choir`):
 - `choir execute [plan <planId>]`
 - `choir status`
 - `choir export dsl [all|intent|policy|plans]`
+- `choir approve <diffId>`
+- `choir reject <diffId>`
+- `choir policy status`
 
 Mutation contract:
 
@@ -134,6 +140,14 @@ Projection contract:
 - `export dsl` is non-mutating and projects authoritative YAML into deterministic DSL text.
 - Projection ordering is stable and diff-friendly.
 - Unsupported YAML fields must be skipped with explicit warnings.
+
+Policy gate contract:
+
+- Proposed YAML changes are diffed before write (`YAMLDiff[]`).
+- Policy evaluation is deterministic and uses only YAML diff + declarative `policy.approvalRules`.
+- `deny` blocks writes immediately.
+- `require-approval` blocks writes until exact diff hash is approved.
+- Approval records are stored in state and tied to exact diff hash.
 
 ## Deterministic State → Plan Synthesis
 

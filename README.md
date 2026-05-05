@@ -266,7 +266,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -275,6 +275,9 @@ Grammar:
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
 <export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
+<approve> ::= "approve" <identifier>
+<reject> ::= "reject" <identifier>
+<policy-status> ::= "policy" "status"
 
 <string> ::= QUOTED_STRING
 <identifier> ::= [a-zA-Z0-9-_]+
@@ -322,6 +325,9 @@ Supported commands:
 - `choir export dsl intent`
 - `choir export dsl policy`
 - `choir export dsl plans`
+- `choir approve <diffId>`
+- `choir reject <diffId>`
+- `choir policy status`
 
 Mutation behavior:
 
@@ -335,6 +341,37 @@ YAML -> DSL projection behavior:
 - Command ordering is stable: goals, constraints, non-goals, policy, plans
 - Export output is written to `.choir/choir.dsl` (or section-specific `.choir/choir.<section>.dsl`)
 - Unrepresentable YAML sections are skipped with warnings (no synthetic DSL is invented)
+
+Policy approval gate behavior:
+
+- Every YAML mutation diff is evaluated deterministically against `policy.approvalRules`
+- `deny` rules block mutation
+- `require-approval` rules create a pending diff id and block mutation until approved
+- Approvals are bound to exact diff hash and cannot be reused for different diffs
+
+Example policy gate config:
+
+```yaml
+policy:
+  rules: []
+  approvalRules:
+    - id: restrict-db-access
+      match:
+        path: intent.constraints
+        operation: add
+      condition:
+        contains: db
+      effect:
+        type: require-approval
+        message: DB-related constraints require approval
+
+    - id: prevent-policy-deletion
+      match:
+        path: policy.rules
+        operation: remove
+      effect:
+        type: deny
+```
 
 Idempotency guarantees:
 

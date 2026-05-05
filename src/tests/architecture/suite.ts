@@ -64,12 +64,22 @@ import {
   validGrammar,
 } from "../../core/choirRouter.js";
 import {
+  approveDiff,
   canonicalizeConfig,
   compileDSL,
+  compileDSLAndWrite,
   controlPlaneToChoirConfig,
   hashConfig,
+  policyStatus,
+  rejectDiff,
   serializeYAML,
 } from "../../core/dslYamlCompiler.js";
+import {
+  computeDiff,
+  evaluatePolicies,
+  hashDiff,
+  toPolicySet,
+} from "../../core/policyEngine.js";
 import {
   formatDSL,
   generateDSL,
@@ -110,6 +120,7 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     },
     policy: {
       rules: [],
+      approvalRules: [],
       ...(overrides ? { priorityOverrides: overrides } : {}),
     },
     execution: {
@@ -682,6 +693,161 @@ const pass2: TestPass = {
         const generated = generateDSL(controlPlaneToChoirConfig(control));
         assert.ok(generated.trace.warnings.some((warning) => warning.includes("policy.rules.rule.alpha")));
         assert.ok(generated.trace.warnings.some((warning) => warning.includes("execution.plans.plan-alpha")));
+      },
+    },
+    {
+      id: "2.22",
+      name: "policy engine computes deterministic yaml diffs and hash",
+      run: async () => {
+        const before = controlPlaneToChoirConfig(makeControlPlane());
+        const afterControl = makeControlPlane();
+        afterControl.intent.constraints = ["db access control"];
+        const after = controlPlaneToChoirConfig(afterControl);
+
+        const diffA = computeDiff(before, after);
+        const diffB = computeDiff(before, after);
+
+        assert.deepStrictEqual(diffA, diffB);
+        assert.strictEqual(hashDiff(diffA), hashDiff(diffB));
+        assert.ok(diffA.some((entry) => entry.path.includes("intent.constraints")));
+      },
+    },
+    {
+      id: "2.23",
+      name: "policy deny rule blocks yaml mutation before write",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-deny-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        const control = makeControlPlane();
+        control.policy.approvalRules = [
+          {
+            id: "deny-db-constraint",
+            match: {
+              path: "intent.constraints",
+              operation: "add",
+            },
+            condition: {
+              contains: "db",
+            },
+            effect: {
+              type: "deny",
+              message: "db constraints are denied",
+            },
+          },
+        ];
+
+        const result = compileDSLAndWrite(
+          'choir define constraint "db connection"',
+          control,
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(result.decision, "deny");
+        assert.strictEqual(fs.existsSync(controlPath), false);
+      },
+    },
+    {
+      id: "2.24",
+      name: "policy require-approval blocks until approved for exact diff hash",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-approval-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        const control = makeControlPlane();
+        control.policy.approvalRules = [
+          {
+            id: "approve-db-constraint",
+            match: {
+              path: "intent.constraints",
+              operation: "add",
+            },
+            condition: {
+              contains: "db",
+            },
+            effect: {
+              type: "require-approval",
+              message: "db constraints require approval",
+            },
+          },
+        ];
+
+        const command = 'choir define constraint "db connection"';
+        const first = compileDSLAndWrite(command, control, controlPath, { workspaceRoot: root });
+        assert.strictEqual(first.decision, "require-approval");
+        assert.strictEqual(fs.existsSync(controlPath), false);
+        assert.ok(first.pendingApprovalId);
+
+        const statusBefore = policyStatus(root);
+        assert.ok(statusBefore.pending.some((entry) => entry.id === first.pendingApprovalId));
+
+        const approved = approveDiff(root, first.pendingApprovalId!, "test-user");
+        assert.strictEqual(approved.approved, true);
+
+        const second = compileDSLAndWrite(command, control, controlPath, { workspaceRoot: root });
+        assert.strictEqual(second.decision, "allow");
+        assert.strictEqual(fs.existsSync(controlPath), true);
+
+        const statusAfter = policyStatus(root);
+        assert.strictEqual(statusAfter.pending.length, 0);
+
+        const rejected = rejectDiff(root, first.pendingApprovalId!);
+        assert.strictEqual(rejected.removed, false);
+      },
+    },
+    {
+      id: "2.25",
+      name: "policy evaluation trace is deterministic",
+      run: async () => {
+        const beforeControl = makeControlPlane();
+        const afterControl = makeControlPlane();
+        afterControl.intent.constraints = ["db access", "audit"];
+
+        const diffs = computeDiff(
+          controlPlaneToChoirConfig(beforeControl),
+          controlPlaneToChoirConfig(afterControl)
+        );
+
+        const policySet = toPolicySet([
+          {
+            id: "rule-approval",
+            match: {
+              path: "intent.constraints",
+              operation: "add",
+            },
+            condition: {
+              contains: "db",
+            },
+            effect: {
+              type: "require-approval",
+            },
+          },
+        ]);
+
+        const evalA = evaluatePolicies(diffs, policySet);
+        const evalB = evaluatePolicies(diffs, policySet);
+
+        assert.deepStrictEqual(evalA, evalB);
+        assert.strictEqual(evalA.result.requiresApproval, true);
+        assert.strictEqual(evalA.trace.decision, "require-approval");
+      },
+    },
+    {
+      id: "2.26",
+      name: "dsl parser supports policy approval command surface",
+      run: async () => {
+        assert.deepStrictEqual(parseCommand("choir approve diff-abc123").ast, {
+          type: "approve",
+          diffId: "diff-abc123",
+        });
+        assert.deepStrictEqual(parseCommand("choir reject diff-abc123").ast, {
+          type: "reject",
+          diffId: "diff-abc123",
+        });
+        assert.deepStrictEqual(parseCommand("choir policy status").ast, {
+          type: "policy-status",
+        });
       },
     },
   ],

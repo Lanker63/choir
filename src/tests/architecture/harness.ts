@@ -239,6 +239,24 @@ function canonicalizeState(root: string, state: StatePlane): StatePlane {
       })),
       outcomeMetrics: { ...entry.outcomeMetrics },
     })),
+    approvals: state.approvals.map((entry) => ({
+      id: entry.id,
+      diffHash: entry.diffHash,
+      approvedBy: entry.approvedBy,
+      timestamp: entry.timestamp,
+    })),
+    pendingApprovals: state.pendingApprovals.map((entry) => ({
+      id: entry.id,
+      diffHash: entry.diffHash,
+      diffs: entry.diffs.map((diff) => ({
+        path: diff.path,
+        operation: diff.operation,
+        ...(diff.before !== undefined ? { before: diff.before } : {}),
+        ...(diff.after !== undefined ? { after: diff.after } : {}),
+      })),
+      createdAt: entry.createdAt,
+      command: entry.command,
+    })),
   };
 }
 

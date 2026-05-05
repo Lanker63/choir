@@ -152,7 +152,8 @@ export function createDefaultControlPlane(): ControlPlane {
             "non-goals": []
         },
         policy: {
-            rules: []
+            rules: [],
+            approvalRules: [],
         },
         execution: {
             plans: []

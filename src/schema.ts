@@ -147,6 +147,24 @@ const ExecutionSchema = z.object({
     plans: z.array(PlanSchema).default([]),
 }).strict();
 
+const ApprovalPolicyOperationSchema = z.enum(["add", "remove", "update"]);
+
+const ApprovalPolicyRuleSchema = z.object({
+    id: z.string().min(1),
+    match: z.object({
+        path: z.string().min(1),
+        operation: ApprovalPolicyOperationSchema,
+    }).strict(),
+    condition: z.object({
+        contains: z.string().optional(),
+        countGreaterThan: z.number().int().optional(),
+    }).strict().optional(),
+    effect: z.object({
+        type: z.enum(["allow", "require-approval", "deny"]),
+        message: z.string().optional(),
+    }).strict(),
+}).strict();
+
 export const ControlPlaneSchema = z.object({
     version: z.string().min(1),
     mission: z.string().default(""),
@@ -158,6 +176,7 @@ export const ControlPlaneSchema = z.object({
     }).strict(),
     policy: z.object({
         rules: z.array(DSLRuleSchema).default([]),
+        approvalRules: z.array(ApprovalPolicyRuleSchema).default([]),
         priorityOverrides: z.object({
             AST: z.number().finite().optional(),
             semantic: z.number().finite().optional(),
@@ -194,3 +213,4 @@ export const ControlPlaneSchema = z.object({
 export type ControlPlane = z.infer<typeof ControlPlaneSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
+export type ApprovalPolicyRule = z.infer<typeof ApprovalPolicyRuleSchema>;

@@ -298,6 +298,8 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     dependencyGraph: astResult.dependencyGraph,
     execution: previousState?.execution ?? createEmptyExecutionState(),
     strategyHistory: previousState?.strategyHistory ?? [],
+    approvals: previousState?.approvals ?? [],
+    pendingApprovals: previousState?.pendingApprovals ?? [],
   };
 
   const statePath = shouldPersistState

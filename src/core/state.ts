@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { Diagnostic } from "./types.js";
+import type { YAMLDiff } from "./policyEngine.js";
 
 export type AST = {
   rootNodeId: string;
@@ -38,6 +39,21 @@ export type ExecutionState = {
   lastPreview?: PreviewApproval;
 };
 
+export type ApprovalRecord = {
+  id: string;
+  diffHash: string;
+  approvedBy: string;
+  timestamp: string;
+};
+
+export type PendingApprovalRecord = {
+  id: string;
+  diffHash: string;
+  diffs: YAMLDiff[];
+  createdAt: string;
+  command: string;
+};
+
 export type StrategyHistoryMetrics = {
   filesChanged: number;
   patchesCount: number;
@@ -73,6 +89,8 @@ export type StatePlane = {
   dependencyGraph: Graph;
   execution: ExecutionState;
   strategyHistory: StrategyHistory[];
+  approvals: ApprovalRecord[];
+  pendingApprovals: PendingApprovalRecord[];
 };
 
 const MAX_STRATEGY_HISTORY = 256;
@@ -442,6 +460,107 @@ function parseViolations(value: unknown): Diagnostic[] {
   return Array.isArray(value) ? value as Diagnostic[] : [];
 }
 
+function parseApprovalRecord(value: unknown): ApprovalRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  const diffHash = typeof value.diffHash === "string" ? value.diffHash.trim() : "";
+  const approvedBy = typeof value.approvedBy === "string" ? value.approvedBy.trim() : "";
+  const timestamp = typeof value.timestamp === "string" ? value.timestamp.trim() : "";
+
+  if (id.length === 0 || diffHash.length === 0 || approvedBy.length === 0 || timestamp.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    diffHash,
+    approvedBy,
+    timestamp,
+  };
+}
+
+function parsePendingApprovalRecord(value: unknown): PendingApprovalRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = typeof value.id === "string" ? value.id.trim() : "";
+  const diffHash = typeof value.diffHash === "string" ? value.diffHash.trim() : "";
+  const createdAt = typeof value.createdAt === "string" ? value.createdAt.trim() : "";
+  const command = typeof value.command === "string" ? value.command.trim() : "";
+  const diffs = Array.isArray(value.diffs) ? value.diffs as YAMLDiff[] : [];
+
+  if (id.length === 0 || diffHash.length === 0 || createdAt.length === 0 || command.length === 0) {
+    return null;
+  }
+
+  return {
+    id,
+    diffHash,
+    diffs: [...diffs].sort((left, right) =>
+      left.path.localeCompare(right.path)
+      || left.operation.localeCompare(right.operation)
+    ),
+    createdAt,
+    command,
+  };
+}
+
+function materializeApprovals(records: ApprovalRecord[]): ApprovalRecord[] {
+  const byDiffHash = new Map<string, ApprovalRecord>();
+
+  for (const record of records) {
+    if (!record.id || !record.diffHash || !record.approvedBy || !record.timestamp) {
+      continue;
+    }
+
+    if (!byDiffHash.has(record.diffHash)) {
+      byDiffHash.set(record.diffHash, {
+        id: record.id,
+        diffHash: record.diffHash,
+        approvedBy: record.approvedBy,
+        timestamp: record.timestamp,
+      });
+    }
+  }
+
+  return [...byDiffHash.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+    || left.diffHash.localeCompare(right.diffHash)
+    || left.timestamp.localeCompare(right.timestamp)
+  );
+}
+
+function materializePendingApprovals(records: PendingApprovalRecord[]): PendingApprovalRecord[] {
+  const byId = new Map<string, PendingApprovalRecord>();
+
+  for (const record of records) {
+    if (!record.id || !record.diffHash || !record.createdAt || !record.command) {
+      continue;
+    }
+
+    byId.set(record.id, {
+      id: record.id,
+      diffHash: record.diffHash,
+      diffs: [...record.diffs].sort((left, right) =>
+        left.path.localeCompare(right.path)
+        || left.operation.localeCompare(right.operation)
+      ),
+      createdAt: record.createdAt,
+      command: record.command,
+    });
+  }
+
+  return [...byId.values()].sort((left, right) =>
+    left.id.localeCompare(right.id)
+    || left.diffHash.localeCompare(right.diffHash)
+    || left.createdAt.localeCompare(right.createdAt)
+  );
+}
+
 function getStatePath(root: string): string {
   return path.join(root, ".choir", "state.json");
 }
@@ -455,6 +574,8 @@ export function createEmptyStatePlane(): StatePlane {
     dependencyGraph: {},
     execution: createEmptyExecutionState(),
     strategyHistory: [],
+    approvals: [],
+    pendingApprovals: [],
   };
 }
 
@@ -477,6 +598,16 @@ export function readStatePlane(root: string): StatePlane | null {
       dependencyGraph: parseGraph(record.dependencyGraph),
       execution: materializeExecutionState(isRecord(record.execution) ? record.execution as Partial<ExecutionState> : undefined),
       strategyHistory: parseStrategyHistory(record.strategyHistory),
+      approvals: Array.isArray(record.approvals)
+        ? record.approvals
+          .map((entry) => parseApprovalRecord(entry))
+          .filter((entry): entry is ApprovalRecord => entry !== null)
+        : [],
+      pendingApprovals: Array.isArray(record.pendingApprovals)
+        ? record.pendingApprovals
+          .map((entry) => parsePendingApprovalRecord(entry))
+          .filter((entry): entry is PendingApprovalRecord => entry !== null)
+        : [],
     });
   } catch {
     return null;
@@ -514,6 +645,8 @@ export function materializeStatePlane(input: StatePlane): StatePlane {
     dependencyGraph: sortRecordValues(input.dependencyGraph),
     execution: materializeExecutionState(input.execution),
     strategyHistory: materializeStrategyHistory(input.strategyHistory),
+    approvals: materializeApprovals(input.approvals),
+    pendingApprovals: materializePendingApprovals(input.pendingApprovals),
   };
 }
 
@@ -539,4 +672,84 @@ export function persistStatePlane(root: string, state: StatePlane): string {
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
   fs.writeFileSync(statePath, JSON.stringify(materializeStatePlane(state), null, 2), "utf-8");
   return statePath;
+}
+
+export function hasApprovalForDiff(root: string, diffHash: string): boolean {
+  const state = readStatePlane(root) ?? createEmptyStatePlane();
+  return state.approvals.some((entry) => entry.diffHash === diffHash);
+}
+
+export function listPendingApprovals(root: string): PendingApprovalRecord[] {
+  const state = readStatePlane(root) ?? createEmptyStatePlane();
+  return [...state.pendingApprovals];
+}
+
+export function upsertPendingApproval(root: string, pending: PendingApprovalRecord): { statePath: string; state: StatePlane } {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const nextState = materializeStatePlane({
+    ...current,
+    pendingApprovals: [
+      ...current.pendingApprovals.filter((entry) => entry.id !== pending.id),
+      pending,
+    ],
+  });
+
+  const statePath = persistStatePlane(root, nextState);
+  return { statePath, state: nextState };
+}
+
+export function approvePendingDiff(
+  root: string,
+  id: string,
+  approvedBy: string,
+  timestamp: string
+): { statePath: string; state: StatePlane; approved?: ApprovalRecord } {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const pending = current.pendingApprovals.find((entry) => entry.id === id);
+  if (!pending) {
+    return {
+      statePath: getStatePath(root),
+      state: current,
+    };
+  }
+
+  const approval: ApprovalRecord = {
+    id,
+    diffHash: pending.diffHash,
+    approvedBy,
+    timestamp,
+  };
+
+  const nextState = materializeStatePlane({
+    ...current,
+    approvals: [
+      ...current.approvals.filter((entry) => entry.diffHash !== pending.diffHash),
+      approval,
+    ],
+    pendingApprovals: current.pendingApprovals.filter((entry) => entry.id !== id),
+  });
+
+  const statePath = persistStatePlane(root, nextState);
+  return {
+    statePath,
+    state: nextState,
+    approved: approval,
+  };
+}
+
+export function rejectPendingDiff(root: string, id: string): { statePath: string; state: StatePlane; removed: boolean } {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const nextPending = current.pendingApprovals.filter((entry) => entry.id !== id);
+  const removed = nextPending.length !== current.pendingApprovals.length;
+  const nextState = materializeStatePlane({
+    ...current,
+    pendingApprovals: nextPending,
+  });
+
+  const statePath = persistStatePlane(root, nextState);
+  return {
+    statePath,
+    state: nextState,
+    removed,
+  };
 }

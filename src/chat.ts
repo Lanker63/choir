@@ -2,9 +2,12 @@ import * as vscode from "vscode";
 import path from "path";
 import { getControlPlanePath, readControlPlane } from "./choirManager.js";
 import {
+    approveDiff,
     CompilationTrace,
     compileDSLAndWrite,
     controlPlaneToChoirConfig,
+    policyStatus,
+    rejectDiff,
 } from "./core/dslYamlCompiler.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import {
@@ -75,6 +78,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir plan for \"service boundaries\"",
         "- choir export dsl",
         "- choir export dsl intent",
+        "- choir approve <diffId>",
+        "- choir reject <diffId>",
+        "- choir policy status",
     ].join("\n"));
 }
 
@@ -108,8 +114,16 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 return;
             }
 
-            if (parsed.ast.type === "sequence" && parsed.ast.actions.some((action) => action.type === "export")) {
-                stream.markdown("Invalid Choir DSL command. `export` cannot be chained with `then`.");
+            if (
+                parsed.ast.type === "sequence"
+                && parsed.ast.actions.some((action) =>
+                    action.type === "export"
+                    || action.type === "approve"
+                    || action.type === "reject"
+                    || action.type === "policy-status"
+                )
+            ) {
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status` cannot be chained with `then`.");
                 return;
             }
 
@@ -122,6 +136,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const controlPath = getControlPlanePath();
             if (!controlPath) {
                 stream.markdown("Unable to resolve .choir/choir.config.yaml.");
+                return;
+            }
+
+            const workspaceRoot = getWorkspaceRoot();
+            if (!workspaceRoot) {
+                stream.markdown("No workspace folder found.");
                 return;
             }
 
@@ -160,11 +180,77 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
+                if (parsed.ast.type === "approve") {
+                    const approved = approveDiff(workspaceRoot, parsed.ast.diffId, "chat-user");
+                    if (!approved.approved) {
+                        stream.markdown(`Pending diff not found: ${parsed.ast.diffId}`);
+                        return;
+                    }
+
+                    stream.markdown([
+                        `Approved diff: ${parsed.ast.diffId}`,
+                        approved.diffHash ? `- diffHash: ${approved.diffHash}` : "",
+                        "Re-run the original DSL command to apply the now-approved YAML diff.",
+                    ].filter((line) => line.length > 0).join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "reject") {
+                    const rejected = rejectDiff(workspaceRoot, parsed.ast.diffId);
+                    stream.markdown(rejected.removed
+                        ? `Rejected pending diff: ${parsed.ast.diffId}`
+                        : `Pending diff not found: ${parsed.ast.diffId}`);
+                    return;
+                }
+
+                if (parsed.ast.type === "policy-status") {
+                    const status = policyStatus(workspaceRoot);
+                    if (status.pending.length === 0) {
+                        stream.markdown("Policy status: no pending approvals.");
+                        return;
+                    }
+
+                    const pendingLines = status.pending
+                        .map((entry) => `- ${entry.id}: ${entry.command}`)
+                        .join("\n");
+
+                    stream.markdown([
+                        "Policy status:",
+                        `- pendingApprovals: ${status.pending.length}`,
+                        "",
+                        pendingLines,
+                    ].join("\n"));
+                    return;
+                }
+
                 const compiled = compileDSLAndWrite(raw, control, controlPath, {
-                    workspaceRoot: getWorkspaceRoot() ?? undefined,
+                    workspaceRoot,
                 });
 
-                if (!compiled.changed) {
+                if (compiled.decision === "deny") {
+                    const violations = compiled.policyResult?.violations ?? [];
+                    const details = violations.map((item) => `- [${item.ruleId}] ${item.message}`).join("\n");
+                    stream.markdown([
+                        "Policy violation. YAML mutation denied.",
+                        "",
+                        details.length > 0 ? details : "- denied by policy",
+                    ].join("\n"));
+                    return;
+                }
+
+                if (compiled.decision === "require-approval") {
+                    stream.markdown([
+                        "Policy approval required. YAML was not mutated.",
+                        compiled.pendingApprovalId ? `- diffId: ${compiled.pendingApprovalId}` : "",
+                        compiled.diffHash ? `- diffHash: ${compiled.diffHash}` : "",
+                        "Approve with: choir approve <diffId>",
+                        "Reject with: choir reject <diffId>",
+                    ].filter((line) => line.length > 0).join("\n"));
+                    renderTrace(stream, compiled.trace);
+                    return;
+                }
+
+                if (!compiled.changed || compiled.decision === "no-change") {
                     stream.markdown("No changes. YAML already reflects this DSL command.");
                 } else {
                     stream.markdown("YAML updated successfully: .choir/choir.config.yaml");
