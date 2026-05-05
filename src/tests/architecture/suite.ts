@@ -53,6 +53,13 @@ import {
   selectFromMemory,
   validatePlanStillApplies,
 } from "../../core/strategyMemory.js";
+import {
+  ChoirAgent,
+  classifyIntent,
+  enforceCapabilities,
+  normalizeInput,
+  routeIntent,
+} from "../../core/choirRouter.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
@@ -399,6 +406,98 @@ const pass2: TestPass = {
         assert.deepStrictEqual(parseConductorCommand("execute plan-123"), { kind: "execute", planId: "plan-123" });
         assert.deepStrictEqual(parseConductorCommand("status"), { kind: "status" });
         assert.deepStrictEqual(parseConductorCommand("something else"), { kind: "help" });
+      },
+    },
+    {
+      id: "2.8",
+      name: "router classification and normalization are deterministic",
+      run: async () => {
+        assert.deepStrictEqual(normalizeInput("  Preview PLAN-1  "), {
+          raw: "Preview PLAN-1",
+          normalized: "preview plan-1",
+          tokens: ["preview", "plan-1"],
+        });
+
+        assert.strictEqual(classifyIntent("add goal: secure platform"), "define-intent");
+        assert.strictEqual(classifyIntent("show summary"), "analyze");
+        assert.strictEqual(classifyIntent("plan for goal: enforce service boundaries"), "plan");
+        assert.strictEqual(classifyIntent("plan"), "plan");
+        assert.strictEqual(classifyIntent("preview plan-1"), "preview");
+        assert.strictEqual(classifyIntent("run this plan"), "execute");
+        assert.strictEqual(classifyIntent("what now"), "status");
+      },
+    },
+    {
+      id: "2.9",
+      name: "choir agent router preserves deterministic role isolation and chaining",
+      run: async () => {
+        const calls: string[] = [];
+        const handlers = {
+          architect: {
+            handle: async (input: string) => {
+              calls.push(`architect:${input}`);
+            },
+          },
+          analyst: {
+            handle: async (input: string) => {
+              calls.push(`analyst:${input}`);
+            },
+            status: async () => {
+              calls.push("analyst:status");
+            },
+          },
+          enforcer: {
+            handle: async (input: string) => {
+              calls.push(`enforcer:${input}`);
+            },
+          },
+          conductor: {
+            handle: async (input: string) => {
+              calls.push(`conductor:handle:${input}`);
+            },
+            plan: async (input: string) => {
+              calls.push(`conductor:plan:${input}`);
+            },
+            preview: async (input: string) => {
+              calls.push(`conductor:preview:${input}`);
+            },
+            execute: async (input: string) => {
+              calls.push(`conductor:execute:${input}`);
+            },
+          },
+        };
+
+        const agent = new ChoirAgent(handlers);
+        const traceA = await agent.handle("plan", {});
+        const traceB = await agent.handle("plan", {});
+
+        assert.deepStrictEqual(traceA, traceB);
+        assert.ok(traceA.rolesInvoked.includes("conductor"));
+
+        const legacyTrace = await agent.handle("@choir.architect add constraint: no direct db access", {});
+        assert.strictEqual(legacyTrace.rolesInvoked[0], "architect");
+
+        const chainedTrace = await agent.handle("enforce service boundaries", {});
+        assert.deepStrictEqual(chainedTrace.rolesInvoked, ["architect", "analyst", "conductor", "conductor"]);
+
+        const before = calls.length;
+        const routed = await routeIntent(handlers, "status", "status", {});
+        assert.strictEqual(routed.rolesInvoked[0], "analyst");
+        assert.strictEqual(calls.length, before + 1);
+      },
+    },
+    {
+      id: "2.10",
+      name: "capability enforcement prevents cross-role actions",
+      run: async () => {
+        enforceCapabilities("architect", "modify-yaml");
+        enforceCapabilities("analyst", "read-state");
+        enforceCapabilities("enforcer", "modify-code");
+        enforceCapabilities("conductor", "plan");
+
+        assert.throws(() => enforceCapabilities("architect", "modify-code"), /Capability violation/);
+        assert.throws(() => enforceCapabilities("analyst", "modify-yaml"), /Capability violation/);
+        assert.throws(() => enforceCapabilities("enforcer", "plan"), /Capability violation/);
       },
     },
   ],

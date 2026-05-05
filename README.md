@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, and coordinates planning/execution through four chat participants: Architect, Enforcer, Analyst, and Conductor.
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, and coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor).
 
 ---
 
@@ -253,16 +253,22 @@ hash = sha256(JSON.stringify(preview.fileChanges))
 
 ---
 
-## Chat Participants
+## Unified Agent Interface
 
-Participants are available from VS Code Chat:
+Primary interface from VS Code Chat:
 
-- `@Choir-Architect`
-- `@Choir-Enforcer`
-- `@Choir-Analyst`
-- `@Choir-Conductor`
+- `@choir`
 
-### `@Choir-Architect`
+Legacy aliases are still supported for compatibility:
+
+- `@choir.architect`
+- `@choir.enforcer`
+- `@choir.analyst`
+- `@choir.conductor`
+
+`@choir` routes deterministically by intent to internal role handlers and enforces capability boundaries per role.
+
+### Internal Architect Role
 
 Reads and writes `.choir/choir.config.yaml` using natural language updates.
 
@@ -278,15 +284,15 @@ Examples:
 - `Remove constraint: ...`
 - `Remove non-goal: ...`
 
-### `@Choir-Enforcer`
+### Internal Enforcer Role
 
 Runs the enforcement pipeline and reports current diagnostics.
 
-### `@Choir-Analyst`
+### Internal Analyst Role
 
 Provides workspace summaries and hotspots.
 
-### `@Choir-Conductor`
+### Internal Conductor Role
 
 Builds, approves, executes, and reports plan status.
 

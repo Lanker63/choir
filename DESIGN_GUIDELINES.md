@@ -55,6 +55,36 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 
 > Chat is an interface, not persisted policy or state.
 
+## Unified Agent Facade
+
+User-facing entry point is a single chat agent:
+
+- `@choir`
+
+Internal roles remain isolated modules:
+
+- `choir.architect`
+- `choir.analyst`
+- `choir.enforcer`
+- `choir.conductor`
+
+Router model:
+
+`User -> @choir -> deterministic intent router -> internal role handler -> pipeline`
+
+Legacy aliases are supported for compatibility:
+
+- `@choir.architect`
+- `@choir.analyst`
+- `@choir.enforcer`
+- `@choir.conductor`
+
+Router constraints:
+
+- Router performs deterministic classification and routing only.
+- Router must not embed business logic.
+- Capability boundaries are enforced before role handlers run.
+
 ---
 
 # Orchestration Layer
@@ -72,7 +102,7 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
 - Report plan/task execution status
 - Preserve deterministic task ordering and dependency semantics
 
-Supported command surface:
+Supported command surface (via `@choir`):
 
 - `plan`
 - `plan for goal: <goal>`
