@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { registerAnalyst, registerArchitect, registerConductor, registerEnforcer } from "../chat.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
@@ -20,6 +21,12 @@ export function activate(context: vscode.ExtensionContext) {
             console.error("Choir: pipeline execution failed", error);
         }
     };
+
+    const isControlPlaneSave = (document: vscode.TextDocument): boolean => {
+        const normalizedPath = document.uri.fsPath.split(path.sep).join("/").toLowerCase();
+        return normalizedPath.endsWith("/.choir/choir.config.yaml")
+            || normalizedPath.endsWith("/.choir/choir.config.yml");
+    };
     
     try {
         const provider = new RuleEditorProvider(context);
@@ -40,7 +47,11 @@ export function activate(context: vscode.ExtensionContext) {
         }));
 
         // Keep diagnostics in sync with edits through the unified pipeline.
-        addSubscription(context, vscode.workspace.onDidSaveTextDocument(() => {
+        addSubscription(context, vscode.workspace.onDidSaveTextDocument((document) => {
+            if (isControlPlaneSave(document)) {
+                tree.refresh();
+            }
+
             void triggerPipeline();
         }));
 

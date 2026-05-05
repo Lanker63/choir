@@ -1,7 +1,54 @@
 import * as vscode from "vscode";
 import { DSLRule } from "../dsl/types.js";
-import { readControlPlane, getControlPlanePath } from "../choirManager.js";
+import { describeControlPlaneLoadError, readControlPlane, getControlPlanePath } from "../choirManager.js";
 import { resolveControlPlanePath } from "./rulesPath.js";
+
+function normalizeErrorMessage(message: string): string {
+  return message.replace(/^Unable to parse\s+[^:]+:\s*/i, "").trim();
+}
+
+function wrapText(text: string, width: number): string[] {
+  if (text.length <= width) {
+    return [text];
+  }
+
+  const words = text.split(/\s+/).filter((word) => word.length > 0);
+  const lines: string[] = [];
+  let current = "";
+
+  const pushLongWord = (word: string) => {
+    for (let index = 0; index < word.length; index += width) {
+      lines.push(word.slice(index, index + width));
+    }
+  };
+
+  for (const word of words) {
+    if (word.length > width) {
+      if (current.length > 0) {
+        lines.push(current);
+        current = "";
+      }
+
+      pushLongWord(word);
+      continue;
+    }
+
+    const next = current.length === 0 ? word : `${current} ${word}`;
+    if (next.length > width) {
+      lines.push(current);
+      current = word;
+      continue;
+    }
+
+    current = next;
+  }
+
+  if (current.length > 0) {
+    lines.push(current);
+  }
+
+  return lines.length > 0 ? lines : [text];
+}
 
 class RuleTreeItem extends vscode.TreeItem {
   constructor(public readonly label: string, public readonly rule?: DSLRule) {
@@ -62,7 +109,32 @@ export class RuleTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
       return rules.map(r => new RuleTreeItem(r.id ?? "<no-id>", r));
     } catch (err) {
       console.error("RuleTreeProvider: failed to load rules", err);
-      return [new vscode.TreeItem("Failed to load rules (check console)")];
+      const resolvedPath = getControlPlanePath() ?? controlPath ?? ".choir/choir.config.yaml";
+      const fullMessage = err instanceof Error
+        ? err.message
+        : describeControlPlaneLoadError(err, resolvedPath);
+      const details = normalizeErrorMessage(fullMessage);
+      const wrapped = wrapText(details, 72);
+
+      const title = new vscode.TreeItem("Failed to load rules");
+      title.tooltip = fullMessage;
+
+      const fileHint = new vscode.TreeItem("File: .choir/choir.config.yaml");
+      fileHint.tooltip = resolvedPath;
+
+      const issueHeader = new vscode.TreeItem("Issue:");
+      issueHeader.tooltip = fullMessage;
+
+      const detailItems = wrapped.map((line) => {
+        const item = new vscode.TreeItem(`  ${line}`);
+        item.tooltip = fullMessage;
+        return item;
+      });
+
+      const fixHint = new vscode.TreeItem("Action: open the file and fix the schema/YAML error.");
+      fixHint.tooltip = fullMessage;
+
+      return [title, fileHint, issueHeader, ...detailItems, fixHint];
     }
   }
 }

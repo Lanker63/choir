@@ -6,6 +6,48 @@ import * as YAML from "yaml";
 
 type UnknownRecord = Record<string, unknown>;
 
+type IssueLike = {
+    message?: unknown;
+    path?: unknown;
+};
+
+function firstIssueErrorDetails(error: unknown): string | null {
+    if (typeof error !== "object" || error === null) {
+        return null;
+    }
+
+    const record = error as { issues?: unknown };
+    if (!Array.isArray(record.issues) || record.issues.length === 0) {
+        return null;
+    }
+
+    const firstIssue = record.issues[0] as IssueLike;
+    const issueMessage = typeof firstIssue?.message === "string" ? firstIssue.message : "Invalid value";
+
+    if (!Array.isArray(firstIssue?.path) || firstIssue.path.length === 0) {
+        return issueMessage;
+    }
+
+    const issuePath = firstIssue.path.map((segment) => String(segment)).join(".");
+    return `${issueMessage} at ${issuePath}`;
+}
+
+export function describeControlPlaneLoadError(error: unknown, controlPath: string): string {
+    const message = error instanceof Error ? error.message : String(error);
+
+    // Keep previously formatted control-plane errors stable when rethrown.
+    if (message.startsWith("Invalid control plane schema in ") || message.startsWith("Unable to parse ")) {
+        return message;
+    }
+
+    const zodIssue = firstIssueErrorDetails(error);
+    if (zodIssue) {
+        return `Invalid control plane schema in ${controlPath}: ${zodIssue}`;
+    }
+
+    return `Unable to parse ${controlPath}: ${message}`;
+}
+
 function getWorkspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
@@ -66,8 +108,12 @@ export function readControlPlane(): ControlPlane | null {
         return initial;
     }
 
-    const raw = fs.readFileSync(controlPath, "utf-8");
-    return normalizeControlPlane(YAML.parse(raw));
+    try {
+        const raw = fs.readFileSync(controlPath, "utf-8");
+        return normalizeControlPlane(YAML.parse(raw));
+    } catch (error) {
+        throw new Error(describeControlPlaneLoadError(error, controlPath));
+    }
 }
 
 export function writeControlPlane(data: ControlPlane) {
