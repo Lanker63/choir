@@ -162,13 +162,18 @@ After cost-based plan-set selection, each selected plan enters a deterministic s
   - Generate strategy-specific plan variants with deterministic ids/dependencies.
 3. **Pass 3 — Simulation-only validation**
   - Evaluate each variant with transactional simulation (`prepare → simulate → validate`) and no commit.
+  - Simulation must not persist `.choir/state.json` or mutate real workspace files.
 4. **Pass 4 — Deterministic selection**
   - Prefer strategies whose validation passes.
-  - Then choose lowest total cost.
+  - Then choose best real simulation outcome using deterministic metric priority:
+    - lowest `remainingViolations`
+    - then lowest `introducedErrors`
+    - then lowest `patchesCount`
+    - then lowest `filesChanged`
   - Tie-break by lexical `strategyId`.
 5. **Pass 5 — Execution + trace**
   - Execute only the selected strategy plan.
-  - Emit explainable strategy trace (evaluated strategies, costs, success flags, decision).
+  - Emit explainable strategy trace (evaluated strategies, outcome metrics, success flags, decision).
 
 ## Hard constraints
 
@@ -202,42 +207,30 @@ Before execution, Conductor can produce a user-visible preview that shows exactl
 ## Preview model
 
 ```ts
-type ExecutionPreview = {
+type MultiStrategyPreview = {
   previewId: string;
   hash: string;
   planId: string;
-
-  summary: {
-    totalFilesChanged: number;
-    totalPatches: number;
-    totalDiagnosticsResolved: number;
-  };
-
-  fileChanges: Array<{
-    file: string;
-    patches: Patch[];
-    diff: string;
-    before: string;
-    after: string;
-  }>;
-
-  diagnostics: Diagnostic[];
-
-  strategy?: {
+  strategies: Array<{
     strategyId: string;
-    cost: number;
-  };
+    summary: {
+      filesChanged: number;
+      patches: number;
+      violationsRemaining: number;
+    };
+    diff: FileChange[];
+  }>;
+  selectedStrategyId: string;
 };
 ```
 
 ## Preview pipeline
 
 1. Select approved plan(s) by deterministic cost policy.
-2. Select best strategy by deterministic multi-strategy policy.
-3. Execute selected strategy plan through simulation-only transaction flow.
-4. Collect proposed patches and virtual-FS after-state.
-5. Build grouped file changes and unified diffs.
-6. Compute deterministic hash from preview file changes.
+2. Simulate all strategies via transaction flow in no-persist mode.
+3. Select best strategy by deterministic outcome metrics.
+4. For each evaluated strategy, build grouped file changes and unified diffs.
+5. Compute deterministic hash from selected strategy file changes.
 
 If preview and execution diverge, the execution pipeline is considered incorrect and must be fixed.
 

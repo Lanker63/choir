@@ -154,9 +154,13 @@ After cost-based plan-set selection, Conductor evaluates each selected plan acro
 Evaluation rules:
 
 - Strategy transforms are deterministic and side-effect free
-- Each strategy variant is validated via transaction simulation (no commit)
+- Each strategy variant is evaluated via transaction simulation (no commit, no state persistence)
 - Validated strategies are preferred over failed strategies
-- Lowest total cost wins among candidates
+- Best real simulation outcome wins among candidates using deterministic metric priority:
+  - lowest remaining violations
+  - then lowest introduced errors
+  - then lowest patch count
+  - then lowest files changed
 - Ties are broken by lexicographic `strategyId`
 
 Execution rules:
@@ -164,7 +168,7 @@ Execution rules:
 - Only the selected strategy plan is executed
 - Conductor emits a strategy trace per base plan:
   - evaluated strategies
-  - per-strategy cost/success
+  - per-strategy outcome metrics/success
   - selected strategy id
   - deterministic decision reason
 
@@ -175,9 +179,16 @@ Conductor supports deterministic execution previews so you can inspect exact fil
 Preview guarantees:
 
 - Preview runs through simulation logic and does not write real files
+- Preview simulation also does not persist `.choir/state.json`
 - Preview diffs are derived from proposed patches + virtual FS after-state
 - Preview output is deterministic for identical inputs
-- Preview hash binds approval to exact `fileChanges`
+- Preview hash binds approval to exact selected-strategy `fileChanges`
+
+Preview surface:
+
+- Includes all evaluated strategies with per-strategy summaries and diffs
+- Includes the deterministically selected strategy id
+- Uses selected strategy file changes for approval hash binding
 
 Approval gate:
 

@@ -3,20 +3,19 @@ import { runPipelineForWorkspace } from "./enforcer.js";
 import {
   buildCostTrace,
   CostTrace,
-  scorePlan,
   scorePlans,
   selectPlanSet,
 } from "./core/costPlanner.js";
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
 import {
   MAX_STRATEGIES,
-  StrategyResult,
+  StrategyOutcome,
   StrategyTrace,
   buildStrategyTrace,
   evaluateStrategies,
-  selectBestStrategy,
+  selectBestOutcome,
 } from "./core/strategyPlanner.js";
-import { ExecutionPreview, generateExecutionPreview } from "./core/executionPreview.js";
+import { FileChange } from "./core/executionPreview.js";
 import {
   createEmptyStatePlane,
   ExecutionState,
@@ -64,16 +63,33 @@ export type CostBasedExecutionResult = {
 };
 
 export type PreviewSelectionResult = {
-  preview: ExecutionPreview;
+  preview: MultiStrategyPreview;
   costTrace: CostTrace;
   selectedPlan: Plan;
   basePlanId: string;
   strategyTrace: StrategyTrace;
 };
 
+export type MultiStrategyPreview = {
+  previewId: string;
+  hash: string;
+  planId: string;
+  strategies: {
+    strategyId: string;
+    summary: {
+      filesChanged: number;
+      patches: number;
+      violationsRemaining: number;
+    };
+    diff: FileChange[];
+  }[];
+  selectedStrategyId: string;
+};
+
 type SelectedStrategyPlan = {
   basePlan: Plan;
-  selected: StrategyResult;
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
   trace: StrategyTrace;
 };
 
@@ -447,19 +463,19 @@ export async function executeSelectedPlansWithCost(
   const planned: SelectedStrategyPlan[] = [];
 
   for (const basePlan of sortedPlans(selectedPlans)) {
-    const baseCost = scorePlan(basePlan, state).totalCost;
     const strategyResults = await evaluateStrategies(basePlan, state, {
       controlPlane: control,
+      root: options.root,
       maxStrategies: MAX_STRATEGIES,
-      costThreshold: baseCost * 4,
     });
 
-    const selectedStrategy = selectBestStrategy(strategyResults);
+    const selectedStrategy = selectBestOutcome(strategyResults);
     const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
 
     planned.push({
       basePlan,
       selected: selectedStrategy,
+      outcomes: strategyResults,
       trace: strategyTrace,
     });
   }
@@ -509,38 +525,45 @@ export async function generateSelectedPlanPreview(
     throw new Error("No approved plans available for preview.");
   }
 
-  const baseCost = scorePlan(basePlan, state).totalCost;
-  const strategyResults = await evaluateStrategies(basePlan, state, {
+  const outcomes = await evaluateStrategies(basePlan, state, {
     controlPlane: control,
-    maxStrategies: MAX_STRATEGIES,
-    costThreshold: baseCost * 4,
-  });
-  const selectedStrategy = selectBestStrategy(strategyResults);
-  const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
-
-  const preview = await generateExecutionPreview(selectedStrategy.plan, {
     root: options.root,
-    controlPlane: control,
-    state,
-    strategy: {
-      strategyId: selectedStrategy.strategyId,
-      cost: selectedStrategy.cost.totalCost,
-    },
+    maxStrategies: MAX_STRATEGIES,
   });
+  const selectedOutcome = selectBestOutcome(outcomes);
+  const strategyTrace = buildStrategyTrace(outcomes, selectedOutcome);
+
+  const preview: MultiStrategyPreview = {
+    previewId: selectedOutcome.previewHash,
+    hash: selectedOutcome.previewHash,
+    planId: basePlan.id,
+    strategies: [...outcomes]
+      .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
+      .map((outcome) => ({
+        strategyId: outcome.strategyId,
+        summary: {
+          filesChanged: outcome.metrics.filesChanged,
+          patches: outcome.metrics.patchesCount,
+          violationsRemaining: outcome.metrics.remainingViolations,
+        },
+        diff: outcome.fileChanges,
+      })),
+    selectedStrategyId: selectedOutcome.strategyId,
+  };
 
   updateExecutionState(options.root, (current) => ({
     ...current,
     lastPreview: {
       hash: preview.hash,
       planId: basePlan.id,
-      strategyId: selectedStrategy.strategyId,
+      strategyId: selectedOutcome.strategyId,
     },
   }));
 
   return {
     preview,
     costTrace,
-    selectedPlan: selectedStrategy.plan,
+    selectedPlan: selectedOutcome.plan,
     basePlanId: basePlan.id,
     strategyTrace,
   };
@@ -565,13 +588,15 @@ export async function executeSelectedPlansWithPreviewGuard(
     throw new Error("Preview hash is not approved in state. Generate a fresh preview before execution.");
   }
 
-  if (options.requestedPlanId && lastPreview.planId !== options.requestedPlanId) {
-    throw new Error(`Preview hash was generated for ${lastPreview.planId}. Generate preview for ${options.requestedPlanId} before execution.`);
+  const targetPlanId = options.requestedPlanId ?? lastPreview.planId;
+
+  if (targetPlanId !== lastPreview.planId) {
+    throw new Error(`Preview hash was generated for ${lastPreview.planId}. Generate preview for ${targetPlanId} before execution.`);
   }
 
   const recomputed = await generateSelectedPlanPreview(control, {
     root: options.root,
-    requestedPlanId: options.requestedPlanId,
+    requestedPlanId: targetPlanId,
   });
 
   if (normalizePreviewHash(recomputed.preview.hash) !== expectedHash) {
@@ -580,7 +605,7 @@ export async function executeSelectedPlansWithPreviewGuard(
 
   const executed = await executeSelectedPlansWithCost(control, {
     root: options.root,
-    requestedPlanId: options.requestedPlanId,
+    requestedPlanId: targetPlanId,
   });
 
   return {

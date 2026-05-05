@@ -23,13 +23,13 @@ import {
 import {
   MAX_STRATEGIES,
   STRATEGIES,
-  StrategyResult,
+  StrategyOutcome,
   buildStrategyTrace,
   evaluateStrategies,
   groupedStrategy,
   layeredStrategy,
   aggressiveStrategy,
-  selectBestStrategy,
+  selectBestOutcome,
 } from "../../core/strategyPlanner.js";
 import {
   ExecutionPreview,
@@ -925,6 +925,7 @@ const pass4: TestPass = {
 
         const results = await evaluateStrategies(basePlan, state, {
           controlPlane: makeControlPlane(),
+          root: repoRoot,
           maxStrategies: MAX_STRATEGIES,
         });
 
@@ -932,27 +933,39 @@ const pass4: TestPass = {
         assert.strictEqual(JSON.stringify(basePlan), planSnapshot);
         assert.strictEqual(JSON.stringify(state), stateSnapshot);
 
-        const selected = selectBestStrategy(results);
+        const selected = selectBestOutcome(results);
         const trace = buildStrategyTrace(results, selected);
         assert.strictEqual(trace.selectedStrategyId, selected.strategyId);
 
-        const tieSeed = results[0] as StrategyResult;
-        const tied: StrategyResult[] = [
+        const tieSeed = results[0] as StrategyOutcome;
+        const tied: StrategyOutcome[] = [
           {
             ...tieSeed,
             strategyId: "s-zeta",
             success: true,
-            cost: { ...tieSeed.cost, totalCost: 5 },
+            metrics: {
+              ...tieSeed.metrics,
+              remainingViolations: 1,
+              introducedErrors: 0,
+              patchesCount: 2,
+              filesChanged: 1,
+            },
           },
           {
             ...tieSeed,
             strategyId: "s-alpha",
             success: true,
-            cost: { ...tieSeed.cost, totalCost: 5 },
+            metrics: {
+              ...tieSeed.metrics,
+              remainingViolations: 1,
+              introducedErrors: 0,
+              patchesCount: 2,
+              filesChanged: 1,
+            },
           },
         ];
 
-        const tieWinner = selectBestStrategy(tied);
+        const tieWinner = selectBestOutcome(tied);
         assert.strictEqual(tieWinner.strategyId, "s-alpha");
       },
     },

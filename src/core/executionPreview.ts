@@ -8,6 +8,7 @@ import {
   InMemoryTransactionFS,
   TransactionEnforcer,
   TransactionPipeline,
+  Transaction,
   ValidationResult,
   buildExecutionPlan,
   createInMemoryTransactionFS,
@@ -15,7 +16,7 @@ import {
 } from "./scheduler.js";
 import { ControlPlane, Plan } from "../schema.js";
 import { Diagnostic } from "./types.js";
-import { Fix, Patch, isTextPatch } from "../fix/types.js";
+import { Fix, FixConflict, Patch, isTextPatch } from "../fix/types.js";
 import { StatePlane, createEmptyStatePlane, readStatePlane } from "./state.js";
 
 export type FileChange = {
@@ -41,6 +42,25 @@ export type ExecutionPreview = {
     strategyId: string;
     cost: number;
   };
+};
+
+export type SimulationMetrics = {
+  filesChanged: number;
+  patchesCount: number;
+  remainingViolations: number;
+  introducedErrors: number;
+};
+
+export type SimulatedPlanOutcome = {
+  planId: string;
+  patches: Patch[];
+  diagnostics: Diagnostic[];
+  validation: ValidationResult;
+  metrics: SimulationMetrics;
+  totalDiagnosticsResolved: number;
+  success: boolean;
+  fileChanges: FileChange[];
+  previewHash: string;
 };
 
 type GenerateExecutionPreviewOptions = {
@@ -224,6 +244,7 @@ async function buildSimulationContext(root: string, controlPlane: ControlPlane):
   const baselinePipeline = await runPipeline({
     controlPlane,
     workspace: workspaceSnapshot,
+    persistState: false,
   });
 
   return {
@@ -246,6 +267,7 @@ function createPreviewEnforcer(
       const pipelineResult = await runPipeline({
         controlPlane,
         workspace,
+        persistState: false,
       });
 
       const allFixes = pipelineResult.fixes
@@ -298,6 +320,7 @@ function createPreviewPipeline(
       const pipelineResult = await runPipeline({
         controlPlane,
         workspace,
+        persistState: false,
       });
 
       return {
@@ -383,6 +406,50 @@ function stableDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
   });
 }
 
+function stableConflicts(conflicts: FixConflict[]): FixConflict[] {
+  return [...conflicts].sort((left, right) => {
+    if (left.fixA !== right.fixA) return left.fixA.localeCompare(right.fixA);
+    if (left.fixB !== right.fixB) return left.fixB.localeCompare(right.fixB);
+    return left.reason.localeCompare(right.reason);
+  });
+}
+
+function combineValidationResults(validations: ValidationResult[]): ValidationResult {
+  const passed = validations.every((validation) => validation.passed);
+  const diagnostics = stableDiagnostics(validations.flatMap((validation) => validation.diagnostics));
+  const conflicts = stableConflicts(validations.flatMap((validation) => validation.conflicts));
+  const invariantChecks = validations.flatMap((validation) => validation.invariantChecks);
+  const errors = sortedUnique(validations.flatMap((validation) => validation.errors ?? []));
+
+  return {
+    passed,
+    diagnostics,
+    conflicts,
+    invariantChecks,
+    ...(errors.length > 0 ? { errors } : {}),
+  };
+}
+
+function countIntroducedErrors(before: Diagnostic[], after: Diagnostic[]): number {
+  const beforeErrors = new Set(before.filter((diagnostic) => diagnostic.severity === "error").map((diagnostic) => diagnostic.id));
+  const afterErrors = after.filter((diagnostic) => diagnostic.severity === "error");
+  return afterErrors.filter((diagnostic) => !beforeErrors.has(diagnostic.id)).length;
+}
+
+function buildOutcomeMetrics(
+  baselineDiagnostics: Diagnostic[],
+  diagnostics: Diagnostic[],
+  patches: Patch[],
+  fileChanges: FileChange[]
+): SimulationMetrics {
+  return {
+    filesChanged: fileChanges.length,
+    patchesCount: patches.length,
+    remainingViolations: diagnostics.length,
+    introducedErrors: countIntroducedErrors(baselineDiagnostics, diagnostics),
+  };
+}
+
 function resolvedDiagnosticsCount(before: Diagnostic[], after: Diagnostic[]): number {
   const beforeIds = new Set(before.map((diagnostic) => diagnostic.id));
   const afterIds = new Set(after.map((diagnostic) => diagnostic.id));
@@ -405,16 +472,20 @@ function collectPatchesFromTransactions(
     .flatMap((transaction) => transaction.proposedPatches);
 }
 
+function collectValidationFromTransactions(transactions: Transaction[]): ValidationResult {
+  return combineValidationResults(transactions.map((transaction) => transaction.validation));
+}
+
 export function hashPreview(preview: Pick<ExecutionPreview, "fileChanges">): string {
   return createHash("sha256").update(JSON.stringify(preview.fileChanges)).digest("hex");
 }
 
-export async function generateExecutionPreview(
+export async function simulatePlanOutcome(
   plan: Plan,
   options: GenerateExecutionPreviewOptions
-): Promise<ExecutionPreview> {
+): Promise<SimulatedPlanOutcome> {
   const root = options.root;
-  const executionPlan = buildExecutionPlan([plan]).executionPlan;
+  const executionPlan: ExecutionPlan = buildExecutionPlan([plan]).executionPlan;
   const simulationContext = await buildSimulationContext(root, options.controlPlane);
 
   const initialFiles = toRelativeFilesMap(root, simulationContext.workspaceSnapshot);
@@ -461,20 +532,45 @@ export async function generateExecutionPreview(
   const finalPipeline = await runPipeline({
     controlPlane: options.controlPlane,
     workspace: buildSnapshotFromFiles(root, finalFiles),
+    persistState: false,
   });
   const finalDiagnostics = stableDiagnostics(finalPipeline.diagnostics.map((diagnostic) => normalizeDiagnostic(root, diagnostic)));
+  const validation = collectValidationFromTransactions(executionResult.transactions);
+  const success = validation.passed;
+  const metrics = buildOutcomeMetrics(simulationContext.baselineDiagnostics, finalDiagnostics, patches, fileChanges);
+  const previewHash = hashPreview({ fileChanges });
+  const totalDiagnosticsResolved = resolvedDiagnosticsCount(simulationContext.baselineDiagnostics, finalDiagnostics);
+
+  return {
+    planId: plan.id,
+    patches,
+    diagnostics: finalDiagnostics,
+    validation,
+    metrics,
+    totalDiagnosticsResolved,
+    success,
+    fileChanges,
+    previewHash,
+  };
+}
+
+export async function generateExecutionPreview(
+  plan: Plan,
+  options: GenerateExecutionPreviewOptions
+): Promise<ExecutionPreview> {
+  const outcome = await simulatePlanOutcome(plan, options);
 
   const previewDraft = {
     previewId: "",
     hash: "",
     planId: plan.id,
     summary: {
-      totalFilesChanged: fileChanges.length,
-      totalPatches: patches.length,
-      totalDiagnosticsResolved: resolvedDiagnosticsCount(simulationContext.baselineDiagnostics, finalDiagnostics),
+      totalFilesChanged: outcome.metrics.filesChanged,
+      totalPatches: outcome.metrics.patchesCount,
+      totalDiagnosticsResolved: outcome.totalDiagnosticsResolved,
     },
-    fileChanges,
-    diagnostics: finalDiagnostics,
+    fileChanges: outcome.fileChanges,
+    diagnostics: outcome.diagnostics,
     ...(options.strategy ? { strategy: options.strategy } : {}),
   } satisfies ExecutionPreview;
 

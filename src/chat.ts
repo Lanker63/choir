@@ -267,7 +267,7 @@ export function registerConductor(context: vscode.ExtensionContext) {
                     const strategySummary = result.strategyTraces
                         .map((item) => {
                             const evaluatedStrategies = item.trace.evaluated
-                                .map((entry) => `  - ${entry.strategyId}: cost=${entry.cost.toFixed(2)}, success=${entry.success}`)
+                                .map((entry) => `  - ${entry.strategyId}: remaining=${entry.metrics.remainingViolations}, introducedErrors=${entry.metrics.introducedErrors}, patches=${entry.metrics.patchesCount}, files=${entry.metrics.filesChanged}, success=${entry.success}`)
                                 .join("\n");
 
                             return [
@@ -325,35 +325,36 @@ export function registerConductor(context: vscode.ExtensionContext) {
                     });
 
                     const preview = result.preview;
-                    const changeSummary = preview.fileChanges
-                        .map((change) => [
-                            `--- ${change.file}`,
-                            "```diff",
-                            change.diff,
-                            "```",
-                        ].join("\n"))
-                        .join("\n\n");
 
-                    const diagnostics = preview.diagnostics
-                        .slice(0, 20)
-                        .map((diagnostic) => `- [${diagnostic.ruleId}] ${diagnostic.message} (${diagnostic.location.file})`)
-                        .join("\n");
+                    const strategyBlocks = preview.strategies
+                        .map((strategy) => {
+                            const diffBlock = strategy.diff
+                                .map((change) => [
+                                    `--- ${change.file}`,
+                                    "```diff",
+                                    change.diff,
+                                    "```",
+                                ].join("\n"))
+                                .join("\n\n");
+
+                            return [
+                                `### Strategy ${strategy.strategyId}`,
+                                `- filesChanged=${strategy.summary.filesChanged}`,
+                                `- patches=${strategy.summary.patches}`,
+                                `- violationsRemaining=${strategy.summary.violationsRemaining}`,
+                                "",
+                                diffBlock.length > 0 ? diffBlock : "- No file mutations proposed.",
+                            ].join("\n");
+                        })
+                        .join("\n\n");
 
                     stream.markdown([
                         `Plan: ${preview.planId}`,
-                        `Strategy: ${preview.strategy?.strategyId ?? "n/a"} (cost: ${(preview.strategy?.cost ?? 0).toFixed(2)})`,
+                        `Selected Strategy: ${preview.selectedStrategyId}`,
                         `Preview Hash: ${preview.hash}`,
                         "",
-                        "Summary:",
-                        `- ${preview.summary.totalFilesChanged} files will change`,
-                        `- ${preview.summary.totalPatches} patches applied`,
-                        `- ${preview.summary.totalDiagnosticsResolved} diagnostics resolved`,
-                        "",
-                        "Changes:",
-                        changeSummary.length > 0 ? changeSummary : "- No file mutations proposed by simulation.",
-                        "",
-                        "Post-simulation diagnostics:",
-                        diagnostics.length > 0 ? diagnostics : "- None",
+                        "Evaluated strategies:",
+                        strategyBlocks,
                         "",
                         "Execute this exact preview:",
                         `- @choir.conductor execute ${command.planId ?? preview.planId} ${preview.hash}`,

@@ -210,6 +210,7 @@ function applyFixesSafely(
 export type PipelineInput = {
   controlPlane: ControlPlane;
   workspace: WorkspaceSnapshot;
+  persistState?: boolean;
 };
 
 export type PipelineResult = {
@@ -275,9 +276,10 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
 
   const triggeredRuleIds = Array.from(new Set(diagnostics.map((diagnostic) => diagnostic.ruleId))).sort((a, b) => a.localeCompare(b));
   const astOverrideApplied = executableRules.some((rule) => rule.priority < 100);
-  const previousState = readStatePlane(input.workspace.root);
+  const shouldPersistState = input.persistState !== false;
+  const previousState = shouldPersistState ? readStatePlane(input.workspace.root) : null;
 
-  const statePath = persistStatePlane(input.workspace.root, {
+  const nextState = {
     astIndex: astResult.astIndex,
     symbolGraph: astResult.symbolGraph,
     violations: diagnostics,
@@ -295,7 +297,11 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     },
     dependencyGraph: astResult.dependencyGraph,
     execution: previousState?.execution ?? createEmptyExecutionState(),
-  });
+  };
+
+  const statePath = shouldPersistState
+    ? persistStatePlane(input.workspace.root, nextState)
+    : path.join(input.workspace.root, ".choir", "state.json");
 
   const trace: Trace = {
     runId,
@@ -315,7 +321,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       `Detected ${conflictResult.conflicts.length} conflict(s)`,
       ...(patchResult.rolledBack ? ["Patch apply rollback triggered"] : []),
       ...conflictResult.trace.decisions,
-      `State materialized at ${statePath}`,
+      shouldPersistState ? `State materialized at ${statePath}` : `State materialization skipped for simulation at ${statePath}`,
     ],
     durationMs: Date.now() - startTime,
   };

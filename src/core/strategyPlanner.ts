@@ -1,18 +1,10 @@
-import { Fix } from "../fix/types.js";
 import { ControlPlane, Plan, Task } from "../schema.js";
-import { PlanScore, scorePlan } from "./costPlanner.js";
 import { computeLayers } from "./orchestration.js";
-import {
-  TransactionEnforcer,
-  TransactionPipeline,
-  ValidationResult,
-  WorkUnit,
-  buildExecutionPlan,
-  createInMemoryTransactionFS,
-  runExecutionPlanSimulation,
-} from "./scheduler.js";
+import { Patch } from "../fix/types.js";
+import { ValidationResult } from "./scheduler.js";
 import { StatePlane } from "./state.js";
 import { Diagnostic } from "./types.js";
+import { FileChange, simulatePlanOutcome } from "./executionPreview.js";
 
 export type StrategyType = "minimal" | "grouped" | "layered" | "aggressive";
 
@@ -23,38 +15,46 @@ export type Strategy = {
   transform: (basePlan: Plan, state: StatePlane) => Plan;
 };
 
-export type StrategyResult = {
+export type StrategyOutcome = {
   strategyId: string;
   plan: Plan;
-  cost: PlanScore;
+  patches: Patch[];
+  diagnostics: Diagnostic[];
   validation: ValidationResult;
+  metrics: {
+    filesChanged: number;
+    patchesCount: number;
+    remainingViolations: number;
+    introducedErrors: number;
+  };
   success: boolean;
+  fileChanges: FileChange[];
+  previewHash: string;
 };
 
-export type StrategyTrace = {
+export type StrategySelectionTrace = {
   evaluated: {
     strategyId: string;
-    cost: number;
+    metrics: StrategyOutcome["metrics"];
     success: boolean;
   }[];
   selectedStrategyId: string;
   decision: string;
 };
 
+export type StrategyTrace = StrategySelectionTrace;
+
 export const MAX_STRATEGIES = 4;
 
 type EvaluateStrategyOptions = {
   controlPlane: ControlPlane;
-  maxNewErrors?: number;
+  root: string;
 };
 
 type EvaluateStrategiesOptions = EvaluateStrategyOptions & {
   maxStrategies?: number;
-  costThreshold?: number;
   strategies?: Strategy[];
 };
-
-const SIM_FALLBACK_FILE = ".choir/choir.config.yaml";
 
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
@@ -327,81 +327,28 @@ const STRATEGY_REGISTRY: Strategy[] = [
 
 export const STRATEGIES: Strategy[] = [...STRATEGY_REGISTRY].sort((left, right) => left.id.localeCompare(right.id));
 
-function simulationLocation(file: string): Diagnostic["location"] {
+function failedOutcome(strategyId: string, plan: Plan, message: string): StrategyOutcome {
   return {
-    file,
-    start: { line: 0, character: 0 },
-    end: { line: 0, character: 1 },
-  };
-}
-
-function diagnosticsByTask(workUnits: WorkUnit[]): Map<string, string> {
-  const mapping = new Map<string, string>();
-
-  for (const task of workUnits.flatMap((unit) => unit.tasks)) {
-    if (!mapping.has(task.id)) {
-      mapping.set(task.id, filesForTask(task)[0] ?? SIM_FALLBACK_FILE);
-    }
-  }
-
-  return mapping;
-}
-
-function simulationEnforcer(): TransactionEnforcer {
-  return {
-    async proposeFixes(workUnits: WorkUnit[]) {
-      const fileByTaskId = diagnosticsByTask(workUnits);
-      const refactorTaskIds = sortedUnique(workUnits
-        .flatMap((unit) => unit.tasks)
-        .filter((task) => task.type === "refactor")
-        .map((task) => task.id));
-
-      const diagnostics: Diagnostic[] = refactorTaskIds.map((taskId, index) => ({
-        id: `sim-diag-${taskId}`,
-        ruleId: `sim-rule-${taskId}`,
-        message: `Simulated refactor for ${taskId}`,
-        severity: "warning",
-        category: "AST",
-        location: simulationLocation(fileByTaskId.get(taskId) ?? SIM_FALLBACK_FILE),
-        traceId: `sim-trace-${index + 1}`,
-      }));
-
-      const fixes: Fix[] = refactorTaskIds.map((taskId, index) => ({
-        id: `sim-fix-${taskId}`,
-        ruleId: `sim-rule-${taskId}`,
-        title: `Simulated fix for ${taskId}`,
-        diagnosticIds: [`sim-diag-${taskId}`],
-        patches: [],
-        isSafe: true,
-        traceId: `sim-trace-${index + 1}`,
-      }));
-
-      return {
-        fixes,
-        diagnostics,
-      };
-    },
-  };
-}
-
-function simulationPipeline(state: StatePlane): TransactionPipeline {
-  return {
-    async run() {
-      return {
-        diagnostics: [...state.violations],
-        conflicts: [],
-      };
-    },
-  };
-}
-
-function failedValidation(message: string): ValidationResult {
-  return {
-    passed: false,
+    strategyId,
+    plan,
+    patches: [],
     diagnostics: [],
-    conflicts: [],
-    invariantChecks: [],
-    errors: [message],
+    validation: {
+      passed: false,
+      diagnostics: [],
+      conflicts: [],
+      invariantChecks: [],
+      errors: [message],
+    },
+    metrics: {
+      filesChanged: 0,
+      patchesCount: 0,
+      remainingViolations: Number.MAX_SAFE_INTEGER,
+      introducedErrors: Number.MAX_SAFE_INTEGER,
+    },
+    success: false,
+    fileChanges: [],
+    previewHash: "",
   };
 }
 
@@ -410,35 +357,29 @@ async function evaluateTransformedPlan(
   plan: Plan,
   state: StatePlane,
   options: EvaluateStrategyOptions
-): Promise<StrategyResult> {
-  const cost = scorePlan(plan, state);
+): Promise<StrategyOutcome> {
 
   try {
-    const built = buildExecutionPlan([plan]);
-    const simulation = await runExecutionPlanSimulation(built.executionPlan, {
-      fs: createInMemoryTransactionFS({ state: cloneState(state) }),
-      enforcer: simulationEnforcer(),
-      pipeline: simulationPipeline(state),
+    const outcome = await simulatePlanOutcome(plan, {
+      root: options.root,
       controlPlane: options.controlPlane,
-      maxNewErrors: options.maxNewErrors,
+      state: cloneState(state),
     });
 
     return {
       strategyId,
       plan,
-      cost,
-      validation: simulation.validation,
-      success: simulation.allPassed && simulation.validation.passed,
+      patches: outcome.patches,
+      diagnostics: outcome.diagnostics,
+      validation: outcome.validation,
+      metrics: outcome.metrics,
+      success: outcome.success,
+      fileChanges: outcome.fileChanges,
+      previewHash: outcome.previewHash,
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return {
-      strategyId,
-      plan,
-      cost,
-      validation: failedValidation(message),
-      success: false,
-    };
+    return failedOutcome(strategyId, plan, message);
   }
 }
 
@@ -447,7 +388,7 @@ export async function evaluateStrategy(
   basePlan: Plan,
   state: StatePlane,
   options: EvaluateStrategyOptions
-): Promise<StrategyResult> {
+): Promise<StrategyOutcome> {
   return evaluateTransformedPlan(strategy.id, strategy.transform(basePlan, state), state, options);
 }
 
@@ -455,40 +396,23 @@ export async function evaluateStrategies(
   basePlan: Plan,
   state: StatePlane,
   options: EvaluateStrategiesOptions
-): Promise<StrategyResult[]> {
+): Promise<StrategyOutcome[]> {
   const maxStrategies = options.maxStrategies ?? MAX_STRATEGIES;
-  const costThreshold = options.costThreshold ?? Number.POSITIVE_INFINITY;
   const strategies = [...(options.strategies ?? STRATEGIES)]
     .sort((left, right) => left.id.localeCompare(right.id))
     .slice(0, maxStrategies);
 
-  const results: StrategyResult[] = [];
+  const results: StrategyOutcome[] = [];
 
   for (const strategy of strategies) {
     const transformedPlan = strategy.transform(basePlan, state);
-    const estimated = scorePlan(transformedPlan, state);
-
-    if (estimated.totalCost > costThreshold) {
-      const thresholdText = Number.isFinite(costThreshold) ? costThreshold.toFixed(2) : String(costThreshold);
-      results.push({
-        strategyId: strategy.id,
-        plan: transformedPlan,
-        cost: estimated,
-        validation: failedValidation(
-          `Skipped strategy ${strategy.id}: estimated cost ${estimated.totalCost.toFixed(2)} exceeded threshold ${thresholdText}`
-        ),
-        success: false,
-      });
-      continue;
-    }
-
     results.push(await evaluateTransformedPlan(strategy.id, transformedPlan, state, options));
   }
 
   return [...results].sort((left, right) => left.strategyId.localeCompare(right.strategyId));
 }
 
-export function selectBestStrategy(results: StrategyResult[]): StrategyResult {
+export function selectBestOutcome(results: StrategyOutcome[]): StrategyOutcome {
   if (results.length === 0) {
     throw new Error("Cannot select best strategy from an empty result list");
   }
@@ -497,21 +421,31 @@ export function selectBestStrategy(results: StrategyResult[]): StrategyResult {
   const candidates = valid.length > 0 ? valid : results;
 
   return [...candidates]
-    .sort((left, right) => left.cost.totalCost - right.cost.totalCost || left.strategyId.localeCompare(right.strategyId))[0] as StrategyResult;
+    .sort((left, right) =>
+      left.metrics.remainingViolations - right.metrics.remainingViolations
+      || left.metrics.introducedErrors - right.metrics.introducedErrors
+      || left.metrics.patchesCount - right.metrics.patchesCount
+      || left.metrics.filesChanged - right.metrics.filesChanged
+      || left.strategyId.localeCompare(right.strategyId)
+    )[0] as StrategyOutcome;
 }
 
-export function buildStrategyTrace(results: StrategyResult[], selected: StrategyResult): StrategyTrace {
+export function selectBestStrategy(results: StrategyOutcome[]): StrategyOutcome {
+  return selectBestOutcome(results);
+}
+
+export function buildStrategyTrace(results: StrategyOutcome[], selected: StrategyOutcome): StrategyTrace {
   const evaluated = [...results]
     .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
     .map((result) => ({
       strategyId: result.strategyId,
-      cost: result.cost.totalCost,
+      metrics: result.metrics,
       success: result.success,
     }));
 
   const decision = selected.success
-    ? `${selected.strategyId} selected: validated with lowest cost ${selected.cost.totalCost.toFixed(2)}`
-    : `${selected.strategyId} selected: no strategy passed validation; using lowest-cost fallback ${selected.cost.totalCost.toFixed(2)}`;
+    ? `${selected.strategyId} selected by outcome priority (remaining=${selected.metrics.remainingViolations}, introducedErrors=${selected.metrics.introducedErrors}, patches=${selected.metrics.patchesCount}, files=${selected.metrics.filesChanged})`
+    : `${selected.strategyId} selected as deterministic fallback after all strategies failed validation`;
 
   return {
     evaluated,
