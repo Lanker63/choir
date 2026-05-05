@@ -102,6 +102,7 @@ Choir includes a deterministic orchestration layer that supports:
 - State → plan synthesis with stable ordering and deterministic ids
 - Cost-based plan scoring and pre-execution selection
 - Deterministic multi-strategy plan shaping before task execution
+- Deterministic adaptive strategy refinement from prior strategy outcomes
 - User-visible execution previews derived from simulation
 - Multi-plan optimization through global DAG merge and conflict-aware batching
 - Parallel-safe scheduling by dependency layer
@@ -171,6 +172,32 @@ Execution rules:
   - per-strategy outcome metrics/success
   - selected strategy id
   - deterministic decision reason
+
+### Adaptive Strategy Generation (Deterministic)
+
+After baseline strategy evaluation, Conductor can run bounded adaptive refinement iterations.
+
+Adaptive rules:
+
+- No LLM usage, no randomness, no probabilistic learning
+- Failure patterns are extracted deterministically from evaluated outcomes
+- Rule-based mutations are applied from a fixed mutation registry
+- Adaptive strategy ids are deterministic hashes of mutation inputs
+- Strategy pool size and iteration count are capped to avoid unbounded growth
+
+Stop conditions:
+
+- Selected strategy is good enough (`success` and `remainingViolations === 0`)
+- No new adaptive strategies are generated
+- Maximum adaptive iterations reached
+
+Adaptive trace includes:
+
+- iteration count
+- strategies evaluated
+- mutations applied
+- selected strategy id
+- deterministic decision log
 
 ### Execution Preview and Approval Gate
 
@@ -283,6 +310,7 @@ Derived system state is written to `.choir/state.json`, including:
 - AST and symbol/dependency metadata
 - diagnostics and metrics
 - execution runtime state (task status, task results, history, preview approvals)
+- strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
 
 `state.json` is derived and reproducible from workspace + control plane.
 

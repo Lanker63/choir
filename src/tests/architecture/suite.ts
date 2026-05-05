@@ -21,14 +21,18 @@ import {
   selectPlanSet,
 } from "../../core/costPlanner.js";
 import {
+  MAX_ADAPTIVE_ITERATIONS,
   MAX_STRATEGIES,
   STRATEGIES,
   StrategyOutcome,
+  adaptiveStrategySelection,
+  analyzeOutcome,
   buildStrategyTrace,
   evaluateStrategies,
   groupedStrategy,
   layeredStrategy,
   aggressiveStrategy,
+  refineStrategies,
   selectBestOutcome,
 } from "../../core/strategyPlanner.js";
 import {
@@ -1031,6 +1035,134 @@ const pass4: TestPass = {
         const hashB = hashPreview(preview);
         assert.strictEqual(hashA, hashB);
         assert.strictEqual(hashA.length, 64);
+      },
+    },
+    {
+      id: "4.21",
+      name: "adaptive refinement deterministically generates bounded strategies from failure patterns",
+      run: async () => {
+        const state = createEmptyStatePlane();
+
+        const basePlan = makePlan("plan-adaptive-refine", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor-a", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts", "src/b.ts"] }),
+          makeTask("t-refactor-b", "refactor", { dependsOn: ["t-analysis"], files: ["src/c.ts", "src/d.ts"] }),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor-a", "t-refactor-b"] }),
+        ]);
+
+        const aggressiveFailure: StrategyOutcome = {
+          strategyId: "s-aggressive",
+          strategyType: "aggressive",
+          plan: basePlan,
+          patches: [],
+          diagnostics: [],
+          validation: {
+            passed: false,
+            diagnostics: [],
+            conflicts: [],
+            invariantChecks: [],
+            errors: ["too broad"],
+          },
+          metrics: {
+            filesChanged: 12,
+            patchesCount: 40,
+            remainingViolations: 2,
+            introducedErrors: 1,
+          },
+          success: false,
+          fileChanges: [],
+          previewHash: "",
+        };
+
+        const groupedFailure: StrategyOutcome = {
+          strategyId: "s-grouped",
+          strategyType: "grouped",
+          plan: basePlan,
+          patches: [],
+          diagnostics: [],
+          validation: {
+            passed: false,
+            diagnostics: [],
+            conflicts: [],
+            invariantChecks: [],
+            errors: ["validation failed"],
+          },
+          metrics: {
+            filesChanged: 3,
+            patchesCount: 6,
+            remainingViolations: 1,
+            introducedErrors: 0,
+          },
+          success: false,
+          fileChanges: [],
+          previewHash: "",
+        };
+
+        const patterns = analyzeOutcome(aggressiveFailure);
+        assert.ok(patterns.some((pattern) => pattern.type === "too-many-patches"));
+        assert.ok(patterns.some((pattern) => pattern.type === "too-many-files"));
+        assert.ok(patterns.some((pattern) => pattern.type === "validation-failure"));
+
+        const first = refineStrategies([aggressiveFailure, groupedFailure], state, {
+          existingStrategies: STRATEGIES,
+        });
+        const second = refineStrategies([aggressiveFailure, groupedFailure], state, {
+          existingStrategies: STRATEGIES,
+        });
+
+        const firstIds = first.strategies.map((strategy) => strategy.id);
+        const secondIds = second.strategies.map((strategy) => strategy.id);
+
+        assert.ok(firstIds.length > 0);
+        assert.deepStrictEqual(firstIds, secondIds);
+        assert.strictEqual(new Set(firstIds).size, firstIds.length);
+        assert.ok(first.mutationsApplied <= 6);
+      },
+    },
+    {
+      id: "4.22",
+      name: "adaptive strategy selection is deterministic and bounded by iteration limits",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-adaptive-1",
+            ruleId: "rule-adaptive",
+            message: "adaptive violation",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/adaptive.ts", 1, 0, 1, 1),
+            traceId: "trace-adaptive-1",
+          },
+        ];
+
+        const basePlan = makePlan("plan-adaptive-loop", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor-a", "refactor", { dependsOn: ["t-analysis"], files: ["src/adaptive-a.ts"] }),
+          makeTask("t-refactor-b", "refactor", { dependsOn: ["t-analysis"], files: ["src/adaptive-b.ts"] }),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor-a", "t-refactor-b"] }),
+        ]);
+
+        const first = await adaptiveStrategySelection(basePlan, state, {
+          controlPlane: makeControlPlane(),
+          root: repoRoot,
+        });
+        const second = await adaptiveStrategySelection(basePlan, state, {
+          controlPlane: makeControlPlane(),
+          root: repoRoot,
+        });
+
+        assert.ok(first.outcomes.length >= MAX_STRATEGIES);
+        assert.ok(first.adaptiveTrace.iterations >= 1);
+        assert.ok(first.adaptiveTrace.iterations <= MAX_ADAPTIVE_ITERATIONS);
+        assert.ok(first.adaptiveTrace.strategiesEvaluated >= first.outcomes.length);
+        assert.ok(first.history.length > 0);
+
+        assert.strictEqual(first.selected.strategyId, second.selected.strategyId);
+        assert.deepStrictEqual(
+          first.outcomes.map((outcome) => outcome.strategyId),
+          second.outcomes.map((outcome) => outcome.strategyId)
+        );
       },
     },
     {

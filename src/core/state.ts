@@ -38,6 +38,33 @@ export type ExecutionState = {
   lastPreview?: PreviewApproval;
 };
 
+export type StrategyHistoryMetrics = {
+  filesChanged: number;
+  patchesCount: number;
+  remainingViolations: number;
+  introducedErrors: number;
+};
+
+export type FailurePatternRecord = {
+  type:
+    | "validation-failure"
+    | "high-remaining-violations"
+    | "too-many-patches"
+    | "too-many-files"
+    | "conflict-heavy";
+  strategyId: string;
+  metrics: StrategyHistoryMetrics;
+  details?: string;
+};
+
+export type StrategyHistory = {
+  planId?: string;
+  strategyId: string;
+  strategyType?: string;
+  patterns: FailurePatternRecord[];
+  outcomeMetrics: StrategyHistoryMetrics;
+};
+
 export type StatePlane = {
   astIndex: Record<string, AST>;
   symbolGraph: SymbolGraph;
@@ -45,7 +72,10 @@ export type StatePlane = {
   metrics: Record<string, number>;
   dependencyGraph: Graph;
   execution: ExecutionState;
+  strategyHistory: StrategyHistory[];
 };
+
+const MAX_STRATEGY_HISTORY = 256;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -113,6 +143,145 @@ function sortViolations(violations: Diagnostic[]): Diagnostic[] {
     if (a.ruleId !== b.ruleId) return a.ruleId.localeCompare(b.ruleId);
     return a.message.localeCompare(b.message);
   });
+}
+
+function parseStrategyMetrics(value: unknown): StrategyHistoryMetrics {
+  const record = isRecord(value) ? value : {};
+  return {
+    filesChanged: typeof record.filesChanged === "number" && Number.isFinite(record.filesChanged) ? record.filesChanged : 0,
+    patchesCount: typeof record.patchesCount === "number" && Number.isFinite(record.patchesCount) ? record.patchesCount : 0,
+    remainingViolations: typeof record.remainingViolations === "number" && Number.isFinite(record.remainingViolations)
+      ? record.remainingViolations
+      : Number.MAX_SAFE_INTEGER,
+    introducedErrors: typeof record.introducedErrors === "number" && Number.isFinite(record.introducedErrors)
+      ? record.introducedErrors
+      : Number.MAX_SAFE_INTEGER,
+  };
+}
+
+function failurePatternRank(type: FailurePatternRecord["type"]): number {
+  if (type === "validation-failure") return 0;
+  if (type === "high-remaining-violations") return 1;
+  if (type === "conflict-heavy") return 2;
+  if (type === "too-many-patches") return 3;
+  return 4;
+}
+
+function sortFailurePatterns(patterns: FailurePatternRecord[]): FailurePatternRecord[] {
+  return [...patterns].sort((left, right) =>
+    failurePatternRank(left.type) - failurePatternRank(right.type)
+    || left.strategyId.localeCompare(right.strategyId)
+    || left.metrics.remainingViolations - right.metrics.remainingViolations
+    || left.metrics.introducedErrors - right.metrics.introducedErrors
+    || left.metrics.patchesCount - right.metrics.patchesCount
+    || left.metrics.filesChanged - right.metrics.filesChanged
+    || (left.details ?? "").localeCompare(right.details ?? "")
+  );
+}
+
+function parseFailurePatternRecord(value: unknown): FailurePatternRecord | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const type = value.type;
+  const strategyId = typeof value.strategyId === "string" ? value.strategyId.trim() : "";
+  if (
+    (type !== "validation-failure"
+      && type !== "high-remaining-violations"
+      && type !== "too-many-patches"
+      && type !== "too-many-files"
+      && type !== "conflict-heavy")
+    || strategyId.length === 0
+  ) {
+    return null;
+  }
+
+  const details = typeof value.details === "string" && value.details.trim().length > 0
+    ? value.details
+    : undefined;
+
+  return {
+    type,
+    strategyId,
+    metrics: parseStrategyMetrics(value.metrics),
+    ...(details ? { details } : {}),
+  };
+}
+
+function parseStrategyHistory(value: unknown): StrategyHistory[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const parsed = value.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const strategyId = typeof entry.strategyId === "string" ? entry.strategyId.trim() : "";
+    if (strategyId.length === 0) {
+      return [];
+    }
+
+    const planId = typeof entry.planId === "string" && entry.planId.trim().length > 0 ? entry.planId : undefined;
+    const strategyType = typeof entry.strategyType === "string" && entry.strategyType.trim().length > 0
+      ? entry.strategyType
+      : undefined;
+    const patterns = Array.isArray(entry.patterns)
+      ? entry.patterns
+        .map((pattern) => parseFailurePatternRecord(pattern))
+        .filter((pattern): pattern is FailurePatternRecord => pattern !== null)
+      : [];
+
+    return [{
+      ...(planId ? { planId } : {}),
+      strategyId,
+      ...(strategyType ? { strategyType } : {}),
+      patterns: sortFailurePatterns(patterns),
+      outcomeMetrics: parseStrategyMetrics(entry.outcomeMetrics),
+    } satisfies StrategyHistory];
+  });
+
+  return materializeStrategyHistory(parsed);
+}
+
+function strategyHistoryKey(entry: StrategyHistory): string {
+  return JSON.stringify({
+    planId: entry.planId ?? "",
+    strategyId: entry.strategyId,
+    strategyType: entry.strategyType ?? "",
+    patterns: sortFailurePatterns(entry.patterns),
+    outcomeMetrics: entry.outcomeMetrics,
+  });
+}
+
+function materializeStrategyHistory(entries: StrategyHistory[]): StrategyHistory[] {
+  const byKey = new Map<string, StrategyHistory>();
+
+  for (const entry of entries) {
+    const normalized: StrategyHistory = {
+      ...(entry.planId ? { planId: entry.planId } : {}),
+      strategyId: entry.strategyId,
+      ...(entry.strategyType ? { strategyType: entry.strategyType } : {}),
+      patterns: sortFailurePatterns(entry.patterns),
+      outcomeMetrics: parseStrategyMetrics(entry.outcomeMetrics),
+    };
+
+    const key = strategyHistoryKey(normalized);
+    if (!byKey.has(key)) {
+      byKey.set(key, normalized);
+    }
+  }
+
+  return [...byKey.values()]
+    .sort((left, right) =>
+      (left.planId ?? "").localeCompare(right.planId ?? "")
+      || left.strategyId.localeCompare(right.strategyId)
+      || (left.strategyType ?? "").localeCompare(right.strategyType ?? "")
+      || JSON.stringify(left.outcomeMetrics).localeCompare(JSON.stringify(right.outcomeMetrics))
+    )
+    .slice(0, MAX_STRATEGY_HISTORY);
 }
 
 export function createEmptyExecutionState(): ExecutionState {
@@ -285,6 +454,7 @@ export function createEmptyStatePlane(): StatePlane {
     metrics: {},
     dependencyGraph: {},
     execution: createEmptyExecutionState(),
+    strategyHistory: [],
   };
 }
 
@@ -306,6 +476,7 @@ export function readStatePlane(root: string): StatePlane | null {
       metrics: parseMetrics(record.metrics),
       dependencyGraph: parseGraph(record.dependencyGraph),
       execution: materializeExecutionState(isRecord(record.execution) ? record.execution as Partial<ExecutionState> : undefined),
+      strategyHistory: parseStrategyHistory(record.strategyHistory),
     });
   } catch {
     return null;
@@ -342,6 +513,24 @@ export function materializeStatePlane(input: StatePlane): StatePlane {
     ),
     dependencyGraph: sortRecordValues(input.dependencyGraph),
     execution: materializeExecutionState(input.execution),
+    strategyHistory: materializeStrategyHistory(input.strategyHistory),
+  };
+}
+
+export function appendStrategyHistory(
+  root: string,
+  entries: StrategyHistory[]
+): { statePath: string; state: StatePlane } {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const nextState = materializeStatePlane({
+    ...current,
+    strategyHistory: [...current.strategyHistory, ...entries],
+  });
+  const statePath = persistStatePlane(root, nextState);
+
+  return {
+    statePath,
+    state: nextState,
   };
 }
 

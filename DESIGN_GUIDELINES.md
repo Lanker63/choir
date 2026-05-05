@@ -36,6 +36,7 @@ Choir is a VS Code extension for deterministic, policy-driven workspace governan
   - Diagnostics
   - Metrics
   - Execution runtime state (task status, task results, history, preview approvals)
+  - Strategy outcome history used for deterministic adaptive refinement (`strategyHistory`)
 - Required properties:
   - Fully reproducible from workspace + control plane
   - Not user-authored
@@ -183,6 +184,45 @@ After cost-based plan-set selection, each selected plan enters a deterministic s
 - Stable ordering of strategies and comparisons
 - Same inputs always produce same selected strategy
 
+## Adaptive refinement (deterministic)
+
+After the baseline strategy pass, Choir may run deterministic adaptive refinement iterations.
+
+### Adaptive loop contract
+
+1. Analyze evaluated outcomes into deterministic failure patterns.
+2. Apply rule-based mutations from a fixed registry.
+3. Re-evaluate merged strategy pool.
+4. Stop when:
+  - selected outcome is good enough (`success` and `remainingViolations === 0`), or
+  - no new strategies are produced, or
+  - max adaptive iterations is reached.
+
+### Failure patterns
+
+- `validation-failure`
+- `high-remaining-violations`
+- `too-many-patches`
+- `too-many-files`
+- `conflict-heavy`
+
+### Mutation constraints
+
+- Mutations are deterministic functions over `(plan, state)`.
+- Mutation registry and ordering are fixed.
+- Adaptive strategy ids are deterministic hashes of source strategy + pattern + mutation + normalized plan shape.
+- Strategy pool growth is capped to prevent unbounded expansion.
+
+### Adaptive trace
+
+Adaptive traces must include:
+
+- iteration count
+- number of strategies evaluated
+- number of mutations applied
+- selected strategy id
+- deterministic decision log
+
 ## Cost-planning hard constraints
 
 - No randomness
@@ -321,6 +361,7 @@ For identical inputs, Choir must produce identical:
 - Plan ids and task ordering
 - Plan scores and selected plan sets
 - Strategy variants and selected strategy ids
+- Adaptive refinement path (generated adaptive strategy ids, iteration decisions)
 - Preview file changes and preview hash
 - Execution graph/layers/batches
 - Conflict decisions
@@ -333,6 +374,7 @@ Non-negotiable safeguards:
 3. Control plane and state plane authority boundaries remain strict
 4. Scheduler decisions are stable and auditable
 5. Execution is blocked unless preview hash is explicitly approved and revalidated
+6. Adaptive strategy feedback is persisted only in `.choir/state.json` (`strategyHistory`)
 
 ---
 

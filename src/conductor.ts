@@ -8,15 +8,14 @@ import {
 } from "./core/costPlanner.js";
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
 import {
-  MAX_STRATEGIES,
   StrategyOutcome,
   StrategyTrace,
+  adaptiveStrategySelection,
   buildStrategyTrace,
-  evaluateStrategies,
-  selectBestOutcome,
 } from "./core/strategyPlanner.js";
 import { FileChange } from "./core/executionPreview.js";
 import {
+  appendStrategyHistory,
   createEmptyStatePlane,
   ExecutionState,
   readStatePlane,
@@ -463,19 +462,23 @@ export async function executeSelectedPlansWithCost(
   const planned: SelectedStrategyPlan[] = [];
 
   for (const basePlan of sortedPlans(selectedPlans)) {
-    const strategyResults = await evaluateStrategies(basePlan, state, {
+    const adaptiveSelection = await adaptiveStrategySelection(basePlan, state, {
       controlPlane: control,
       root: options.root,
-      maxStrategies: MAX_STRATEGIES,
     });
 
-    const selectedStrategy = selectBestOutcome(strategyResults);
-    const strategyTrace = buildStrategyTrace(strategyResults, selectedStrategy);
+    const strategyTrace = buildStrategyTrace(
+      adaptiveSelection.outcomes,
+      adaptiveSelection.selected,
+      adaptiveSelection.adaptiveTrace
+    );
+
+    appendStrategyHistory(options.root, adaptiveSelection.history);
 
     planned.push({
       basePlan,
-      selected: selectedStrategy,
-      outcomes: strategyResults,
+      selected: adaptiveSelection.selected,
+      outcomes: adaptiveSelection.outcomes,
       trace: strategyTrace,
     });
   }
@@ -525,19 +528,24 @@ export async function generateSelectedPlanPreview(
     throw new Error("No approved plans available for preview.");
   }
 
-  const outcomes = await evaluateStrategies(basePlan, state, {
+  const adaptiveSelection = await adaptiveStrategySelection(basePlan, state, {
     controlPlane: control,
     root: options.root,
-    maxStrategies: MAX_STRATEGIES,
   });
-  const selectedOutcome = selectBestOutcome(outcomes);
-  const strategyTrace = buildStrategyTrace(outcomes, selectedOutcome);
+  const selectedOutcome = adaptiveSelection.selected;
+  const strategyTrace = buildStrategyTrace(
+    adaptiveSelection.outcomes,
+    selectedOutcome,
+    adaptiveSelection.adaptiveTrace
+  );
+
+  appendStrategyHistory(options.root, adaptiveSelection.history);
 
   const preview: MultiStrategyPreview = {
     previewId: selectedOutcome.previewHash,
     hash: selectedOutcome.previewHash,
     planId: basePlan.id,
-    strategies: [...outcomes]
+    strategies: [...adaptiveSelection.outcomes]
       .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
       .map((outcome) => ({
         strategyId: outcome.strategyId,

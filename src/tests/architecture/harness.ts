@@ -227,6 +227,18 @@ function canonicalizeState(root: string, state: StatePlane): StatePlane {
       taskResults: { ...state.execution.taskResults },
       history: state.execution.history.map((event) => ({ ...event })),
     },
+    strategyHistory: state.strategyHistory.map((entry) => ({
+      ...(entry.planId ? { planId: entry.planId } : {}),
+      strategyId: entry.strategyId,
+      ...(entry.strategyType ? { strategyType: entry.strategyType } : {}),
+      patterns: entry.patterns.map((pattern) => ({
+        type: pattern.type,
+        strategyId: pattern.strategyId,
+        metrics: { ...pattern.metrics },
+        ...(pattern.details ? { details: pattern.details } : {}),
+      })),
+      outcomeMetrics: { ...entry.outcomeMetrics },
+    })),
   };
 }
 
