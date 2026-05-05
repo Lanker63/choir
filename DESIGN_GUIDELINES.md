@@ -217,14 +217,35 @@ Policy gate contract:
 
 - Proposed YAML changes are diffed before write (`YAMLDiff[]`).
 - Policy decision model is context-aware: `decision = f(yamlDiff, role, environment)`.
-- Policy evaluation is deterministic and uses declarative `policy.approvalRules` with scoped role/environment matching.
+- Policy source of truth is `.choir/policies.dsl`.
+- Runtime policy flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Policy Engine`.
+- Policy evaluation is deterministic and uses compiled declarative rules with scoped role/environment matching.
 - Role context is trusted and derived by system role mapping (not user-provided command args).
 - Environment context is trusted runtime detection (`CI`, `NODE_ENV`, optional deployment env) and must not be user-spoofable through DSL input.
 - Resolution precedence is deterministic and strict: `deny > require-approval > allow`.
 - `deny` blocks writes immediately.
 - `require-approval` blocks writes until exact diff hash is approved.
 - Approval records are stored in state and tied to exact diff hash.
-- Policy trace must include role, environment, matched rules, and final decision for auditability.
+- Policy trace must include role, environment, matched rules, policy DSL traces, and final decision for auditability.
+
+Policy DSL grammar contract:
+
+```bnf
+<policy> ::= "policy" <identifier> "{" <rule>* "}"
+
+<rule> ::= "when" <condition> "then" <effect>
+
+<condition> ::= <clause> ("and" <clause>)*
+
+<clause> ::= "diff.path" "=" <string>
+           | "diff.operation" "=" ("add" | "remove" | "update")
+           | "role" "=" ("architect" | "analyst" | "conductor" | "enforcer")
+           | "environment" "=" ("local" | "ci" | "staging" | "production")
+           | "contains" <string>
+           | "count" ">" <number>
+
+<effect> ::= "allow" | "deny" | "require-approval"
+```
 
 ## Deterministic State → Plan Synthesis
 

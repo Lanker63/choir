@@ -52,10 +52,40 @@ function getWorkspaceRoot(): string | undefined {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
 }
 
+const DEFAULT_POLICIES_DSL = [
+    "# Choir Policy DSL",
+    "# Define policies using:",
+    "# policy <id> { when ... then allow|deny|require-approval }",
+    "",
+].join("\n");
+
 export function getChoirPath(): string | undefined {
     const root = getWorkspaceRoot();
     if (!root) return undefined;
     return path.join(root, ".choir");
+}
+
+export function getPoliciesDSLPath(): string | null {
+    const choirPath = getChoirPath();
+    if (!choirPath) {
+        return null;
+    }
+
+    return path.join(choirPath, "policies.dsl");
+}
+
+function ensurePoliciesDSLFile(): void {
+    const policiesPath = getPoliciesDSLPath();
+    if (!policiesPath) {
+        return;
+    }
+
+    if (fs.existsSync(policiesPath)) {
+        return;
+    }
+
+    fs.mkdirSync(path.dirname(policiesPath), { recursive: true });
+    fs.writeFileSync(policiesPath, DEFAULT_POLICIES_DSL, "utf-8");
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -101,6 +131,8 @@ export function getControlPlanePath(): string | null {
 export function readControlPlane(): ControlPlane | null {
     const controlPath = getControlPlanePath();
     if (!controlPath) return null;
+
+    ensurePoliciesDSLFile();
 
     if (!fs.existsSync(controlPath)) {
         const initial = createDefaultControlPlane();

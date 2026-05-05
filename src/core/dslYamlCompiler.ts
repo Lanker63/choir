@@ -30,9 +30,9 @@ import {
   detectEnvironment,
   evaluatePolicies,
   hashDiff,
-  toPolicySet,
   validateRole,
 } from "./policyEngine.js";
+import { loadPolicies } from "./policyDsl.js";
 
 export type ChoirConfig = {
   version: string;
@@ -126,6 +126,19 @@ function inferRoleFromAST(ast: AST): Role {
   }
 
   return "analyst";
+}
+
+function inferPolicyRoot(controlPath: string, workspaceRoot?: string): string {
+  if (workspaceRoot) {
+    return workspaceRoot;
+  }
+
+  const choirDir = path.dirname(controlPath);
+  if (path.basename(choirDir) === ".choir") {
+    return path.dirname(choirDir);
+  }
+
+  return path.dirname(controlPath);
 }
 
 function sortedUnique(values: string[]): string[] {
@@ -467,6 +480,11 @@ export function compileDSLAndWrite(
     requiresApproval: boolean;
     denied: boolean;
     decision: "allow" | "require-approval" | "deny";
+    policyDslTrace: Array<{
+      policyId: string;
+      matched: boolean;
+      effect: "allow" | "require-approval" | "deny";
+    }>;
   };
 } {
   const result = compileDSL(input, controlPlane, options);
@@ -498,6 +516,7 @@ export function compileDSLAndWrite(
         requiresApproval: false,
         denied: false,
         decision: "allow",
+        policyDslTrace: [],
       },
     };
   }
@@ -507,7 +526,8 @@ export function compileDSLAndWrite(
   const diffs = computeDiff(beforeConfig, afterConfig);
   const diffHash = hashDiff(diffs);
 
-  const policySet = toPolicySet(controlPlane.policy.approvalRules ?? []);
+  const policyRoot = inferPolicyRoot(controlPath, options?.workspaceRoot);
+  const policySet = loadPolicies(policyRoot);
   const policyEvaluation = evaluatePolicies(diffs, policySet, ctx);
 
   if (!policyEvaluation.result.allowed) {

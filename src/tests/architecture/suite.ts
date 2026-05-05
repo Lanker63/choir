@@ -83,6 +83,11 @@ import {
   validateRole,
 } from "../../core/policyEngine.js";
 import {
+  compilePolicies,
+  loadPolicies,
+  parsePolicyDSL,
+} from "../../core/policyDsl.js";
+import {
   formatDSL,
   generateDSL,
   validateRoundTrip,
@@ -216,6 +221,12 @@ async function withTemporaryEnv(
       }
     }
   }
+}
+
+function writePoliciesDSL(root: string, content: string): void {
+  const choirRoot = path.join(root, ".choir");
+  fs.mkdirSync(choirRoot, { recursive: true });
+  fs.writeFileSync(path.join(choirRoot, "policies.dsl"), content, "utf-8");
 }
 
 async function assertPlanGoldenForFixture(fixtureName: string, goldenFileName: string): Promise<void> {
@@ -762,22 +773,12 @@ const pass2: TestPass = {
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
-        control.policy.approvalRules = [
-          {
-            id: "deny-db-constraint",
-            match: {
-              path: "intent.constraints",
-              operation: "add",
-            },
-            condition: {
-              contains: "db",
-            },
-            effect: {
-              type: "deny",
-              message: "db constraints are denied",
-            },
-          },
-        ];
+        writePoliciesDSL(root, [
+          "policy deny-db-constraint {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then deny",
+          "}",
+          "",
+        ].join("\n"));
 
         const result = compileDSLAndWrite(
           'choir define constraint "db connection"',
@@ -798,22 +799,12 @@ const pass2: TestPass = {
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
-        control.policy.approvalRules = [
-          {
-            id: "approve-db-constraint",
-            match: {
-              path: "intent.constraints",
-              operation: "add",
-            },
-            condition: {
-              contains: "db",
-            },
-            effect: {
-              type: "require-approval",
-              message: "db constraints require approval",
-            },
-          },
-        ];
+        writePoliciesDSL(root, [
+          "policy approve-db-constraint {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then require-approval",
+          "}",
+          "",
+        ].join("\n"));
 
         const command = 'choir define constraint "db connection"';
         const first = compileDSLAndWrite(command, control, controlPath, { workspaceRoot: root });
@@ -1169,14 +1160,12 @@ const pass2: TestPass = {
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
-        control.policy.approvalRules = [
-          {
-            id: "deny-plan-prod",
-            scope: { environments: ["production"] },
-            match: { path: "execution.plans", operation: "add" },
-            effect: { type: "deny", message: "no plan writes in production" },
-          },
-        ];
+        writePoliciesDSL(root, [
+          "policy deny-plan-prod {",
+          "  when diff.path = \"execution.plans\" and environment = production then deny",
+          "}",
+          "",
+        ].join("\n"));
 
         await withTemporaryEnv({ NODE_ENV: "production", CI: undefined, CHOIR_ENVIRONMENT: undefined }, () => {
           assert.strictEqual(detectEnvironment(), "production");
@@ -1204,6 +1193,66 @@ const pass2: TestPass = {
           () => validateRole({ role: "enforcer", environment: "local" }, "plan"),
           /Role violation/
         );
+      },
+    },
+    {
+      id: "2.37",
+      name: "policy dsl parses and compiles deterministically",
+      run: async () => {
+        const text = [
+          "policy restrict-db-access {",
+          "  when diff.path = \"intent.constraints\" and diff.operation = add and contains \"db\" then require-approval",
+          "}",
+          "",
+          "policy analyst-readonly {",
+          "  when role = analyst and diff.operation = add then deny",
+          "}",
+          "",
+        ].join("\n");
+
+        const astA = parsePolicyDSL(text);
+        const astB = parsePolicyDSL(text);
+        assert.deepStrictEqual(astA, astB);
+
+        const compiledA = compilePolicies(astA);
+        const compiledB = compilePolicies(astB);
+        assert.deepStrictEqual(compiledA, compiledB);
+        assert.strictEqual(compiledA.rules.length, 2);
+        assert.strictEqual(compiledA.rules[0].policyId, "analyst-readonly");
+        assert.strictEqual(compiledA.rules[1].policyId, "restrict-db-access");
+      },
+    },
+    {
+      id: "2.38",
+      name: "policy dsl rejects invalid role during parse",
+      run: async () => {
+        const invalid = [
+          "policy bad {",
+          "  when role = unknown and diff.operation = add then allow",
+          "}",
+          "",
+        ].join("\n");
+
+        assert.throws(() => parsePolicyDSL(invalid), /Invalid role/);
+      },
+    },
+    {
+      id: "2.39",
+      name: "policy dsl loader rejects duplicate policy ids",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dsl-dup-"));
+        writePoliciesDSL(root, [
+          "policy dup {",
+          "  when diff.operation = add then allow",
+          "}",
+          "",
+          "policy dup {",
+          "  when diff.operation = remove then deny",
+          "}",
+          "",
+        ].join("\n"));
+
+        assert.throws(() => loadPolicies(root), /Duplicate policy id/);
       },
     },
   ],

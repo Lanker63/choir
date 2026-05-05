@@ -12,9 +12,10 @@ export type ExecutionContext = {
 
 export type PolicyRule = {
   id: string;
+  policyId?: string;
   match: {
-    path: string;
-    operation: "add" | "remove" | "update";
+    path?: string;
+    operation?: "add" | "remove" | "update";
   };
   scope?: {
     roles?: Role[];
@@ -58,6 +59,13 @@ export type PolicyTrace = {
   requiresApproval: boolean;
   denied: boolean;
   decision: "allow" | "require-approval" | "deny";
+  policyDslTrace: PolicyDSLTrace[];
+};
+
+export type PolicyDSLTrace = {
+  policyId: string;
+  matched: boolean;
+  effect: "allow" | "require-approval" | "deny";
 };
 
 export type PolicyAction = "modify-yaml" | "read-only" | "plan" | "preview" | "execute";
@@ -277,11 +285,11 @@ function matchesCondition(rule: PolicyRule, diff: YAMLDiff): boolean {
 }
 
 function matches(rule: PolicyRule, diff: YAMLDiff): boolean {
-  if (rule.match.operation !== diff.operation) {
+  if (rule.match.operation && rule.match.operation !== diff.operation) {
     return false;
   }
 
-  if (!matchesPath(rule.match.path, diff.path)) {
+  if (rule.match.path && !matchesPath(rule.match.path, diff.path)) {
     return false;
   }
 
@@ -303,6 +311,21 @@ export function evaluatePolicies(
     || operationRank(left.operation) - operationRank(right.operation)
   );
   const orderedRules = [...policies.rules].sort((left, right) => left.id.localeCompare(right.id));
+  const dslTraceByPolicy = new Map<string, PolicyDSLTrace>();
+
+  for (const rule of orderedRules) {
+    if (!rule.policyId) {
+      continue;
+    }
+
+    if (!dslTraceByPolicy.has(rule.policyId)) {
+      dslTraceByPolicy.set(rule.policyId, {
+        policyId: rule.policyId,
+        matched: false,
+        effect: rule.effect.type,
+      });
+    }
+  }
 
   for (const diff of orderedDiffs) {
     for (const rule of orderedRules) {
@@ -315,6 +338,13 @@ export function evaluatePolicies(
       }
 
       matchedRuleIds.add(rule.id);
+      if (rule.policyId) {
+        dslTraceByPolicy.set(rule.policyId, {
+          policyId: rule.policyId,
+          matched: true,
+          effect: rule.effect.type,
+        });
+      }
 
       if (rule.effect.type === "deny") {
         denyDetected = true;
@@ -350,6 +380,8 @@ export function evaluatePolicies(
       requiresApproval: decision === "require-approval",
       denied: decision === "deny",
       decision,
+      policyDslTrace: [...dslTraceByPolicy.values()]
+        .sort((left, right) => left.policyId.localeCompare(right.policyId)),
     },
   };
 }
@@ -371,8 +403,8 @@ export function toPolicySet(rules: ApprovalPolicyRule[]): PolicySet {
       .map((rule) => ({
         id: rule.id,
         match: {
-          path: rule.match.path,
-          operation: rule.match.operation,
+          ...(rule.match.path ? { path: rule.match.path } : {}),
+          ...(rule.match.operation ? { operation: rule.match.operation } : {}),
         },
         ...(rule.scope
           ? {
