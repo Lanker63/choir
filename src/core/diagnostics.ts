@@ -3,9 +3,7 @@ import {
   Diagnostic,
   DiagnosticCategory,
   DiagnosticSeverity,
-  LegacySeverity,
   SourceLocation,
-  normalizeDiagnosticSeverity,
 } from "./types.js";
 
 export function comparePositions(
@@ -70,10 +68,6 @@ export function severityFromTypeScriptCategory(category: ts.DiagnosticCategory):
   }
 
   return "error";
-}
-
-export function severityFromLegacy(value: LegacySeverity): DiagnosticSeverity {
-  return normalizeDiagnosticSeverity(value);
 }
 
 export function sourceLocationFromOffsets(

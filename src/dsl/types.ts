@@ -7,10 +7,8 @@ import { Fix } from "../fix/types.js";
 
 export const DSLSeverityValues = [
   "error",
-  "warn",
   "warning",
   "info",
-  "information",
   "hint",
 ] as const;
 

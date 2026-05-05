@@ -2,7 +2,7 @@ import ts from "typescript";
 import { DSLRule, ASTRule, RuleContext } from "./types.js";
 import { RuleRegistry } from "../rules/registry.js";
 import { ControlPlane } from "../schema.js";
-import { Diagnostic, normalizeDiagnosticSeverity } from "../core/types.js";
+import { Diagnostic } from "../core/types.js";
 import { makeDiagnosticId, sourceLocationFromOffsets } from "../core/diagnostics.js";
 import { visitDepthFirst } from "../ast/visitor.js";
 
@@ -150,7 +150,7 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
           id: makeDiagnosticId([rule.id, filePath, location.start.line, location.start.character, diagnosticIndex]),
           ruleId: rule.id,
           message,
-          severity: normalizeDiagnosticSeverity(rule.severity ?? "error"),
+          severity: rule.severity ?? "error",
           location,
           category: "AST",
           traceId: context.traceId,

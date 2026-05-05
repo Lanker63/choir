@@ -19,4 +19,4 @@ policy:
       constraint:
         type: forbid
       message: Console logging is forbidden
-      severity: warn
+      severity: warning

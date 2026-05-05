@@ -64,24 +64,17 @@ export type SchedulerTrace = {
   decisions: string[];
 };
 
-export type LegacySeverity = "error" | "warn" | "warning" | "info" | "information" | "hint";
-
-export function normalizeDiagnosticSeverity(severity: LegacySeverity): DiagnosticSeverity {
-  if (severity === "warn") {
-    return "warning";
-  }
-
-  if (severity === "information") {
-    return "info";
-  }
-
-  return severity;
-}
+export type TransactionTrace = {
+  transactionId: string;
+  batchId: string;
+  patchesProposed: number;
+  patchesApplied: number;
+  validationPassed: boolean;
+  rollbackReason?: string;
+  durationMs: number;
+};
 
 export interface EnforcementResult {
   verdict: "pass" | "fail" | "warn";
   diagnostics: Diagnostic[];
 }
-
-// Backward-compatible alias while consumers migrate from legacy terminology.
-export type Violation = Diagnostic;

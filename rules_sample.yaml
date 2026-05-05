@@ -28,4 +28,4 @@
       - validateRequest
 
   message: "All request handlers must call validateRequest"
-  severity: warn
+  severity: warning

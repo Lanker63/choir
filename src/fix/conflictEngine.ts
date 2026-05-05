@@ -92,11 +92,6 @@ const SEVERITY: Record<DiagnosticSeverity, number> = {
   hint: 1,
 };
 
-const FALLBACK_DIAGNOSTIC: Pick<Diagnostic, "category" | "severity"> = {
-  category: "pattern",
-  severity: "hint",
-};
-
 function normalizePair(a: string, b: string): FixPair {
   if (a.localeCompare(b) <= 0) {
     return { fixA: a, fixB: b };
@@ -247,31 +242,21 @@ export function score(fix: Fix, diagnostic: Diagnostic, controlPlane: ControlPla
 
 function scoreForFix(fix: Fix, diagnosticsById: Map<string, Diagnostic>, controlPlane: ControlPlane): number {
   if (fix.diagnosticIds.length === 0) {
-    return computeScoreFromCategorySeverity(
-      FALLBACK_DIAGNOSTIC.category,
-      FALLBACK_DIAGNOSTIC.severity,
-      fix,
-      controlPlane
-    );
+    throw new Error(`Fix ${fix.id} must declare at least one diagnosticId`);
   }
 
   let best = Number.NEGATIVE_INFINITY;
   for (const diagnosticId of fix.diagnosticIds) {
     const diagnostic = diagnosticsById.get(diagnosticId);
     if (!diagnostic) {
-      continue;
+      throw new Error(`Fix ${fix.id} references missing diagnostic ${diagnosticId}`);
     }
 
     best = Math.max(best, score(fix, diagnostic, controlPlane));
   }
 
   if (best === Number.NEGATIVE_INFINITY) {
-    return computeScoreFromCategorySeverity(
-      FALLBACK_DIAGNOSTIC.category,
-      FALLBACK_DIAGNOSTIC.severity,
-      fix,
-      controlPlane
-    );
+    throw new Error(`Fix ${fix.id} has no scoreable diagnostics`);
   }
 
   return best;

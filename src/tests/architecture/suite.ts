@@ -22,7 +22,9 @@ import {
   buildExecutionGraph,
   buildExecutionPlan,
   computeExecutionLayers,
+  createInMemoryTransactionFS,
   runExecutionPlan,
+  runExecutionPlanTransactionally,
 } from "../../core/scheduler.js";
 import { createEmptyStatePlane } from "../../core/state.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
@@ -717,6 +719,210 @@ const pass4: TestPass = {
 
         assert.strictEqual(planned.executionPlan.batches.length, 2);
         assert.ok(planned.executionPlan.batches.every((batch) => batch.workUnits.length === 1));
+      },
+    },
+    {
+      id: "4.11",
+      name: "transactional execution commits validated batches",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/example.ts"] })]),
+        ];
+        const { executionPlan } = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+        const txFs = createInMemoryTransactionFS({
+          files: {
+            "src/example.ts": "const value = 1;\n",
+          },
+          state: createEmptyStatePlane(),
+        });
+
+        const result = await runExecutionPlanTransactionally(executionPlan, {
+          fs: txFs,
+          controlPlane: makeControlPlane(),
+          enforcer: {
+            proposeFixes: async () => ({
+              fixes: [
+                {
+                  id: "fix-1",
+                  ruleId: "rule-a",
+                  title: "Fix literal",
+                  diagnosticIds: ["diag-1"],
+                  patches: [
+                    {
+                      type: "create-file",
+                      file: "src/example.ts",
+                      content: "const value = 2;\n",
+                    },
+                  ],
+                  traceId: "trace-1",
+                },
+              ],
+              diagnostics: [
+                {
+                  id: "diag-1",
+                  ruleId: "rule-a",
+                  message: "literal needs update",
+                  severity: "warning",
+                  category: "AST",
+                  location: testLocation("src/example.ts", 0, 0, 0, 1),
+                  traceId: "trace-1",
+                },
+              ],
+            }),
+          },
+          pipeline: {
+            run: async () => ({
+              diagnostics: [],
+              conflicts: [],
+            }),
+          },
+        });
+
+        const snapshot = txFs.snapshot();
+        assert.strictEqual(snapshot.files["src/example.ts"], "const value = 2;\n");
+        assert.strictEqual(result.transactions[0]?.status, "committed");
+        assert.strictEqual(result.traces[0]?.validationPassed, true);
+      },
+    },
+    {
+      id: "4.12",
+      name: "transactional execution rolls back on validation failure without writes",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/example.ts"] })]),
+        ];
+        const { executionPlan } = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+        const txFs = createInMemoryTransactionFS({
+          files: {
+            "src/example.ts": "const value = 1;\n",
+          },
+          state: createEmptyStatePlane(),
+        });
+
+        const result = await runExecutionPlanTransactionally(executionPlan, {
+          fs: txFs,
+          controlPlane: makeControlPlane(),
+          enforcer: {
+            proposeFixes: async () => ({
+              fixes: [
+                {
+                  id: "fix-1",
+                  ruleId: "rule-a",
+                  title: "Fix literal",
+                  diagnosticIds: ["diag-1"],
+                  patches: [
+                    {
+                      type: "create-file",
+                      file: "src/example.ts",
+                      content: "const value = 2;\n",
+                    },
+                  ],
+                  traceId: "trace-1",
+                },
+              ],
+              diagnostics: [
+                {
+                  id: "diag-1",
+                  ruleId: "rule-a",
+                  message: "literal needs update",
+                  severity: "warning",
+                  category: "AST",
+                  location: testLocation("src/example.ts", 0, 0, 0, 1),
+                  traceId: "trace-1",
+                },
+              ],
+            }),
+          },
+          pipeline: {
+            run: async () => ({
+              diagnostics: [
+                {
+                  id: "diag-1",
+                  ruleId: "rule-a",
+                  message: "new blocking error",
+                  severity: "error",
+                  category: "AST",
+                  location: testLocation("src/example.ts", 0, 0, 0, 1),
+                  traceId: "trace-1",
+                },
+              ],
+              conflicts: [],
+            }),
+          },
+        });
+
+        const snapshot = txFs.snapshot();
+        assert.strictEqual(snapshot.files["src/example.ts"], "const value = 1;\n");
+        assert.strictEqual(result.transactions[0]?.status, "rolled-back");
+        assert.strictEqual(result.traces[0]?.validationPassed, false);
+        assert.strictEqual(txFs.journal.filter((entry) => entry.kind === "atomic-write").length, 0);
+      },
+    },
+    {
+      id: "4.13",
+      name: "transactional execution rejects non-idempotent patch sets",
+      run: async () => {
+        const plans: Plan[] = [
+          makePlan("plan-a", [makeTask("t-refactor", "refactor", { files: ["src/example.ts"] })]),
+        ];
+        const { executionPlan } = buildExecutionPlan(plans, { smallTaskMergeThreshold: 0 });
+        const txFs = createInMemoryTransactionFS({
+          files: {
+            "src/example.ts": "const value = 1;\n",
+          },
+          state: createEmptyStatePlane(),
+        });
+
+        const result = await runExecutionPlanTransactionally(executionPlan, {
+          fs: txFs,
+          controlPlane: makeControlPlane(),
+          enforcer: {
+            proposeFixes: async () => ({
+              fixes: [
+                {
+                  id: "fix-1",
+                  ruleId: "rule-a",
+                  title: "Insert header",
+                  diagnosticIds: ["diag-1"],
+                  patches: [
+                    {
+                      type: "insert",
+                      location: testLocation("src/example.ts", 0, 0, 0, 0),
+                      text: "// header\n",
+                      position: "before",
+                    },
+                  ],
+                  traceId: "trace-1",
+                },
+              ],
+              diagnostics: [
+                {
+                  id: "diag-1",
+                  ruleId: "rule-a",
+                  message: "header is missing",
+                  severity: "warning",
+                  category: "AST",
+                  location: testLocation("src/example.ts", 0, 0, 0, 1),
+                  traceId: "trace-1",
+                },
+              ],
+            }),
+          },
+          pipeline: {
+            run: async () => ({
+              diagnostics: [],
+              conflicts: [],
+            }),
+          },
+        });
+
+        const tx = result.transactions[0];
+        const idempotency = tx?.validation.invariantChecks.find((check) => check.name === "idempotent");
+
+        assert.strictEqual(tx?.status, "rolled-back");
+        assert.ok(idempotency);
+        assert.strictEqual(idempotency?.passed, false);
+        assert.strictEqual(txFs.snapshot().files["src/example.ts"], "const value = 1;\n");
       },
     },
   ],

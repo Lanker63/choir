@@ -222,8 +222,6 @@ export type PipelineResult = {
   conflictTrace: ConflictTrace;
   statePath: string;
   trace: Trace;
-  // Legacy compatibility for existing callers and tests.
-  violations: Diagnostic[];
 };
 
 export async function runPipeline(input: PipelineInput): Promise<PipelineResult> {
@@ -332,7 +330,6 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
     conflictTrace: conflictResult.trace,
     statePath,
     trace,
-    violations: diagnostics,
   };
 }
 
