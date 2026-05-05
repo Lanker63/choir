@@ -359,7 +359,7 @@ Grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -394,6 +394,8 @@ Grammar:
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
+
+<abstraction> ::= <identifier> [<args>]
 
 <args> ::= <key-value> ("," <key-value>)*
 
@@ -430,7 +432,7 @@ Choir ships first-class VS Code language support for the DSL.
   - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
   - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
 - Snippets:
-  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `ci run`, `audit log`, `audit report`, `audit query`, and `macro` commands.
+  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `ci run`, `abstraction run`, `audit log`, `audit report`, `audit query`, and `macro` commands.
 - Editor trace:
   - Command Palette: `Choir: Show DSL Editor Trace`
   - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
@@ -480,6 +482,7 @@ Supported commands:
 - `choir library update <library>`
 - `choir library lock`
 - `choir ci run`
+- `choir <abstraction-id> [key="value", ...]`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -513,7 +516,7 @@ Mutation behavior:
 
 - `choir define ...`: mutates intent fields in YAML via deterministic upsert
 - `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
-- `choir analyze|preview|execute|status|ci|audit|import|library ...`: accepted by grammar, non-mutating in YAML compiler mode
+- `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
 
 YAML -> DSL projection behavior:
 
@@ -670,6 +673,66 @@ jobs:
 
 ---
 
+## Higher-Level Abstractions
+
+Choir supports intent-level abstractions that compile into deterministic macro + DSL steps while preserving governance:
+
+- `Abstraction -> Macro Composition -> DSL -> YAML -> Policy -> Execution -> Audit`
+
+Storage:
+
+- `.choir/abstractions.yaml`
+
+Model:
+
+- `id`
+- `version` (semver)
+- `description`
+- optional `parameters[]`
+- `expandsTo[]` (ordered commands)
+
+Example:
+
+```yaml
+abstractions:
+  - id: bootstrap-service
+    version: 1.0.0
+    description: "Initialize a service architecture"
+    parameters:
+      - name: name
+        required: true
+    expandsTo:
+      - choir macro architecture.create-service name="{{name}}"
+      - choir macro core.enforce-service-boundaries
+      - choir plan
+      - choir preview
+```
+
+Execution guarantees:
+
+- Expanded commands are executed in order.
+- Every expanded command goes through existing DSL compile and policy gates.
+- Abstractions can call macros and other abstractions with recursion depth limits.
+- Non-execution system commands are rejected inside abstractions.
+- Same abstraction id + args + input state produce deterministic output.
+
+Chat commands:
+
+- `@choir list abstractions`
+- `@choir describe <abstraction-id>`
+- `@choir run <abstraction-id>`
+
+DSL command example:
+
+- `choir bootstrap-service name="user-service"`
+
+Built-in abstractions:
+
+- `enforce-hexagonal-architecture`
+- `migrate-to-service-layer`
+
+---
+
 ## Macro Libraries
 
 Choir supports local, versioned macro libraries for cross-repository reuse.
@@ -729,6 +792,7 @@ Audited action types include:
 - `macro-execution`
 - `ci-policy-gate`
 - `ci-pipeline`
+- `abstraction-execution`
 
 Audit query/report command surface:
 
@@ -786,6 +850,8 @@ Macro library manifests are stored under `.choir/libraries/`.
 Macro library lock resolution is stored in `.choir/lock.yaml`.
 
 CI pipeline configuration is stored in `.choir/ci.yaml`.
+
+Abstraction registry is stored in `.choir/abstractions.yaml`.
 
 CI run artifacts are stored in `.choir/artifacts/ci/`.
 

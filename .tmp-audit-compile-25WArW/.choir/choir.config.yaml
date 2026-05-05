@@ -1,0 +1,13 @@
+version: 1.0.0
+mission: ""
+vision: ""
+intent:
+  goals:
+    - enforce service boundaries
+  constraints: []
+  non-goals: []
+policy:
+  rules: []
+  approvalRules: []
+execution:
+  plans: []

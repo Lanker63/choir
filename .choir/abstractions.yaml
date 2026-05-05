@@ -1,0 +1,12 @@
+abstractions:
+  - id: bootstrap-service
+    version: 1.0.0
+    description: "Initialize a service architecture"
+    parameters:
+      - name: name
+        required: true
+    expandsTo:
+      - choir macro architecture.create-service name="{{name}}"
+      - choir macro core.enforce-service-boundaries
+      - choir plan
+      - choir preview

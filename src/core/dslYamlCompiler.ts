@@ -89,6 +89,10 @@ function capabilitiesForAction(action: ActionNode): PolicyAction[] {
     return ["plan"];
   }
 
+  if (action.type === "abstraction-run") {
+    return ["plan"];
+  }
+
   if (action.type === "preview") {
     return ["preview"];
   }
@@ -106,7 +110,7 @@ function inferRoleFromAST(ast: AST): Role {
     for (const action of ast.actions) {
       if (action.type === "define") {
         roles.add("architect");
-      } else if (action.type === "plan" || action.type === "preview" || action.type === "ci-run") {
+      } else if (action.type === "plan" || action.type === "preview" || action.type === "ci-run" || action.type === "abstraction-run") {
         roles.add("conductor");
       } else if (action.type === "execute") {
         roles.add("enforcer");
@@ -126,7 +130,7 @@ function inferRoleFromAST(ast: AST): Role {
     return "architect";
   }
 
-  if (ast.type === "plan" || ast.type === "preview" || ast.type === "ci-run") {
+  if (ast.type === "plan" || ast.type === "preview" || ast.type === "ci-run" || ast.type === "abstraction-run") {
     return "conductor";
   }
 
@@ -424,6 +428,7 @@ function compileActionToYAML(
     || action.type === "library-update"
     || action.type === "library-lock"
     || action.type === "ci-run"
+    || action.type === "abstraction-run"
   ) {
     throw new Error("System commands must execute outside YAML compilation mode");
   }

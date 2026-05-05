@@ -1,0 +1,13 @@
+pipeline:
+  stages:
+    - source
+    - compile
+    - plan
+    - policy
+    - preview
+    - audit
+environments:
+  local:
+    enforcePolicy: true
+    requireApproval: false
+macros: []

@@ -122,6 +122,11 @@ import {
   loadCIConfig,
   runCI,
 } from "../../core/ci.js";
+import {
+  getAbstraction,
+  listAbstractions,
+  runAbstraction,
+} from "../../core/abstractions.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix, Patch } from "../../fix/types.js";
 import { computeLayers, generatePlan, getExecutableTasks, taskExecutionKey } from "../../core/orchestration.js";
@@ -2081,6 +2086,150 @@ const pass2: TestPass = {
             /CI mode macro execution is restricted/
           );
         });
+      },
+    },
+    {
+      id: "2.60",
+      name: "dsl parser supports abstraction command surface",
+      run: async () => {
+        assert.deepStrictEqual(
+          parseCommand('choir bootstrap-service name="user-service"').ast,
+          {
+            type: "abstraction-run",
+            identifier: "bootstrap-service",
+            args: {
+              name: "user-service",
+            },
+          }
+        );
+
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-list-"));
+        const abstractions = listAbstractions(root);
+        assert.strictEqual(abstractions.some((entry) => entry.id === "enforce-hexagonal-architecture"), true);
+        assert.strictEqual(abstractions.some((entry) => entry.id === "migrate-to-service-layer"), true);
+      },
+    },
+    {
+      id: "2.61",
+      name: "abstraction execution is deterministic and idempotent",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-run-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+
+        fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
+          "macros:",
+          "  - id: create-service",
+          "    version: 1.0.0",
+          "    parameters:",
+          "      - name: name",
+          "        required: true",
+          "    body:",
+          "      - choir define goal \"create {{name}} service\"",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, ".choir", "abstractions.yaml"), [
+          "abstractions:",
+          "  - id: bootstrap-service",
+          "    version: 1.0.0",
+          "    description: Bootstrap a service stack",
+          "    parameters:",
+          "      - name: name",
+          "        required: true",
+          "    expandsTo:",
+          "      - choir macro create-service name=\"{{name}}\"",
+          "      - choir define constraint \"no direct db access\"",
+          "      - choir plan",
+          "      - choir preview",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+
+        const first = runAbstraction(
+          root,
+          "bootstrap-service",
+          { name: "user" },
+          makeControlPlane(),
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(first.decision, "allow");
+        assert.strictEqual(first.trace.result, "success");
+        assert.strictEqual(first.trace.expandedCommands.length, 4);
+        assert.strictEqual(first.trace.macrosUsed.includes("local.create-service"), true);
+        assert.strictEqual(first.updatedControlPlane.intent.goals.includes("create user service"), true);
+        assert.strictEqual(first.updatedControlPlane.intent.constraints.includes("no direct db access"), true);
+        assert.strictEqual(first.updatedControlPlane.execution.plans.length > 0, true);
+
+        const second = runAbstraction(
+          root,
+          "bootstrap-service",
+          { name: "user" },
+          first.updatedControlPlane,
+          controlPath,
+          { workspaceRoot: root }
+        );
+
+        assert.strictEqual(
+          hashConfig(controlPlaneToChoirConfig(first.updatedControlPlane)),
+          hashConfig(controlPlaneToChoirConfig(second.updatedControlPlane))
+        );
+      },
+    },
+    {
+      id: "2.62",
+      name: "abstraction composition rejects recursive cycles",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-recursion-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".choir", "abstractions.yaml"), [
+          "abstractions:",
+          "  - id: first",
+          "    version: 1.0.0",
+          "    description: first",
+          "    expandsTo:",
+          "      - choir second",
+          "  - id: second",
+          "    version: 1.0.0",
+          "    description: second",
+          "    expandsTo:",
+          "      - choir first",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        assert.throws(
+          () => runAbstraction(root, "first", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          /Abstraction recursion detected/
+        );
+      },
+    },
+    {
+      id: "2.63",
+      name: "abstraction validation enforces macro existence",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-macro-validation-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".choir", "abstractions.yaml"), [
+          "abstractions:",
+          "  - id: invalid-macro-reference",
+          "    version: 1.0.0",
+          "    description: invalid",
+          "    expandsTo:",
+          "      - choir macro missing.library-macro",
+          "",
+        ].join("\n"), "utf-8");
+
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        assert.throws(
+          () => runAbstraction(root, "invalid-macro-reference", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          /Macro not found/
+        );
+
+        const described = getAbstraction(root, "invalid-macro-reference");
+        assert.strictEqual(described.id, "invalid-macro-reference");
       },
     },
   ],

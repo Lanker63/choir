@@ -1,0 +1,11 @@
+abstractions:
+  - id: first
+    version: 1.0.0
+    description: first
+    expandsTo:
+      - choir second
+  - id: second
+    version: 1.0.0
+    description: second
+    expandsTo:
+      - choir first

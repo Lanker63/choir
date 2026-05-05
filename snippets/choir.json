@@ -96,5 +96,12 @@
       "choir ci run"
     ],
     "description": "Run deterministic Choir CI pipeline"
+  },
+  "Run Abstraction": {
+    "prefix": "abstraction-run",
+    "body": [
+      "choir bootstrap-service name=\"$1\""
+    ],
+    "description": "Run a high-level abstraction command"
   }
 }

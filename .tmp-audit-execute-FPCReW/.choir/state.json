@@ -1,0 +1,21 @@
+{
+  "astIndex": {},
+  "symbolGraph": {},
+  "violations": [],
+  "metrics": {},
+  "dependencyGraph": {},
+  "execution": {
+    "taskStatus": {},
+    "taskResults": {},
+    "history": [
+      {
+        "planId": "batch-L1-1",
+        "status": "complete",
+        "detail": "Transaction tx-7c0dd98eaff1 committed"
+      }
+    ]
+  },
+  "strategyHistory": [],
+  "approvals": [],
+  "pendingApprovals": []
+}

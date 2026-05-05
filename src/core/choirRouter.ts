@@ -16,6 +16,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <ci>
   | <audit>
   | <macro>
+  | <abstraction>
 
 <define> ::= "define" <define-type> <string>
 
@@ -69,6 +70,8 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
+
+<abstraction> ::= <identifier> [<args>]
 
 <args> ::= <key-value> ("," <key-value>)*
 
@@ -262,6 +265,12 @@ export type MacroRunNode = {
   args: Record<string, string>;
 };
 
+export type AbstractionRunNode = {
+  type: "abstraction-run";
+  identifier: string;
+  args: Record<string, string>;
+};
+
 export type ActionNode =
   | DefineNode
   | AnalyzeNode
@@ -284,7 +293,8 @@ export type ActionNode =
   | AuditQueryNode
   | MacroListNode
   | MacroShowNode
-  | MacroRunNode;
+  | MacroRunNode
+  | AbstractionRunNode;
 
 export type SequenceNode = {
   type: "sequence";
@@ -451,7 +461,15 @@ class Parser {
 
   private parseAction(): ActionNode {
     const next = this.peek();
-    if (!next || next.type !== "keyword") {
+    if (!next) {
+      throw new Error("Expected Choir DSL action keyword");
+    }
+
+    if (next.type === "identifier") {
+      return this.parseAbstraction();
+    }
+
+    if (next.type !== "keyword") {
       throw new Error("Expected Choir DSL action keyword");
     }
 
@@ -489,6 +507,43 @@ class Parser {
       default:
         throw new Error(`Unsupported Choir DSL action: ${next.value}`);
     }
+  }
+
+  private parseAbstraction(): AbstractionRunNode {
+    const identifier = this.expectIdentifier();
+    const args: Record<string, string> = {};
+
+    while (true) {
+      const current = this.peek();
+      if (!current || (current.type === "keyword" && current.value === "then")) {
+        break;
+      }
+
+      const key = this.expectIdentifierLike();
+      this.expectSymbol("=");
+      const value = this.expectString();
+
+      if (Object.prototype.hasOwnProperty.call(args, key)) {
+        throw new Error(`Duplicate abstraction argument: ${key}`);
+      }
+
+      args[key] = value;
+
+      if (!this.consumeSymbol(",")) {
+        const afterArg = this.peek();
+        if (!afterArg || (afterArg.type === "keyword" && afterArg.value === "then")) {
+          break;
+        }
+
+        throw new Error("Expected ',' between abstraction arguments");
+      }
+    }
+
+    return {
+      type: "abstraction-run",
+      identifier,
+      args,
+    };
   }
 
   private parseMacro(): MacroListNode | MacroShowNode | MacroRunNode {
@@ -1012,6 +1067,15 @@ function validateActionNode(node: ActionNode): boolean {
     return entries.every(([key, value]) => CHOIR_IDENTIFIER_PATTERN.test(key) && typeof value === "string");
   }
 
+  if (node.type === "abstraction-run") {
+    if (!CHOIR_IDENTIFIER_PATTERN.test(node.identifier)) {
+      return false;
+    }
+
+    const entries = Object.entries(node.args ?? {});
+    return entries.every(([key, value]) => CHOIR_IDENTIFIER_PATTERN.test(key) && typeof value === "string");
+  }
+
   return node.type === "status";
 }
 
@@ -1163,6 +1227,11 @@ async function compileAction<TContext>(
     case "macro-run":
       trace.steps.push("system.macro.run");
       trace.compiledActions.push("system.macro.run");
+      return;
+
+    case "abstraction-run":
+      trace.steps.push("system.abstraction.run");
+      trace.compiledActions.push("system.abstraction.run");
       return;
   }
 }

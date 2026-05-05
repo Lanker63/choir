@@ -78,7 +78,7 @@ DSL command grammar:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro>
+<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status> | <export> | <approve> | <reject> | <policy-status> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "violations" | "hotspots")
@@ -111,6 +111,8 @@ DSL command grammar:
 <macro> ::= "macro" "list"
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
+
+<abstraction> ::= <identifier> [<args>]
 
 <args> ::= <key-value> ("," <key-value>)*
 
@@ -218,6 +220,7 @@ Supported command surface (via `@choir`):
 - `choir library update <library>`
 - `choir library lock`
 - `choir ci run`
+- `choir <abstraction-id> [key="value", ...]`
 - `choir audit log`
 - `choir audit report`
 - `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
@@ -243,7 +246,7 @@ Mutation contract:
 
 - `define` mutates `intent.goals|constraints|non-goals` via deterministic upsert.
 - `plan` synthesizes and upserts deterministic draft plans in `execution.plans`.
-- `analyze|preview|execute|status|ci|audit|import|library` are non-mutating in YAML compiler mode.
+- `analyze|preview|execute|status|ci|audit|import|library|<abstraction-id>` are non-mutating in YAML compiler mode.
 
 Projection contract:
 
@@ -255,7 +258,7 @@ Audit and compliance contract:
 
 - Audit storage is append-only in `.choir/audit.log.jsonl`.
 - Every record includes a deterministic `chainIndex`, `previousHash`, and `hash` to form an immutable hash chain (`GENESIS` anchor for first record).
-- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`, `ci-policy-gate`, `ci-pipeline`.
+- Significant actions emit audit events with decision traceability: `compile-dsl`, `policy-evaluation`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`, `ci-policy-gate`, `ci-pipeline`, `abstraction-execution`.
 - Querying is deterministic and supports filters by role, environment, action, and bounded time range (`from` + `to`).
 - Compliance reports are deterministic summaries over queried records with anomaly detection and export formats `json`, `yaml`, and `pdf`.
 - Report exports are written under `.choir/reports/`.
@@ -299,6 +302,17 @@ CI/CD pipeline contract:
 - `execute` stage is transactional and blocked if preview hash changes.
 - CI environment blocks macro execution and plan execution paths outside `choir ci run`.
 - CI artifacts are persisted under `.choir/artifacts/ci/<run-key>/`.
+
+Abstraction contract:
+
+- Abstraction registry file is `.choir/abstractions.yaml`.
+- Abstraction model: `id`, `version`, `description`, optional `parameters[]`, `expandsTo[]`.
+- Runtime flow is fixed: `Abstraction -> Macro Composition -> DSL -> YAML -> Policy -> Execution -> Audit`.
+- Abstractions can invoke macros and other abstractions (recursion-depth guarded).
+- Expanded commands are validated by the existing DSL parser before execution.
+- Every expanded command executes through the existing compile/policy/audit path.
+- Non-execution system commands are disallowed in abstraction expansions.
+- Traceability must include abstraction id, expanded command list, macro usage list, and final result.
 
 Policy DSL grammar contract:
 
@@ -691,6 +705,7 @@ Non-negotiable safeguards:
 8. Audit evidence is append-only, hash-chained, and emitted for all significant policy and execution decisions
 9. Macro library execution is lockfile-pinned and version-deterministic
 10. CI mode execution is restricted to `choir ci run` with runtime environment validation
+11. Intent-level abstractions must not bypass DSL, policy, execution, or audit layers
 
 ---
 

@@ -1,0 +1,12 @@
+abstractions:
+  - id: bootstrap-service
+    version: 1.0.0
+    description: Bootstrap a service stack
+    parameters:
+      - name: name
+        required: true
+    expandsTo:
+      - choir macro create-service name="{{name}}"
+      - choir define constraint "no direct db access"
+      - choir plan
+      - choir preview

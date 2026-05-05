@@ -23,6 +23,12 @@ import {
     policyStatus,
     rejectDiff,
 } from "./core/dslYamlCompiler.js";
+import {
+    formatAbstractionRunResult,
+    getAbstraction,
+    listAbstractions,
+    runAbstraction,
+} from "./core/abstractions.js";
 import { formatCIRunResult, runCI } from "./core/ci.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
@@ -35,6 +41,11 @@ import {
 } from "./core/yamlDslGenerator.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
+
+type AbstractionChatCommand =
+    | { type: "list" }
+    | { type: "describe"; id: string }
+    | { type: "run"; id: string };
 
 function registerParticipant(
     context: vscode.ExtensionContext,
@@ -104,13 +115,39 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir library update core",
         "- choir library lock",
         "- choir ci run",
+        "- choir bootstrap-service name=\"user-service\"",
         "- choir approve <diffId>",
         "- choir reject <diffId>",
         "- choir policy status",
         "- choir audit log",
         "- choir audit report",
         "- choir audit query role=architect",
+        "",
+        "Abstraction shortcuts:",
+        "- @choir list abstractions",
+        "- @choir describe <abstraction>",
+        "- @choir run <abstraction>",
     ].join("\n"));
+}
+
+function parseAbstractionChatCommand(input: string): AbstractionChatCommand | null {
+    const normalized = input.trim();
+
+    if (/^@choir\s+list\s+abstractions\s*$/i.test(normalized)) {
+        return { type: "list" };
+    }
+
+    const describe = normalized.match(/^@choir\s+describe\s+([a-zA-Z0-9._-]+)\s*$/i);
+    if (describe) {
+        return { type: "describe", id: describe[1] as string };
+    }
+
+    const run = normalized.match(/^@choir\s+run\s+([a-zA-Z0-9._-]+)\s*$/i);
+    if (run) {
+        return { type: "run", id: run[1] as string };
+    }
+
+    return null;
 }
 
 export function registerChoir(context: vscode.ExtensionContext) {
@@ -122,6 +159,87 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const raw = String((request as { prompt?: string }).prompt ?? "").trim();
             if (raw.length === 0) {
                 renderGrammarHelp(stream);
+                return;
+            }
+
+            const abstractionChatCommand = parseAbstractionChatCommand(raw);
+            if (abstractionChatCommand) {
+                const workspaceRoot = getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    stream.markdown("No workspace folder found.");
+                    return;
+                }
+                try {
+                    if (abstractionChatCommand.type === "list") {
+                        const abstractions = listAbstractions(workspaceRoot);
+                        if (abstractions.length === 0) {
+                            stream.markdown("No abstractions found in `.choir/abstractions.yaml`.");
+                            return;
+                        }
+
+                        const lines = abstractions.map((abstraction) => `- ${abstraction.id}@${abstraction.version}: ${abstraction.description}`);
+                        stream.markdown([
+                            `Abstractions (${abstractions.length}):`,
+                            ...lines,
+                        ].join("\n"));
+                        return;
+                    }
+
+                    if (abstractionChatCommand.type === "describe") {
+                        const abstraction = getAbstraction(workspaceRoot, abstractionChatCommand.id);
+                        const parameterLines = (abstraction.parameters ?? []).length === 0
+                            ? ["- none"]
+                            : (abstraction.parameters ?? []).map((parameter) => {
+                                const defaultValue = typeof parameter.default === "string" ? ` default=\"${parameter.default}\"` : "";
+                                return `- ${parameter.name} (required=${parameter.required})${defaultValue}`;
+                            });
+
+                        const stepLines = abstraction.expandsTo.map((command, index) => `${index + 1}. ${command}`);
+
+                        stream.markdown([
+                            `Abstraction: ${abstraction.id}`,
+                            `- version: ${abstraction.version}`,
+                            `- description: ${abstraction.description}`,
+                            "",
+                            "Parameters:",
+                            ...parameterLines,
+                            "",
+                            "Steps:",
+                            ...stepLines,
+                        ].join("\n"));
+                        return;
+                    }
+
+                    const control = readControlPlane();
+                    if (!control) {
+                        stream.markdown("No control plane found. Open a workspace folder first.");
+                        return;
+                    }
+
+                    const controlPath = getControlPlanePath();
+                    if (!controlPath) {
+                        stream.markdown("Unable to resolve .choir/choir.config.yaml.");
+                        return;
+                    }
+
+                    const executed = runAbstraction(
+                        workspaceRoot,
+                        abstractionChatCommand.id,
+                        {},
+                        control,
+                        controlPath,
+                        {
+                            workspaceRoot,
+                            actorId: "chat-user",
+                            executionMode: "interactive",
+                        }
+                    );
+
+                    stream.markdown(formatAbstractionRunResult(executed));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    stream.markdown(`Abstraction command failed: ${message}`);
+                }
                 return;
             }
 
@@ -156,6 +274,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "library-update"
                     || action.type === "library-lock"
                     || action.type === "ci-run"
+                    || action.type === "abstraction-run"
                     || action.type === "audit-log"
                     || action.type === "audit-report"
                     || action.type === "audit-query"
@@ -164,7 +283,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-run"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|audit|macro` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro` cannot be chained with `then`.");
                 return;
             }
 
@@ -379,6 +498,24 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     });
 
                     stream.markdown(formatCIRunResult(ciResult));
+                    return;
+                }
+
+                if (parsed.ast.type === "abstraction-run") {
+                    const executed = runAbstraction(
+                        workspaceRoot,
+                        parsed.ast.identifier,
+                        parsed.ast.args,
+                        control,
+                        controlPath,
+                        {
+                            workspaceRoot,
+                            actorId: "chat-user",
+                            executionMode: "interactive",
+                        }
+                    );
+
+                    stream.markdown(formatAbstractionRunResult(executed));
                     return;
                 }
 
