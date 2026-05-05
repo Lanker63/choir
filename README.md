@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest. It reads a plain-YAML configuration file that you commit to your repo, compiles your intent and rules into live diagnostics, and gives you three AI chat participants — Architect, Enforcer, and Analyst — that understand your project's actual policies.
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, and coordinates planning/execution through four chat participants: Architect, Enforcer, Analyst, and Conductor.
 
 ---
 
@@ -24,11 +24,11 @@ The extension activates automatically when VS Code finishes loading.
 
 ---
 
-## Configuration
+## Control Plane Configuration
 
-Choir reads one file: `.choir/choir.config.yaml` at the root of your workspace.
+Choir reads one authoritative file: `.choir/choir.config.yaml` at the root of your workspace.
 
-If the file does not exist, Choir creates a blank one the first time it activates:
+If the file does not exist, Choir creates a blank one on first activation:
 
 ```yaml
 version: "1.0.0"
@@ -40,157 +40,169 @@ intent:
   non-goals: []
 policy:
   rules: []
+execution:
+  plans: []
 ```
 
-Commit this file to version control so the whole team shares the same rules.
+Commit this file to version control so the team shares one policy source of truth.
 
-### Overarching direction
-
-These top-level fields define project-wide direction that should remain stable over time.
+### Top-level direction
 
 | Field | Type | Description |
 |---|---|---|
-| `mission` | `string` | The enduring mission statement for the solution. |
-| `vision` | `string` | The long-term target state this solution is moving toward. |
+| `mission` | `string` | Enduring mission statement for the solution. |
+| `vision` | `string` | Long-term target state for the solution. |
 
 ### `intent`
 
-High-level goals and constraints written in plain English. Choir uses these to synthesize additional enforcement rules automatically.
+High-level goals and constraints written in plain English. Choir compiles these into executable policy behavior.
 
 | Field | Type | Description |
 |---|---|---|
 | `goals` | `string[]` | What the project is trying to achieve. |
-| `constraints` | `string[]` | Blanket prohibitions that apply everywhere (e.g. `"no direct db access"`). |
-| `non-goals` | `string[]` | Explicit boundaries describing what this solution is not trying to do. |
+| `constraints` | `string[]` | Global constraints (for example: `"no direct db access"`). |
+| `non-goals` | `string[]` | Explicit boundaries for what should not be optimized or enforced. |
 
 ### `policy.rules`
 
-Explicit, file-scoped DSL rules evaluated on every save. Each rule has this shape:
+Explicit DSL rules evaluated across the workspace.
 
 | Field | Required | Description |
 |---|---|---|
 | `id` | ✔ | Unique rule identifier shown in diagnostics. |
 | `description` | | Human-readable summary. |
-| `priority` | | Integer. Higher numbers run first (default 0). |
-| `appliesTo.files` | | Glob patterns that restrict which files are checked. |
-| `appliesTo.language` | | Language identifier (e.g. `"typescript"`). |
-| `match.imports` | | Module specifiers whose presence triggers the rule. |
-| `match.callExpressions` | | Function names whose calls trigger the rule. |
+| `priority` | | Integer priority for conflict resolution/ordering. |
+| `appliesTo.files` | | Glob patterns that scope rule execution. |
+| `appliesTo.language` | | Language id scope (for example `"typescript"`). |
+| `match.imports` | | Module specifiers that trigger the rule. |
+| `match.callExpressions` | | Function call names that trigger the rule. |
 | `match.functionNames` | | Function declaration names that trigger the rule. |
-| `constraint.type` | ✔ | `"forbid"` — flag a match as a violation. `"require"` — flag the absence of a match. |
-| `message` | ✔ | Diagnostic message shown in the Problems panel. |
-| `severity` | | `"error"` (default) · `"warn"` · `"info"` |
+| `constraint.type` | ✔ | `"forbid"` flags a match. `"require"` flags absence of a required match. |
+| `message` | ✔ | Diagnostic message shown in Problems. |
+| `severity` | | `"error"` (default) · `"warning"` · `"info"` · `"hint"` |
 
-### Example configuration
+### `execution.plans`
 
-```yaml
-version: "1.0.0"
-mission: "Deliver secure, maintainable services with predictable behavior"
-vision: "A policy-aware engineering workflow where architecture intent stays enforceable"
-intent:
-  goals:
-    - "Build a clean layered service architecture"
-  constraints:
-    - "no direct db access outside the repository layer"
-    - "no console.log in production code"
-  non-goals:
-    - "Not a replacement for human architecture review"
-    - "Not a generic low-code orchestration platform"
-policy:
-  rules:
-    - id: no-db-in-controller
-      description: Prevent DB usage in controllers
-      appliesTo:
-        files:
-          - "**/controller/**"
-      match:
-        imports:
-          - "db"
-      constraint:
-        type: forbid
-      message: "Controllers must not import DB modules"
-      severity: error
+Conductor-managed plans live in the control plane.
 
-    - id: validate-request
-      description: Ensure request validation is performed
-      appliesTo:
-        files:
-          - "**"
-      match:
-        callExpressions:
-          - validateRequest
-      constraint:
-        type: require
-      message: "All request handlers must call validateRequest"
-      severity: warn
+| Field | Type | Description |
+|---|---|---|
+| `execution.plans[].id` | `string` | Deterministic plan id. |
+| `execution.plans[].status` | `"draft" \| "approved"` | Plan lifecycle status. |
+| `execution.plans[].derivedFrom` | `"goal" \| "constraint" \| "manual"` | Plan origin. |
+| `execution.plans[].tasks[]` | `Task[]` | Ordered dependency-aware work graph. |
+| `tasks[].dependsOn` | `string[]` | In-plan task dependency list (cycle-checked). |
+
+---
+
+## Orchestration and Execution
+
+Choir includes a deterministic orchestration layer that supports:
+
+- State → plan synthesis with stable ordering and deterministic ids
+- Cost-based plan scoring and pre-execution selection
+- Multi-plan optimization through global DAG merge and conflict-aware batching
+- Parallel-safe scheduling by dependency layer
+- Speculative transactional batch execution (`simulate → validate → commit/rollback`)
+- Atomic commit and rollback boundaries to avoid partial writes
+
+All code mutations still flow through the Enforcer path.
+
+### Cost-Based Plan Selection
+
+Before execution, Conductor evaluates approved candidate plans using a deterministic cost model. Scoring is static and execution-free.
+
+Cost dimensions:
+
+- `editCost` (estimated patch count)
+- `fileTouchCost` (unique touched files)
+- `riskCost` (refactor/risk heuristic)
+- `dependencyCost` (longest in-plan dependency chain)
+- `violationReduction` (benefit estimate)
+
+Total score:
+
+```text
+totalCost =
+  editCost * 1.0 +
+  fileTouchCost * 2.0 +
+  riskCost * 5.0 +
+  dependencyCost * 1.5 -
+  violationReduction * 3.0
 ```
+
+Selection rules:
+
+- Lower total cost wins
+- Ties are broken by `planId` lexicographic order
+- Same inputs always produce the same selected plan set
+- Scoring performs no mutations and does not execute tasks
+
+Conductor execution output includes a cost trace with evaluated plans and the selection decision.
 
 ---
 
 ## Chat Participants
 
-All three participants are accessible from the VS Code Chat panel (`@Choir-Architect`, `@Choir-Enforcer`, `@Choir-Analyst`).
+Participants are available from VS Code Chat:
+
+- `@Choir-Architect`
+- `@Choir-Enforcer`
+- `@Choir-Analyst`
+- `@Choir-Conductor`
 
 ### `@Choir-Architect`
 
-Reads and writes your control plane. Use it to evolve your policy through natural language.
+Reads and writes `.choir/choir.config.yaml` using natural language updates.
 
-| Example prompt | Effect |
-|---|---|
-| `Show control plane` | Prints the current `.choir/choir.config.yaml` as YAML. |
-| `Set mission: ...` | Updates the top-level mission statement. |
-| `Set vision: ...` | Updates the top-level vision statement. |
-| `Add non-goal: some non-goal` | Appends a non-goal if it does not already exist. |
-| `Add non-goals: one non-goal, another non-goal` | Appends multiple non-goals if they do not already exist |
-| `Remove non-goal: some non-goal` | Removes the matching non-goal. |
-| `Remove non-goals: one non-goal, another non-goal` | Removes multiple non-goals |
-| `Add goal: Build auth system` | Appends an entry to `intent.goals`. |
-| `Add goals: Build auth system, create user list` | Appends multiple entries to `intent.goals`. |
-| `Add constraint: no direct db access` | Appends an entry to `intent.constraints`. |
-| `Add constraints: no direct db access, no caching` | Appends multiple entries to `intent.constraints`. |
-| `Remove goal: Build auth system` | Removes the matching goal. |
-| `Remove constraint: no direct db access` | Removes the matching constraint. |
-| `Remove constraints: no direct db access, no caching` | Removes the matching constraints. |
+Examples:
 
-After every update the Architect re-runs the enforcement pipeline and reports the violation count.
+- `Show control plane`
+- `Set mission: ...`
+- `Set vision: ...`
+- `Add goal: ...`
+- `Add constraint: ...`
+- `Add non-goal: ...`
+- `Remove goal: ...`
+- `Remove constraint: ...`
+- `Remove non-goal: ...`
 
 ### `@Choir-Enforcer`
 
-Triggers a full pipeline run and lists every current violation.
-
-```
-@Choir-Enforcer
-```
-
-Output example:
-
-```
-⛔ Pipeline reported violations:
-
-- [no-db-in-controller] Controllers must not import DB modules (src/controllers/user.ts)
-```
-
-Use this when you want an on-demand audit rather than waiting for a file save.
+Runs the enforcement pipeline and reports current diagnostics.
 
 ### `@Choir-Analyst`
 
-Gives you a structural overview of the workspace and surfaces code hotspots.
+Provides workspace summaries and hotspots.
 
-| Example prompt | Effect |
-|---|---|
-| `Workspace summary` | Counts files, services, controllers, and repositories. |
-| `Find hotspots` | Lists files with structural concerns. |
+### `@Choir-Conductor`
+
+Builds, approves, executes, and reports plan status.
+
+Supported commands:
+
+- `plan`
+- `plan for goal: <goal>`
+- `approve <planId>`
+- `execute`
+- `execute <planId>`
+- `status`
+
+Execution behavior:
+
+- `execute`: score all approved plans, select optimal plan set, execute selected plans
+- `execute <planId>`: execute only that approved plan (still cost-scored and traced)
 
 ---
 
 ## Rule Editor
 
-The **Choir** activity bar icon opens a sidebar with two panels:
+The **Choir** activity bar icon opens two views:
 
-- **Rules** — a tree view listing every rule currently in your control plane. Click a rule to open it in the editor.
-- **Rule Editor** — a Monaco-powered YAML editor with schema validation for your DSL rules. Edits are written back to `.choir/choir.config.yaml` on save.
+- **Rules**: tree of current control-plane rules
+- **Rule Editor**: Monaco YAML editor with schema validation, writing back to `.choir/choir.config.yaml`
 
-You can also open the editor from the Command Palette:
+Command palette:
 
 ```
 > Choir: Open Rule Editor
@@ -198,15 +210,17 @@ You can also open the editor from the Command Palette:
 
 ---
 
-## Diagnostics
+## Diagnostics and State
 
-Choir runs the enforcement pipeline automatically on every file save. Violations appear in the standard VS Code **Problems** panel (`View → Problems`) with the rule ID, message, and file location.
+Choir runs the pipeline on save and publishes diagnostics to **Problems** (`View → Problems`).
 
----
+Derived system state is written to `.choir/state.json`, including:
 
-## Workspace State
+- AST and symbol/dependency metadata
+- diagnostics and metrics
+- execution runtime state (task status, task results, history)
 
-Choir writes incremental analysis state to `.choir/state.json`. This file is regenerated on each pipeline run — you can add it to `.gitignore` or commit it; either way is fine.
+`state.json` is derived and reproducible from workspace + control plane.
 
 ---
 
@@ -214,7 +228,7 @@ Choir writes incremental analysis state to `.choir/state.json`. This file is reg
 
 | Symptom | Resolution |
 |---|---|
-| No diagnostics appear | Make sure a workspace folder is open and `.choir/choir.config.yaml` exists (or trigger a save to let Choir create it). |
-| `choir.config.yaml` parse error | Check the Problems panel for a Zod validation message. Ensure your YAML matches the schema described above. |
-| Chat participants not responding | Confirm VS Code 1.90+ and that the extension is enabled for the current workspace. |
-| Rule Editor shows blank | Open the Choir activity bar view, then use `Choir: Open Rule Editor` from the Command Palette to focus it. |
+| No diagnostics appear | Ensure a workspace is open and `.choir/choir.config.yaml` exists (or save once so Choir creates it). |
+| `choir.config.yaml` parse error | Check Problems for schema errors; ensure YAML matches documented schema and canonical severity values. |
+| Chat participants not responding | Confirm VS Code 1.90+ and extension enabled in the active workspace. |
+| Rule Editor appears blank | Open the Choir activity view, then run `Choir: Open Rule Editor` from Command Palette. |

@@ -1,5 +1,11 @@
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import { runPipelineForWorkspace } from "./enforcer.js";
+import {
+  buildCostTrace,
+  CostTrace,
+  scorePlans,
+  selectPlanSet,
+} from "./core/costPlanner.js";
 import { generatePlan, getExecutableTasks, taskExecutionKey } from "./core/orchestration.js";
 import {
   createEmptyStatePlane,
@@ -34,6 +40,59 @@ export type PlanStatusSummary = {
   activePlanId?: string;
   plans: PlanStatusRow[];
 };
+
+export type CostBasedExecutionResult = {
+  selectedPlans: Plan[];
+  costTrace: CostTrace;
+  executionTraces: ExecutionTrace[];
+  state: StatePlane;
+};
+
+function sortedPlans(plans: Plan[]): Plan[] {
+  return [...plans].sort((left, right) => left.id.localeCompare(right.id));
+}
+
+export function getApprovedPlans(control: ControlPlane): Plan[] {
+  return sortedPlans(control.execution.plans.filter((plan) => plan.status === "approved"));
+}
+
+export function selectApprovedPlansForExecution(
+  control: ControlPlane,
+  state: StatePlane,
+  requestedPlanId?: string
+): { selectedPlans: Plan[]; costTrace: CostTrace } {
+  const allPlans = sortedPlans(control.execution.plans);
+
+  if (requestedPlanId) {
+    const requested = allPlans.find((plan) => plan.id === requestedPlanId);
+    if (!requested) {
+      throw new Error(`Plan not found: ${requestedPlanId}`);
+    }
+
+    if (requested.status !== "approved") {
+      throw new Error(`Plan ${requested.id} is ${requested.status}. Approve it before execution.`);
+    }
+
+    const scored = scorePlans([requested], state);
+    const selectedPlans = selectPlanSet([requested], state);
+    const costTrace = buildCostTrace(selectedPlans[0]!.id, scored);
+    return { selectedPlans, costTrace };
+  }
+
+  const approvedPlans = getApprovedPlans(control);
+  if (approvedPlans.length === 0) {
+    throw new Error("No approved plans available for execution.");
+  }
+
+  const scored = scorePlans(approvedPlans, state);
+  const selectedPlans = selectPlanSet(approvedPlans, state);
+  const costTrace = buildCostTrace(selectedPlans[0]!.id, scored);
+
+  return {
+    selectedPlans,
+    costTrace,
+  };
+}
 
 export function upsertDraftPlan(
   control: ControlPlane,
@@ -326,6 +385,41 @@ export async function executePlan(
   );
 
   return { state, trace };
+}
+
+export async function executeSelectedPlansWithCost(
+  control: ControlPlane,
+  options: {
+    root: string;
+    requestedPlanId?: string;
+  }
+): Promise<CostBasedExecutionResult> {
+  let state = readStatePlane(options.root) ?? createEmptyStatePlane();
+
+  const { selectedPlans, costTrace } = selectApprovedPlansForExecution(
+    control,
+    state,
+    options.requestedPlanId
+  );
+
+  const executionTraces: ExecutionTrace[] = [];
+
+  for (const plan of sortedPlans(selectedPlans)) {
+    const executed = await executePlan(plan, {
+      controlPlane: control,
+      root: options.root,
+    });
+
+    state = executed.state;
+    executionTraces.push(executed.trace);
+  }
+
+  return {
+    selectedPlans: sortedPlans(selectedPlans),
+    costTrace,
+    executionTraces,
+    state,
+  };
 }
 
 export function summarizePlanStatus(control: ControlPlane, state: StatePlane): PlanStatusSummary {

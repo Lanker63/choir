@@ -4,7 +4,7 @@ import { readControlPlane, writeControlPlane } from "./choirManager.js";
 import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import { applyChatToControlPlane } from "./chatCompiler.js";
 import { runPipelineForWorkspace } from "./enforcer.js";
-import { approvePlan, executePlan, summarizePlanStatus, upsertDraftPlan } from "./conductor.js";
+import { approvePlan, executeSelectedPlansWithCost, summarizePlanStatus, upsertDraftPlan } from "./conductor.js";
 import { parseConductorCommand } from "./conductorCommands.js";
 import { createEmptyStatePlane, readStatePlane } from "./core/state.js";
 
@@ -238,36 +238,45 @@ export function registerConductor(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                if (!command.planId) {
-                    stream.markdown("Provide a plan id. Example: execute plan-abc123def456");
-                    return;
+                try {
+                    const result = await executeSelectedPlansWithCost(controlPlane, {
+                        root,
+                        requestedPlanId: command.planId,
+                    });
+
+                    const selected = result.selectedPlans.map((plan) => plan.id).join(", ");
+                    const evaluated = result.costTrace.evaluatedPlans
+                        .map((score) => {
+                            const b = score.breakdown;
+                            return `- ${score.planId}: total=${score.totalCost.toFixed(2)} (edit=${b.editCost}, files=${b.fileTouchCost}, risk=${b.riskCost}, dependency=${b.dependencyCost}, reduction=${b.violationReduction})`;
+                        })
+                        .join("\n");
+
+                    const executionSummary = result.executionTraces
+                        .map((trace) => [
+                            `- ${trace.planId}:`,
+                            `  tasks executed=${trace.tasksExecuted.length}, succeeded=${trace.tasksSucceeded.length}, failed=${trace.tasksFailed.length}`,
+                        ].join("\n"))
+                        .join("\n");
+
+                    stream.markdown([
+                        "▶️ Cost-based plan execution complete",
+                        "",
+                        `- Selected plans: ${selected}`,
+                        `- Decision: ${result.costTrace.decision}`,
+                        "",
+                        "Evaluated plan scores:",
+                        evaluated,
+                        "",
+                        "Execution summary:",
+                        executionSummary,
+                        "",
+                        "Use @choir.conductor status for current execution state.",
+                    ].join("\n"));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    stream.markdown(message);
                 }
-
-                const plan = controlPlane.execution.plans.find((candidate) => candidate.id === command.planId);
-                if (!plan) {
-                    stream.markdown(`Plan not found: ${command.planId}`);
-                    return;
-                }
-
-                if (plan.status !== "approved") {
-                    stream.markdown(`Plan ${plan.id} is ${plan.status}. Approve it before execution.`);
-                    return;
-                }
-
-                const execution = await executePlan(plan, {
-                    controlPlane,
-                    root,
-                });
-
-                stream.markdown([
-                    `▶️ Plan executed: ${plan.id}`,
-                    "",
-                    `- Tasks executed: ${execution.trace.tasksExecuted.length}`,
-                    `- Tasks succeeded: ${execution.trace.tasksSucceeded.length}`,
-                    `- Tasks failed: ${execution.trace.tasksFailed.length}`,
-                    "",
-                    "Use @choir.conductor status for current execution state.",
-                ].join("\n"));
                 return;
             }
 
@@ -309,7 +318,7 @@ export function registerConductor(context: vscode.ExtensionContext) {
                 "- plan",
                 "- plan for goal: <goal>",
                 "- approve <planId>",
-                "- execute <planId>",
+                "- execute [planId]",
                 "- status",
             ].join("\n"));
         }

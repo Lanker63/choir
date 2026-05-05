@@ -13,6 +13,13 @@ import {
   validateStateDeterminism,
 } from "./harness.js";
 import { runConflictResolutionEngine } from "../../fix/conflictEngine.js";
+import {
+  buildCostTrace,
+  scorePlan,
+  scorePlans,
+  selectBestPlan,
+  selectPlanSet,
+} from "../../core/costPlanner.js";
 import { Diagnostic, SourceLocation } from "../../core/types.js";
 import { Fix } from "../../fix/types.js";
 import { parseConductorCommand } from "../../conductorCommands.js";
@@ -719,6 +726,105 @@ const pass4: TestPass = {
 
         assert.strictEqual(planned.executionPlan.batches.length, 2);
         assert.ok(planned.executionPlan.batches.every((batch) => batch.workUnits.length === 1));
+      },
+    },
+    {
+      id: "4.14",
+      name: "cost scoring is deterministic and explainable",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/a.ts", 1, 0, 1, 3),
+            traceId: "trace-1",
+          },
+          {
+            id: "diag-2",
+            ruleId: "rule-b",
+            message: "B",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/b.ts", 2, 0, 2, 3),
+            traceId: "trace-2",
+          },
+        ];
+
+        const plan = makePlan("plan-a", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          makeTask("t-validate", "enforce", { dependsOn: ["t-refactor"] }),
+        ]);
+
+        const first = scorePlan(plan, state);
+        const second = scorePlan(plan, state);
+
+        assert.deepStrictEqual(first, second);
+        assert.strictEqual(first.breakdown.editCost, 3);
+        assert.strictEqual(first.breakdown.fileTouchCost, 1);
+        assert.strictEqual(first.breakdown.riskCost, 1);
+        assert.strictEqual(first.breakdown.dependencyCost, 2);
+        assert.strictEqual(first.breakdown.violationReduction, 2);
+        assert.strictEqual(first.totalCost, 7);
+      },
+    },
+    {
+      id: "4.15",
+      name: "cost selection uses deterministic plan-id tie-breaker",
+      run: async () => {
+        const state = createEmptyStatePlane();
+
+        const planA = makePlan("plan-a", [makeTask("t-analysis", "analysis")]);
+        const planB = makePlan("plan-b", [makeTask("t-analysis", "analysis")]);
+
+        const selected = selectBestPlan([planB, planA], state);
+        assert.strictEqual(selected.id, "plan-a");
+
+        const scores = scorePlans([planB, planA], state);
+        assert.deepStrictEqual(scores.map((score) => score.planId), ["plan-a", "plan-b"]);
+      },
+    },
+    {
+      id: "4.16",
+      name: "cost-based plan set selection returns lowest-cost plan",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-1",
+            ruleId: "rule-a",
+            message: "A",
+            severity: "error",
+            category: "AST",
+            location: testLocation("src/a.ts", 1, 0, 1, 1),
+            traceId: "trace-1",
+          },
+        ];
+
+        const lowCost = makePlan("plan-low", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-validate", "enforce", { dependsOn: ["t-analysis"] }),
+        ]);
+
+        const highCost = makePlan("plan-high", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor-1", "refactor", { dependsOn: ["t-analysis"], files: ["src/a.ts"] }),
+          makeTask("t-refactor-2", "refactor", { dependsOn: ["t-refactor-1"], files: ["src/b.ts"] }),
+          makeTask("t-validate", "enforce", { dependsOn: ["t-refactor-2"] }),
+        ]);
+
+        const selectedSet = selectPlanSet([highCost, lowCost], state);
+        assert.strictEqual(selectedSet.length, 1);
+        assert.strictEqual(selectedSet[0]?.id, "plan-low");
+
+        const evaluated = scorePlans([highCost, lowCost], state);
+        const trace = buildCostTrace(selectedSet[0]?.id as string, evaluated);
+        assert.strictEqual(trace.selectedPlanId, "plan-low");
+        assert.ok(trace.decision.includes("plan-low selected due to lowest total cost"));
       },
     },
     {
