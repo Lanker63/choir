@@ -207,6 +207,14 @@ Strategy evaluation:
 - inter-repo cycle -> fail
 - cross-repo deny/approval-required -> block entire execution
 - any execution failure -> rollback all repos
+- progressive rollout supports deterministic staged execution:
+   - all-at-once
+   - canary (percent expansion)
+   - phased (explicit percent phases)
+   - batched (dependency-safe unit groups)
+- each rollout stage must pass dependency checks, policy/validation gates, and metric thresholds before proceeding
+- stage failure stops rollout immediately; rollback scope is stage-local unless rollout/execution divergence triggers rollback-all
+- rollout is simulation-gated and fails closed on simulation/execution divergence
 
 Workspace detection contract:
 
@@ -248,6 +256,11 @@ Workspace detection contract:
 - plan optimization surface:
    - choir plan --optimize
    - choir plan --optimize for <goalRef>
+- rollout execution surface:
+   - choir execute --strategy all-at-once
+   - choir execute --strategy canary --steps <p1>,<p2>,...,100
+   - choir execute --strategy phased --phases <p1>,<p2>,...,100
+   - choir execute --strategy batched --batch-size <n>
 - panel chat shortcuts:
    - @choir control
    - @choir timeline

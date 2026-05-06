@@ -502,6 +502,7 @@ export async function simulatePlanOutcome(
   });
 
   const executionResult = await runExecutionPlanTransactionally(executionPlan, {
+    root,
     fs: txFs,
     controlPlane: options.controlPlane,
     enforcer: createPreviewEnforcer(root, options.controlPlane, txFs),

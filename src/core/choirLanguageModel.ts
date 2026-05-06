@@ -11,6 +11,7 @@ import {
   CHOIR_LIBRARY_META_KEYWORDS,
   CHOIR_MACRO_META_KEYWORDS,
   CHOIR_LIBRARY_AT_SYMBOL,
+  CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
@@ -54,6 +55,7 @@ type ParserState =
   | "preview-tail"
   | "preview-id"
   | "execute-tail"
+  | "execute-strategy"
   | "execute-id"
   | "export-format"
   | "export-section-or-end"
@@ -111,6 +113,7 @@ const DSL_KEYWORDS = new Set<string>([
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
+  CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
@@ -135,6 +138,7 @@ const KEYWORD_HOVER: Record<string, string> = {
   "--optimize": "Run deterministic strategy simulation and selection before applying a plan.",
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
+  "--strategy": "Choose progressive rollout strategy for staged execution.",
   status: "Show runtime or policy status.",
   export: "Export DSL projection from YAML state.",
   dsl: "Export format selector.",
@@ -376,6 +380,7 @@ function transition(state: ParserState, token: Token): ParserState[] {
     if (
       state === "preview-id"
       || state === "execute-id"
+      || state === "execute-strategy"
       || state === "approve-id"
       || state === "reject-id"
       || state === "macro-show-id"
@@ -683,7 +688,15 @@ function transition(state: ParserState, token: Token): ParserState[] {
   }
 
   if (state === "execute-tail") {
-    return token.value === CHOIR_PLAN_REF_KEYWORD ? ["execute-id"] : [];
+    if (token.value === CHOIR_PLAN_REF_KEYWORD) {
+      return ["execute-id"];
+    }
+
+    if (token.value === CHOIR_EXECUTE_STRATEGY_FLAG) {
+      return ["execute-strategy"];
+    }
+
+    return [];
   }
 
   if (state === "export-format") {
@@ -755,10 +768,17 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
   }
 
   if (state === "preview-tail" || state === "execute-tail") {
-    return [{ type: "keyword", value: CHOIR_PLAN_REF_KEYWORD }];
+    if (state === "preview-tail") {
+      return [{ type: "keyword", value: CHOIR_PLAN_REF_KEYWORD }];
+    }
+
+    return [
+      { type: "keyword", value: CHOIR_PLAN_REF_KEYWORD },
+      { type: "keyword", value: CHOIR_EXECUTE_STRATEGY_FLAG },
+    ];
   }
 
-  if (state === "preview-id" || state === "execute-id" || state === "approve-id" || state === "reject-id") {
+  if (state === "preview-id" || state === "execute-id" || state === "execute-strategy" || state === "approve-id" || state === "reject-id") {
     return [{ type: "identifier" }];
   }
 

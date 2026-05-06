@@ -646,6 +646,7 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
   let policyDecision: "allow" | "require-approval" | "deny" = "allow";
   let policyRequiresApproval = false;
   let policyAllowed = true;
+  let activeStage: PipelineStage | null = null;
 
   let workingControl = options.controlPlane;
   let planned: Plan | null = null;
@@ -672,15 +673,18 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
 
   try {
     if (stageIncluded(config, "source")) {
+      activeStage = "source";
       markStage("source", "success", `Resolved commit identity: ${commitId}`);
     }
 
     if (stageIncluded(config, "compile")) {
+      activeStage = "compile";
       workingControl = loadControlPlaneFromDisk(options.controlPath);
       markStage("compile", "success", `Control plane validated (hash=${hashConfig(controlPlaneToChoirConfig(workingControl)).slice(0, 12)})`);
     }
 
     if (stageIncluded(config, "plan")) {
+      activeStage = "plan";
       if (config.macros.length > 0 && cacheHit) {
         markStage("plan", "skipped", "Skipped macro expansion (no relevant control-plane changes)");
       } else {
@@ -736,6 +740,7 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
     }
 
     if (stageIncluded(config, "policy")) {
+      activeStage = "policy";
       const currentExecutionControl = expectValue(executionControl, "Policy stage requires plan stage output");
       expectValue(planned, "Policy stage requires plan stage output");
 
@@ -798,6 +803,7 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
     }
 
     if (stageIncluded(config, "preview")) {
+      activeStage = "preview";
       const currentExecutionControl = expectValue(executionControl, "Preview stage requires plan stage output");
       const currentPlan = expectValue(planned, "Preview stage requires plan stage output");
 
@@ -816,6 +822,7 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
     }
 
     if (stageIncluded(config, "execute")) {
+      activeStage = "execute";
       const currentExecutionControl = expectValue(executionControl, "Execute stage requires plan stage output");
       const currentPlan = expectValue(planned, "Execute stage requires plan stage output");
 
@@ -866,6 +873,7 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
     }
 
     if (stageIncluded(config, "audit")) {
+      activeStage = "audit";
       const store = readAuditStore(options.root);
       const auditLog = readTextIfExists(path.join(options.root, ".choir", "audit.log.jsonl"));
 
@@ -878,8 +886,21 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
 
       markStage("audit", "success", `Captured ${store.records.length} audit record(s)`);
     }
-  } catch {
+    activeStage = null;
+  } catch (error) {
     result = "failure";
+    const message = error instanceof Error ? error.message : String(error);
+    if (activeStage) {
+      const existing = stageResults.find((entry) => entry.stage === activeStage && entry.status === "failure");
+      if (!existing) {
+        stageResults.push({
+          stage: activeStage,
+          status: "failure",
+          detail: message,
+        });
+        stagesExecuted.push(activeStage);
+      }
+    }
   }
 
   const trace: CIPipelineTrace = {

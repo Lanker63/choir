@@ -266,6 +266,65 @@ export type StrategySelectionResult = {
   trace: StrategyTrace;
 };
 
+export type RolloutStrategy =
+  | { type: "all-at-once" }
+  | { type: "canary"; initialPercent: number; steps: number[] }
+  | { type: "phased"; phases: number[] }
+  | { type: "batched"; batchSize: number };
+
+export type ExecutionStage = {
+  id: string;
+  units: string[];
+  percentage?: number;
+  order: number;
+};
+
+export type StageMetrics = {
+  errorRate: number;
+  latency: number;
+  violations: number;
+};
+
+export type RolloutConfig = {
+  thresholds: {
+    errorRate: number;
+    latency: number;
+  };
+  autoRollback: boolean;
+  stageApproval?: boolean;
+  requireApproval?: (input: { planId: string; stageId?: string; previewHash: string }) => boolean | Promise<boolean>;
+};
+
+export type RolloutTrace = {
+  stages: ExecutionStage[];
+  completedStages: string[];
+  failedStage?: string;
+  metrics: Record<string, StageMetrics>;
+};
+
+export type RolloutValidationResult = {
+  valid: boolean;
+  errors: string[];
+};
+
+export type StageExecutionResult = {
+  stage: ExecutionStage;
+  success: boolean;
+  violations: string[];
+  metrics: StageMetrics;
+  unitsAffected: string[];
+  finalStates: GlobalState;
+};
+
+export type RolloutExecutionResult = {
+  success: boolean;
+  stopped: boolean;
+  rolledBack: boolean;
+  finalStates: GlobalState;
+  trace: RolloutTrace;
+  failures: string[];
+};
+
 export type ComparisonResult = {
   bestStrategy: string;
   metrics: {
@@ -1741,5 +1800,497 @@ export async function executeGlobalPlan(
       policyDecisions: execution.policyResult.policyDecisions,
       convergence: execution.success,
     },
+  };
+}
+
+function normalizePercent(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.min(100, Math.round(value)));
+}
+
+function normalizePositiveInt(value: number, fallback: number): number {
+  if (!Number.isFinite(value)) {
+    return fallback;
+  }
+
+  const rounded = Math.floor(value);
+  return rounded > 0 ? rounded : fallback;
+}
+
+function buildUnitDependencies(plan: GlobalPlan): Map<string, Set<string>> {
+  const taskById = new Map(plan.tasks.map((task) => [task.id, task] as const));
+  const dependencies = new Map<string, Set<string>>();
+
+  for (const task of plan.tasks) {
+    if (!dependencies.has(task.repoId)) {
+      dependencies.set(task.repoId, new Set<string>());
+    }
+
+    for (const dependencyId of task.dependsOn) {
+      const dependencyTask = taskById.get(dependencyId);
+      if (!dependencyTask) {
+        continue;
+      }
+
+      if (dependencyTask.repoId === task.repoId) {
+        continue;
+      }
+
+      dependencies.get(task.repoId)?.add(dependencyTask.repoId);
+      if (!dependencies.has(dependencyTask.repoId)) {
+        dependencies.set(dependencyTask.repoId, new Set<string>());
+      }
+    }
+  }
+
+  return dependencies;
+}
+
+function buildDeterministicUnitOrder(plan: GlobalPlan): string[] {
+  const dependencies = buildUnitDependencies(plan);
+  const units = sortedUnique(plan.tasks.map((task) => task.repoId));
+  const indegree = new Map<string, number>(units.map((unit) => [unit, 0] as const));
+  const outgoing = new Map<string, string[]>(units.map((unit) => [unit, []] as const));
+
+  for (const unit of units) {
+    const deps = sortedUnique([...(dependencies.get(unit) ?? new Set<string>())]);
+    indegree.set(unit, deps.length);
+    for (const dep of deps) {
+      const current = outgoing.get(dep) ?? [];
+      current.push(unit);
+      outgoing.set(dep, sortedUnique(current));
+    }
+  }
+
+  const ready = [...units].filter((unit) => (indegree.get(unit) ?? 0) === 0).sort((left, right) => left.localeCompare(right));
+  const ordered: string[] = [];
+
+  while (ready.length > 0) {
+    const unit = ready.shift() as string;
+    ordered.push(unit);
+
+    const nextUnits = outgoing.get(unit) ?? [];
+    for (const nextUnit of nextUnits) {
+      const nextInDegree = (indegree.get(nextUnit) ?? 0) - 1;
+      indegree.set(nextUnit, nextInDegree);
+      if (nextInDegree === 0) {
+        ready.push(nextUnit);
+        ready.sort((left, right) => left.localeCompare(right));
+      }
+    }
+  }
+
+  if (ordered.length !== units.length) {
+    throw new Error("Rollout staging failed: unit dependency cycle detected");
+  }
+
+  return ordered;
+}
+
+function buildStageId(planId: string, order: number, units: string[], percentage?: number): string {
+  return hashId("rollout-stage", {
+    planId,
+    order,
+    units,
+    ...(typeof percentage === "number" ? { percentage } : {}),
+  });
+}
+
+function toCumulativePercents(strategy: RolloutStrategy): number[] {
+  if (strategy.type === "canary") {
+    const values = [
+      normalizePercent(strategy.initialPercent),
+      ...strategy.steps.map((step) => normalizePercent(step)),
+      100,
+    ];
+    return [...new Set(values)].sort((left, right) => left - right);
+  }
+
+  if (strategy.type === "phased") {
+    const values = [
+      ...strategy.phases.map((phase) => normalizePercent(phase)),
+      100,
+    ];
+    return [...new Set(values)].sort((left, right) => left - right);
+  }
+
+  return [100];
+}
+
+function stagePlanForUnits(plan: GlobalPlan, units: string[]): GlobalPlan {
+  const selectedUnits = new Set(sortedUnique(units));
+  const tasks = plan.tasks
+    .filter((task) => selectedUnits.has(task.repoId))
+    .map((task) => ({
+      ...task,
+      dependsOn: task.dependsOn.filter((dependencyId) => {
+        const dependencyTask = plan.tasks.find((entry) => entry.id === dependencyId);
+        return dependencyTask ? selectedUnits.has(dependencyTask.repoId) : false;
+      }).sort((left, right) => left.localeCompare(right)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return {
+    id: hashId("rollout-plan", {
+      base: plan.id,
+      units: [...selectedUnits],
+      tasks: tasks.map((task) => task.id),
+    }),
+    tasks,
+  };
+}
+
+function defaultRolloutConfig(): RolloutConfig {
+  return {
+    thresholds: {
+      errorRate: 1,
+      latency: Number.MAX_SAFE_INTEGER,
+    },
+    autoRollback: true,
+    stageApproval: false,
+  };
+}
+
+function mergeRolloutConfig(config?: Partial<RolloutConfig>): RolloutConfig {
+  const defaults = defaultRolloutConfig();
+  return {
+    ...defaults,
+    ...config,
+    thresholds: {
+      ...defaults.thresholds,
+      ...(config?.thresholds ?? {}),
+    },
+  };
+}
+
+export function buildStages(plan: GlobalPlan, strategy: RolloutStrategy): ExecutionStage[] {
+  const orderedUnits = buildDeterministicUnitOrder(plan);
+  if (orderedUnits.length === 0) {
+    return [];
+  }
+
+  if (strategy.type === "all-at-once") {
+    return [{
+      id: buildStageId(plan.id, 1, orderedUnits, 100),
+      units: orderedUnits,
+      percentage: 100,
+      order: 1,
+    }];
+  }
+
+  if (strategy.type === "batched") {
+    const batchSize = normalizePositiveInt(strategy.batchSize, 1);
+    const stages: ExecutionStage[] = [];
+    let order = 1;
+
+    for (let cursor = 0; cursor < orderedUnits.length; cursor += batchSize) {
+      const units = orderedUnits.slice(cursor, cursor + batchSize);
+      const percentage = normalizePercent((Math.min(orderedUnits.length, cursor + batchSize) / orderedUnits.length) * 100);
+      stages.push({
+        id: buildStageId(plan.id, order, units, percentage),
+        units,
+        percentage,
+        order,
+      });
+      order += 1;
+    }
+
+    return stages;
+  }
+
+  const percents = toCumulativePercents(strategy);
+  const stages: ExecutionStage[] = [];
+  let previousCount = 0;
+  let order = 1;
+
+  for (const percent of percents) {
+    const nextCount = Math.max(previousCount + 1, Math.ceil((percent / 100) * orderedUnits.length));
+    const boundedCount = Math.min(orderedUnits.length, nextCount);
+    const units = orderedUnits.slice(previousCount, boundedCount);
+    previousCount = boundedCount;
+
+    if (units.length === 0) {
+      continue;
+    }
+
+    stages.push({
+      id: buildStageId(plan.id, order, units, percent),
+      units,
+      percentage: percent,
+      order,
+    });
+    order += 1;
+  }
+
+  return stages;
+}
+
+export function respectDependencies(
+  stage: ExecutionStage,
+  plan: GlobalPlan,
+  completedUnits: string[]
+): RolloutValidationResult {
+  const dependencyMap = buildUnitDependencies(plan);
+  const stageUnits = new Set(stage.units);
+  const completed = new Set(completedUnits);
+  const errors: string[] = [];
+
+  for (const unit of stage.units) {
+    const dependencies = sortedUnique([...(dependencyMap.get(unit) ?? new Set<string>())]);
+    for (const dependency of dependencies) {
+      if (stageUnits.has(dependency) || completed.has(dependency)) {
+        continue;
+      }
+
+      errors.push(`Stage ${stage.id} executes ${unit} before dependency ${dependency}`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
+function stageMetricsFromRun(run: InternalRunResult): StageMetrics {
+  const totalSteps = Math.max(1, run.stepsExecuted.length);
+  const violations = sortedUnique([...run.violations, ...run.policyResult.violations]).length;
+
+  return {
+    errorRate: violations / totalSteps,
+    latency: run.stepsExecuted.length,
+    violations,
+  };
+}
+
+export async function executeStage(
+  stage: ExecutionStage,
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions,
+  currentState: GlobalState
+): Promise<StageExecutionResult> {
+  const stagePlan = stagePlanForUnits(plan, stage.units);
+  const stageRepos = options.repos
+    .map((repo) => ({
+      ...repo,
+      state: cloneUnknown(currentState[repo.id] ?? repo.state),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const run = await runGlobalPlanInternal(stagePlan, {
+    ...options,
+    repos: stageRepos,
+  }, "execution");
+
+  const metrics = stageMetricsFromRun(run);
+  const violations = sortedUnique([...run.violations, ...run.policyResult.violations]);
+
+  return {
+    stage,
+    success: run.success,
+    violations,
+    metrics,
+    unitsAffected: [...run.unitsAffected],
+    finalStates: cloneState(run.finalStates),
+  };
+}
+
+export function validateStage(
+  stageResult: StageExecutionResult,
+  plan: GlobalPlan,
+  completedUnits: string[],
+  config: RolloutConfig
+): RolloutValidationResult {
+  const dependencyValidation = respectDependencies(stageResult.stage, plan, completedUnits);
+  const errors: string[] = [];
+
+  if (!stageResult.success) {
+    errors.push(`Stage ${stageResult.stage.id} execution failed`);
+  }
+
+  errors.push(...stageResult.violations);
+  errors.push(...dependencyValidation.errors);
+
+  if (stageResult.metrics.errorRate > config.thresholds.errorRate) {
+    errors.push(`Stage ${stageResult.stage.id} exceeded errorRate threshold`);
+  }
+
+  if (stageResult.metrics.latency > config.thresholds.latency) {
+    errors.push(`Stage ${stageResult.stage.id} exceeded latency threshold`);
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
+export function rollbackStage(
+  stage: ExecutionStage,
+  stableState: GlobalState,
+  currentState: GlobalState
+): GlobalState {
+  const next = cloneState(currentState);
+  for (const unit of stage.units) {
+    if (Object.prototype.hasOwnProperty.call(stableState, unit)) {
+      next[unit] = cloneUnknown(stableState[unit]);
+    }
+  }
+
+  return next;
+}
+
+function rolloutPreviewHash(plan: GlobalPlan, simulation: SimulationResult): string {
+  return hashId("rollout-preview", {
+    planId: plan.id,
+    steps: simulation.trace.stepsExecuted,
+    changes: simulation.changes,
+    violations: simulation.violations,
+  });
+}
+
+export async function executeRolloutPlan(
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions,
+  strategy: RolloutStrategy,
+  config?: Partial<RolloutConfig>
+): Promise<RolloutExecutionResult> {
+  const effectiveConfig = mergeRolloutConfig(config);
+  const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
+  const baseState = stateForRepos(normalizedRepos);
+  const trace: RolloutTrace = {
+    stages: buildStages(plan, strategy),
+    completedStages: [],
+    metrics: {},
+  };
+
+  if (trace.stages.length === 0) {
+    return {
+      success: true,
+      stopped: false,
+      rolledBack: false,
+      finalStates: cloneState(baseState),
+      trace,
+      failures: [],
+    };
+  }
+
+  const simulation = await simulatePlan(plan, {
+    ...options,
+    repos: normalizedRepos,
+  });
+
+  if (!simulation.success) {
+    return {
+      success: false,
+      stopped: true,
+      rolledBack: false,
+      finalStates: cloneState(baseState),
+      trace,
+      failures: sortedUnique([
+        ...simulation.violations,
+        "Rollout blocked: pre-rollout simulation failed",
+      ]),
+    };
+  }
+
+  const previewHash = rolloutPreviewHash(plan, simulation);
+  if (effectiveConfig.requireApproval && !effectiveConfig.stageApproval) {
+    const approved = await effectiveConfig.requireApproval({
+      planId: plan.id,
+      previewHash,
+    });
+
+    if (!approved) {
+      return {
+        success: false,
+        stopped: true,
+        rolledBack: false,
+        finalStates: cloneState(baseState),
+        trace,
+        failures: ["Rollout blocked: approval required"],
+      };
+    }
+  }
+
+  let currentState = cloneState(baseState);
+  const completedUnits = new Set<string>();
+
+  for (const stage of trace.stages) {
+    const stageSnapshot = cloneState(currentState);
+
+    if (effectiveConfig.requireApproval && effectiveConfig.stageApproval) {
+      const approved = await effectiveConfig.requireApproval({
+        planId: plan.id,
+        stageId: stage.id,
+        previewHash,
+      });
+
+      if (!approved) {
+        trace.failedStage = stage.id;
+        return {
+          success: false,
+          stopped: true,
+          rolledBack: false,
+          finalStates: cloneState(currentState),
+          trace,
+          failures: ["Rollout blocked: stage approval required"],
+        };
+      }
+    }
+
+    const stageResult = await executeStage(stage, plan, {
+      ...options,
+      repos: normalizedRepos,
+    }, currentState);
+    trace.metrics[stage.id] = {
+      ...stageResult.metrics,
+    };
+
+    const stageValidation = validateStage(stageResult, plan, [...completedUnits], effectiveConfig);
+    if (!stageValidation.valid) {
+      trace.failedStage = stage.id;
+      const rolledBackState = effectiveConfig.autoRollback
+        ? rollbackStage(stage, stageSnapshot, stageResult.finalStates)
+        : stageResult.finalStates;
+
+      return {
+        success: false,
+        stopped: true,
+        rolledBack: effectiveConfig.autoRollback,
+        finalStates: cloneState(rolledBackState),
+        trace,
+        failures: stageValidation.errors,
+      };
+    }
+
+    currentState = cloneState(stageResult.finalStates);
+    trace.completedStages.push(stage.id);
+    stage.units.forEach((unit) => completedUnits.add(unit));
+  }
+
+  const equivalent = statesEqual(currentState, simulation.finalState);
+  if (!equivalent) {
+    const rollbackAll = cloneState(baseState);
+    return {
+      success: false,
+      stopped: true,
+      rolledBack: true,
+      finalStates: rollbackAll,
+      trace,
+      failures: ["Rollout failed: simulation and staged execution diverged"],
+    };
+  }
+
+  return {
+    success: true,
+    stopped: false,
+    rolledBack: false,
+    finalStates: cloneState(currentState),
+    trace,
+    failures: [],
   };
 }

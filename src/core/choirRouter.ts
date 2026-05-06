@@ -43,7 +43,14 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <preview> ::= "preview" [<plan-ref>]
 
-<execute> ::= "execute" [<plan-ref>]
+<execute> ::= "execute" [<plan-ref>] [<execute-options>]
+
+<execute-options> ::= "--strategy" <execute-strategy>
+                    ["--steps" <int-list>]
+                    ["--phases" <int-list>]
+                    ["--batch-size" <integer>]
+
+<execute-strategy> ::= "all-at-once" | "canary" | "phased" | "batched"
 
 <status> ::= "status"
 
@@ -95,6 +102,10 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <key-value> ::= <identifier> "=" <string>
 
+<int-list> ::= <integer> ("," <integer>)*
+
+<integer> ::= [0-9]+
+
 <plan-ref> ::= "plan" <identifier>
 
 <string> ::= QUOTED_STRING
@@ -143,6 +154,10 @@ export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
 export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
 export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
 export const CHOIR_PLAN_OPTIMIZE_FLAG = "--optimize" as const;
+export const CHOIR_EXECUTE_STRATEGY_FLAG = "--strategy" as const;
+export const CHOIR_EXECUTE_STEPS_FLAG = "--steps" as const;
+export const CHOIR_EXECUTE_PHASES_FLAG = "--phases" as const;
+export const CHOIR_EXECUTE_BATCH_SIZE_FLAG = "--batch-size" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
@@ -157,6 +172,10 @@ const KEYWORDS = new Set<string>([
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
+  CHOIR_EXECUTE_STRATEGY_FLAG,
+  CHOIR_EXECUTE_STEPS_FLAG,
+  CHOIR_EXECUTE_PHASES_FLAG,
+  CHOIR_EXECUTE_BATCH_SIZE_FLAG,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_SEQUENCE_KEYWORD,
@@ -171,6 +190,12 @@ export type PlanRef = {
   type: "plan-ref";
   identifier: string;
 };
+
+export type ExecuteRolloutStrategy =
+  | { type: "all-at-once" }
+  | { type: "canary"; initialPercent: number; steps: number[] }
+  | { type: "phased"; phases: number[] }
+  | { type: "batched"; batchSize: number };
 
 export type DefineNode = {
   type: "define";
@@ -231,6 +256,7 @@ export type PreviewNode = {
 export type ExecuteNode = {
   type: "execute";
   planRef?: PlanRef;
+  rolloutStrategy?: ExecuteRolloutStrategy;
 };
 
 export type StatusNode = {
@@ -952,19 +978,137 @@ class Parser {
 
   private parseExecute(): ExecuteNode {
     this.expectKeyword("execute");
+    let planRef: PlanRef | undefined;
     const next = this.peek();
-    if (!next || (next.type === "keyword" && next.value === "then")) {
-      return { type: "execute" };
+
+    if (next && next.type === "keyword" && next.value === "plan") {
+      planRef = this.parsePlanRef();
     }
 
-    if (next.type !== "keyword" || next.value !== "plan") {
-      throw new Error("Expected optional plan reference: 'plan <identifier>'");
+    let strategyType: string | undefined;
+    let steps: number[] | undefined;
+    let phases: number[] | undefined;
+    let batchSize: number | undefined;
+
+    while (true) {
+      const current = this.peek();
+      if (!current || (current.type === "keyword" && current.value === "then")) {
+        break;
+      }
+
+      const flag = this.expectIdentifierLike().toLowerCase();
+      if (flag === CHOIR_EXECUTE_STRATEGY_FLAG) {
+        if (strategyType) {
+          throw new Error("Duplicate execute strategy flag: --strategy");
+        }
+
+        strategyType = this.expectIdentifierLike().toLowerCase();
+        continue;
+      }
+
+      if (flag === CHOIR_EXECUTE_STEPS_FLAG) {
+        if (steps) {
+          throw new Error("Duplicate execute strategy option: --steps");
+        }
+
+        steps = this.parseIntegerList();
+        continue;
+      }
+
+      if (flag === CHOIR_EXECUTE_PHASES_FLAG) {
+        if (phases) {
+          throw new Error("Duplicate execute strategy option: --phases");
+        }
+
+        phases = this.parseIntegerList();
+        continue;
+      }
+
+      if (flag === CHOIR_EXECUTE_BATCH_SIZE_FLAG) {
+        if (typeof batchSize === "number") {
+          throw new Error("Duplicate execute strategy option: --batch-size");
+        }
+
+        batchSize = this.parseInteger();
+        continue;
+      }
+
+      throw new Error("Expected execute options: --strategy|--steps|--phases|--batch-size");
     }
 
+    if (!strategyType) {
+      if (steps || phases || typeof batchSize === "number") {
+        throw new Error("Execute strategy options require --strategy");
+      }
+
+      return {
+        type: "execute",
+        ...(planRef ? { planRef } : {}),
+      };
+    }
+
+    const rolloutStrategy = this.buildExecuteRolloutStrategy(strategyType, steps, phases, batchSize);
     return {
       type: "execute",
-      planRef: this.parsePlanRef(),
+      ...(planRef ? { planRef } : {}),
+      rolloutStrategy,
     };
+  }
+
+  private parseIntegerList(): number[] {
+    const values = [this.parseInteger()];
+    while (this.consumeSymbol(",")) {
+      values.push(this.parseInteger());
+    }
+
+    return values;
+  }
+
+  private parseInteger(): number {
+    const token = this.expectIdentifierLike();
+    if (!/^\d+$/.test(token)) {
+      throw new Error(`Expected integer value, found ${token}`);
+    }
+
+    return Number(token);
+  }
+
+  private buildExecuteRolloutStrategy(
+    strategyType: string,
+    steps?: number[],
+    phases?: number[],
+    batchSize?: number
+  ): ExecuteRolloutStrategy {
+    if (strategyType === "all-at-once") {
+      return { type: "all-at-once" };
+    }
+
+    if (strategyType === "canary") {
+      const normalized = (steps && steps.length > 0 ? steps : [1, 10, 25, 100]).map((entry) => Math.max(1, Math.min(100, Math.round(entry))));
+      const initialPercent = normalized[0] as number;
+      return {
+        type: "canary",
+        initialPercent,
+        steps: normalized.slice(1),
+      };
+    }
+
+    if (strategyType === "phased") {
+      const normalized = (phases && phases.length > 0 ? phases : [10, 25, 50, 100]).map((entry) => Math.max(1, Math.min(100, Math.round(entry))));
+      return {
+        type: "phased",
+        phases: normalized,
+      };
+    }
+
+    if (strategyType === "batched") {
+      return {
+        type: "batched",
+        batchSize: Math.max(1, Math.floor(batchSize ?? 1)),
+      };
+    }
+
+    throw new Error("Unsupported execute strategy: expected all-at-once|canary|phased|batched");
   }
 
   private parseStatus(): StatusNode {
@@ -1327,7 +1471,31 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "preview" || node.type === "execute") {
-    return node.planRef === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.planRef.identifier);
+    const planRefValid = node.planRef === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.planRef.identifier);
+    if (node.type === "preview") {
+      return planRefValid;
+    }
+
+    const strategy = node.rolloutStrategy;
+    if (!strategy) {
+      return planRefValid;
+    }
+
+    if (strategy.type === "all-at-once") {
+      return planRefValid;
+    }
+
+    if (strategy.type === "canary") {
+      const initialValid = Number.isFinite(strategy.initialPercent) && strategy.initialPercent > 0;
+      const stepsValid = strategy.steps.every((entry) => Number.isFinite(entry) && entry > 0);
+      return planRefValid && initialValid && stepsValid;
+    }
+
+    if (strategy.type === "phased") {
+      return planRefValid && strategy.phases.length > 0 && strategy.phases.every((entry) => Number.isFinite(entry) && entry > 0);
+    }
+
+    return planRefValid && Number.isFinite(strategy.batchSize) && strategy.batchSize > 0;
   }
 
   if (node.type === "export") {

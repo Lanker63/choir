@@ -34,6 +34,7 @@ import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import {
+    executeRolloutPlan,
     GlobalPlan,
     Repo,
     compareStrategies,
@@ -224,6 +225,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir simulate",
         "- choir simulate plan <planId>",
         "- choir simulate units <unitId>,<unitId>",
+        "- choir execute --strategy canary --steps 1,10,25,100",
+        "- choir execute --strategy phased",
+        "- choir execute --strategy batched --batch-size 2",
         "- choir refactor rename <symbol> <newName>",
         "- choir refactor move <symbol> <targetUnit>",
         "- choir refactor extract <symbol> <targetUnit>",
@@ -761,9 +765,10 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "refactor-inline"
                     || action.type === "graph"
                     || (action.type === "plan" && action.optimize === true)
+                    || (action.type === "execute" && action.rolloutStrategy !== undefined)
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|plan --optimize` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|plan --optimize|execute --strategy` cannot be chained with `then`.");
                 return;
             }
 
@@ -1036,6 +1041,61 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         "Ranking:",
                         ...rankingLines,
                     ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "execute" && parsed.ast.rolloutStrategy) {
+                    const executeNode = parsed.ast;
+                    const rolloutStrategy = executeNode.rolloutStrategy;
+                    if (!rolloutStrategy) {
+                        stream.markdown("Execution strategy missing.");
+                        return;
+                    }
+                    const configuredPlans = [...control.execution.plans]
+                        .sort((left, right) => left.id.localeCompare(right.id));
+
+                    if (configuredPlans.length === 0) {
+                        stream.markdown("Rollout execution unavailable: no execution plans defined in control plane.");
+                        return;
+                    }
+
+                    const targetPlan = executeNode.planRef
+                        ? configuredPlans.find((plan) => plan.id === executeNode.planRef?.identifier)
+                        : configuredPlans.find((plan) => plan.status === "approved") ?? configuredPlans[0];
+
+                    if (!targetPlan) {
+                        stream.markdown(`Execution plan not found: ${executeNode.planRef?.identifier}`);
+                        return;
+                    }
+
+                    const globalPlan = toGlobalPlanFromPlan(targetPlan);
+                    const repos = buildSimulationRepos([globalPlan]);
+                    const rollout = await executeRolloutPlan(globalPlan, {
+                        repos,
+                        policies: [],
+                    }, rolloutStrategy);
+
+                    const stageLines = rollout.trace.stages.map((stage) => {
+                        const metrics = rollout.trace.metrics[stage.id];
+                        const summary = metrics
+                            ? `errorRate=${metrics.errorRate.toFixed(3)}, latency=${metrics.latency}, violations=${metrics.violations}`
+                            : "pending";
+                        const percent = typeof stage.percentage === "number" ? ` (${stage.percentage}%)` : "";
+                        return `- ${stage.order}. ${stage.id}${percent}: units=[${stage.units.join(", ")}], ${summary}`;
+                    });
+
+                    stream.markdown([
+                        rollout.success ? "Rollout execution successful." : "Rollout execution failed.",
+                        `- strategy: ${rolloutStrategy.type}`,
+                        `- plan: ${targetPlan.id}`,
+                        `- completedStages: ${rollout.trace.completedStages.length}/${rollout.trace.stages.length}`,
+                        rollout.trace.failedStage ? `- failedStage: ${rollout.trace.failedStage}` : "",
+                        `- rolledBack: ${rollout.rolledBack}`,
+                        "",
+                        "Stages:",
+                        ...stageLines,
+                        ...(rollout.failures.length > 0 ? ["", "Failures:", ...rollout.failures.map((entry) => `- ${entry}`)] : []),
+                    ].filter((line) => line.length > 0).join("\n"));
                     return;
                 }
 

@@ -58,6 +58,7 @@ Core flow:
 
 - define, analyze, plan, simulate, preview, execute, status
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
+- progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
 - approve/reject policy-gated diffs
 - export deterministic DSL projections
 
@@ -109,7 +110,7 @@ Additional commands:
              | "refactor" "extract" <identifier> <identifier>
              | "refactor" "inline" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
-<execute> ::= "execute" ["plan" <identifier>]
+<execute> ::= "execute" ["plan" <identifier>] ["--strategy" <execute-strategy>] ["--steps" <int-list>] ["--phases" <int-list>] ["--batch-size" <integer>]
 <status> ::= "status"
 <export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
 <approve> ::= "approve" <identifier>
@@ -126,6 +127,9 @@ Additional commands:
 <version-selector> ::= MAJOR "." MINOR "." PATCH | MAJOR "." MINOR "." "x" | MAJOR "." "x"
 <args> ::= <key-value> ("," <key-value>)*
 <key-value> ::= <identifier> "=" <string>
+<execute-strategy> ::= "all-at-once" | "canary" | "phased" | "batched"
+<int-list> ::= <integer> ("," <integer>)*
+<integer> ::= [0-9]+
 <identifier> ::= [a-zA-Z0-9._-]+
 ```
 
@@ -135,6 +139,8 @@ Additional commands:
 - Strategy selection simulates all candidates before selection (no heuristic-only path)
 - Ranking order is deterministic: violations -> risk -> changes -> executionCost (lexical id tie-break)
 - Violating strategies are excluded by default unless explicitly allowed
+- Rollout execution is staged and dependency-aware; each stage must validate before progression
+- Rollout supports deterministic canary/phased/batched expansion with threshold gates and stage rollback
 - Preview is simulation-derived and hash-bound to execution
 - Transactional execution: simulate -> validate -> commit/rollback
 - Global orchestration validates full cross-repo graph and policy before execution
@@ -157,6 +163,7 @@ Org-wide simulation notes:
 - `choir simulate` runs deterministic, non-mutating simulation with the same execution logic as real execution.
 - `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
 - `choir plan --optimize` simulates all candidate strategies and returns explainable ranking and selected strategy.
+- `choir execute --strategy ...` runs progressive staged rollout (canary/phased/batched/all-at-once) with per-stage validation.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
 

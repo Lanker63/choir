@@ -448,7 +448,7 @@ function generateStrategyId(
     fromStrategyId: outcome.strategyId,
     fromStrategyType: outcome.strategyType,
     mutationId: mutation.id,
-    pattern,
+    patternType: pattern.type,
     plan: planSignature(plan),
   });
 

@@ -206,11 +206,13 @@ import {
   batchTasks as batchGlobalTasks,
   buildGlobalContext,
   buildGlobalDependencyGraph,
+  buildStages,
   compareStrategies,
   compareStrategyMetricsLex,
   computeStrategyScore,
   createGlobalPlanningCache,
   detectPolicyDrift,
+  executeRolloutPlan,
   evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
   executeGlobalPlan,
@@ -219,6 +221,8 @@ import {
   propagatePolicies,
   rankStrategies,
   Repo,
+  respectDependencies,
+  RolloutStrategy,
   selectBestStrategy,
   simulatePlan,
   simulateUnits,
@@ -695,6 +699,25 @@ const pass2: TestPass = {
           units: ["packages.core", "apps.web"],
         });
 
+        const executeCanary = parseCommand("choir execute --strategy canary --steps 1,10,25,100");
+        assert.deepStrictEqual(executeCanary.ast, {
+          type: "execute",
+          rolloutStrategy: {
+            type: "canary",
+            initialPercent: 1,
+            steps: [10, 25, 100],
+          },
+        });
+
+        const executeBatched = parseCommand("choir execute --strategy batched --batch-size 2");
+        assert.deepStrictEqual(executeBatched.ast, {
+          type: "execute",
+          rolloutStrategy: {
+            type: "batched",
+            batchSize: 2,
+          },
+        });
+
         assert.strictEqual(routeAST(rename.ast), "conductor");
       },
     },
@@ -707,7 +730,8 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir define goal"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan --optimize --optimize"), /Duplicate plan optimize flag/);
-        assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
+        assert.throws(() => parseCommand("choir execute --steps 1,10"), /require --strategy/);
+        assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected execute options/);
         assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
         assert.throws(() => parseCommand("choir simulate units"), /Expected identifier/);
       },
@@ -1565,6 +1589,9 @@ const pass2: TestPass = {
 
         const simulateTail = getDeterministicCompletions("choir simulate ").map((item) => item.label);
         assert.deepStrictEqual(simulateTail, ["plan", "units", "then"]);
+
+        const executeTail = getDeterministicCompletions("choir execute ").map((item) => item.label);
+        assert.deepStrictEqual(executeTail, ["plan", "--strategy", "then"]);
 
         const policyTail = getDeterministicCompletions("choir policy ").map((item) => item.label);
         assert.deepStrictEqual(policyTail, ["status"]);
@@ -5333,6 +5360,176 @@ const pass6: TestPass = {
         });
 
         assert.strictEqual(allowViolationsSelection.selected.strategyId, "strategy-alpha");
+      },
+    },
+    {
+      id: "6.10k",
+      name: "rollout stage generation is deterministic across canary phased and batched strategies",
+      run: async () => {
+        const plan = {
+          id: "rollout-stages",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+            { id: "repo-c:t1", repoId: "repo-c", action: "set:meta.c=1", dependsOn: ["repo-b:t1"] },
+            { id: "repo-d:t1", repoId: "repo-d", action: "set:meta.d=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const canary: RolloutStrategy = { type: "canary", initialPercent: 1, steps: [10, 50, 100] };
+        const phased: RolloutStrategy = { type: "phased", phases: [25, 50, 100] };
+        const batched: RolloutStrategy = { type: "batched", batchSize: 2 };
+
+        const canaryFirst = buildStages(plan, canary);
+        const canarySecond = buildStages(plan, canary);
+        assert.deepStrictEqual(canaryFirst, canarySecond);
+
+        const phasedStages = buildStages(plan, phased);
+        const batchedStages = buildStages(plan, batched);
+        assert.ok(phasedStages.length >= 2);
+        assert.ok(batchedStages.length >= 2);
+
+        const completedUnits: string[] = [];
+        for (const stage of canaryFirst) {
+          const dependencyValidation = respectDependencies(stage, plan, completedUnits);
+          assert.strictEqual(dependencyValidation.valid, true);
+          completedUnits.push(...stage.units);
+        }
+      },
+    },
+    {
+      id: "6.10l",
+      name: "rollout stops on stage failure and rolls back affected stage units",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+          { id: "repo-b", dependencies: ["repo-a"], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "rollout-failure",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const result = await executeRolloutPlan(plan, {
+          repos,
+          policies: [],
+          executeTask: async (_task, state, repoId, _allStates, mode) => {
+            if (mode === "execution" && repoId === "repo-b") {
+              throw new Error("stage-b failure");
+            }
+
+            return { ...state, meta: { value: "1" } };
+          },
+        }, {
+          type: "batched",
+          batchSize: 1,
+        }, {
+          autoRollback: true,
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.stopped, true);
+        assert.strictEqual(result.rolledBack, true);
+        assert.strictEqual(result.trace.completedStages.length, 1);
+        assert.ok(typeof result.trace.failedStage === "string");
+        assert.strictEqual((result.finalStates["repo-a"] as { meta?: { value?: string } }).meta?.value, "1");
+        assert.strictEqual((result.finalStates["repo-b"] as { meta?: { value?: string } }).meta?.value, "0");
+      },
+    },
+    {
+      id: "6.10m",
+      name: "rollout threshold gates stop progression deterministically",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+          { id: "repo-b", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "rollout-threshold",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=1", dependsOn: [] },
+          ],
+        };
+
+        const result = await executeRolloutPlan(plan, {
+          repos,
+          policies: [],
+        }, {
+          type: "batched",
+          batchSize: 1,
+        }, {
+          thresholds: {
+            errorRate: 1,
+            latency: 0,
+          },
+          autoRollback: true,
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.trace.completedStages.length, 0);
+        assert.ok(result.failures.some((entry) => entry.includes("latency threshold")));
+      },
+    },
+    {
+      id: "6.10n",
+      name: "rollout requires approval gate before execution when configured",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "rollout-approval",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const result = await executeRolloutPlan(plan, {
+          repos,
+          policies: [],
+        }, {
+          type: "all-at-once",
+        }, {
+          requireApproval: () => false,
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.trace.completedStages.length, 0);
+        assert.ok(result.failures.some((entry) => entry.includes("approval required")));
+      },
+    },
+    {
+      id: "6.10o",
+      name: "rollout fails closed and rolls back all units on simulation divergence",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "rollout-divergence",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const result = await executeRolloutPlan(plan, {
+          repos,
+          policies: [],
+          executeTask: async (_task, state, _repoId, _allStates, mode) => mode === "simulation"
+            ? { ...state, meta: { value: "sim" } }
+            : { ...state, meta: { value: "exec" } },
+        }, {
+          type: "all-at-once",
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.rolledBack, true);
+        assert.ok(result.failures.some((entry) => entry.includes("diverged")));
+        assert.strictEqual((result.finalStates["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
       },
     },
     {
