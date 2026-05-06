@@ -12,6 +12,7 @@ import {
   CHOIR_MACRO_META_KEYWORDS,
   CHOIR_LIBRARY_AT_SYMBOL,
   CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_POLICY_STATUS_KEYWORD,
   CHOIR_ROOT_KEYWORD,
@@ -45,6 +46,7 @@ type ParserState =
   | "analyze-target"
   | "plan-tail"
   | "plan-target-string"
+  | "plan-after-target"
   | "simulate-tail"
   | "simulate-id"
   | "simulate-units-key"
@@ -108,6 +110,7 @@ const DSL_KEYWORDS = new Set<string>([
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
@@ -129,6 +132,7 @@ const KEYWORD_HOVER: Record<string, string> = {
   simulate: "Run deterministic simulation before execution.",
   units: "Scope simulation to selected units plus dependencies.",
   for: "Attach a quoted target to plan creation.",
+  "--optimize": "Run deterministic strategy simulation and selection before applying a plan.",
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
   status: "Show runtime or policy status.",
@@ -311,6 +315,7 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
 
     if (
       state === "plan-tail"
+      || state === "plan-after-target"
       || state === "simulate-tail"
       || state === "preview-tail"
       || state === "execute-tail"
@@ -333,8 +338,12 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
 
 function transition(state: ParserState, token: Token): ParserState[] {
   if (token.type === "string") {
-    if (state === "define-string" || state === "plan-target-string") {
+    if (state === "define-string") {
       return ["expect-then-or-end"];
+    }
+
+    if (state === "plan-target-string") {
+      return ["plan-after-target"];
     }
 
     if (state === "graph-node-id") {
@@ -433,6 +442,12 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return [];
     }
 
+    if (state === "plan-tail" || state === "plan-after-target") {
+      return token.value.toLowerCase() === CHOIR_PLAN_OPTIMIZE_FLAG
+        ? ["expect-then-or-end"]
+        : [];
+    }
+
     return [];
   }
 
@@ -499,6 +514,22 @@ function transition(state: ParserState, token: Token): ParserState[] {
       }
 
       return [];
+    }
+
+    if (state === "plan-tail") {
+      if (token.value === CHOIR_PLAN_FOR_KEYWORD) {
+        return ["plan-target-string"];
+      }
+
+      if (token.value === CHOIR_PLAN_OPTIMIZE_FLAG) {
+        return ["expect-then-or-end"];
+      }
+
+      return [];
+    }
+
+    if (state === "plan-after-target") {
+      return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
     }
   }
 
@@ -624,7 +655,15 @@ function transition(state: ParserState, token: Token): ParserState[] {
   }
 
   if (state === "plan-tail") {
-    return token.value === CHOIR_PLAN_FOR_KEYWORD ? ["plan-target-string"] : [];
+    if (token.value === CHOIR_PLAN_FOR_KEYWORD) {
+      return ["plan-target-string"];
+    }
+
+    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
+  }
+
+  if (state === "plan-after-target") {
+    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
   }
 
   if (state === "simulate-tail") {
@@ -690,7 +729,14 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
   }
 
   if (state === "plan-tail") {
-    return [{ type: "keyword", value: CHOIR_PLAN_FOR_KEYWORD }];
+    return [
+      { type: "keyword", value: CHOIR_PLAN_FOR_KEYWORD },
+      { type: "keyword", value: CHOIR_PLAN_OPTIMIZE_FLAG },
+    ];
+  }
+
+  if (state === "plan-after-target") {
+    return [{ type: "keyword", value: CHOIR_PLAN_OPTIMIZE_FLAG }];
   }
 
   if (state === "simulate-tail") {

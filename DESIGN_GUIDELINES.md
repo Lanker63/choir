@@ -184,14 +184,19 @@ totalCost = editCost*1.0 + fileTouchCost*2.0 + riskCost*5.0 + dependencyCost*1.5
 
 Selection:
 
-- lowest score wins
-- tie-break by lexical id
+- default strategy selection is simulation-first and violation-intolerant
+- strategies with violations are rejected unless explicitly allowed by config
+- strict lexicographic order: violations -> risk -> changes -> executionCost
+- optional weighted scoring is secondary and applies only after lexicographic filtering
+- final tie-break is lexical strategy id
 
 Strategy evaluation:
 
 - fixed strategy registry
 - simulation-only evaluation
 - deterministic ranking metrics
+- deterministic, explainable decision output with full ranking and reason
+- deterministic selection trace: evaluated/rejected counts and selection time
 - bounded adaptive refinement
 - deterministic memory reuse from .choir/memory.json
 
@@ -240,6 +245,9 @@ Workspace detection contract:
    - choir refactor inline <symbol>
    - choir refactor move <symbol> <targetUnit> (parsed/planned in PASS 1)
    - choir refactor extract <symbol> <targetUnit> (parsed/planned in PASS 1)
+- plan optimization surface:
+   - choir plan --optimize
+   - choir plan --optimize for <goalRef>
 - panel chat shortcuts:
    - @choir control
    - @choir timeline

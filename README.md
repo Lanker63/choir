@@ -57,6 +57,7 @@ Entry point: @choir
 Core flow:
 
 - define, analyze, plan, simulate, preview, execute, status
+- deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - approve/reject policy-gated diffs
 - export deterministic DSL projections
 
@@ -99,7 +100,9 @@ Additional commands:
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
-<plan> ::= "plan" ["for" <string>] | "plan" "approve" <identifier>
+<plan> ::= "plan" ["for" <string>] ["--optimize"]
+         | "plan" "--optimize" ["for" <string>]
+         | "plan" "approve" <identifier>
 <simulate> ::= "simulate" ["plan" <identifier>] | "simulate" "units" <identifier> ("," <identifier>)*
 <refactor> ::= "refactor" "rename" <identifier> <identifier>
              | "refactor" "move" <identifier> <identifier>
@@ -129,6 +132,9 @@ Additional commands:
 ## Execution and Safety
 
 - Deterministic planning and strategy selection
+- Strategy selection simulates all candidates before selection (no heuristic-only path)
+- Ranking order is deterministic: violations -> risk -> changes -> executionCost (lexical id tie-break)
+- Violating strategies are excluded by default unless explicitly allowed
 - Preview is simulation-derived and hash-bound to execution
 - Transactional execution: simulate -> validate -> commit/rollback
 - Global orchestration validates full cross-repo graph and policy before execution
@@ -150,6 +156,7 @@ Org-wide simulation notes:
 
 - `choir simulate` runs deterministic, non-mutating simulation with the same execution logic as real execution.
 - `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
+- `choir plan --optimize` simulates all candidate strategies and returns explainable ranking and selected strategy.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
 

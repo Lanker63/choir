@@ -29,7 +29,8 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <analyze-target> ::= "workspace" | "hotspots" | "summary"
 
-<plan> ::= "plan" ["for" <string>]
+<plan> ::= "plan" ["for" <string>] ["--optimize"]
+         | "plan" "--optimize" ["for" <string>]
          | "plan" "approve" <identifier>
 
 <refactor> ::= "refactor" "rename" <identifier> <identifier>
@@ -141,6 +142,7 @@ export const CHOIR_EXPORT_SECTION_KEYWORDS = ["all", "intent", "policy", "plans"
 export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
 export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
 export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
+export const CHOIR_PLAN_OPTIMIZE_FLAG = "--optimize" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
@@ -154,6 +156,7 @@ const KEYWORDS = new Set<string>([
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_SEQUENCE_KEYWORD,
@@ -183,6 +186,7 @@ export type AnalyzeNode = {
 export type PlanNode = {
   type: "plan";
   target?: string;
+  optimize?: boolean;
 };
 
 export type RefactorRenameNode = {
@@ -817,15 +821,37 @@ class Parser {
       };
     }
 
+    let target: string | undefined;
+    let optimize = false;
+
+    if (this.consumePlanOptimizeFlag()) {
+      optimize = true;
+    }
+
     if (this.consumeKeyword("for")) {
-      return {
-        type: "plan",
-        target: this.expectString(),
-      };
+      target = this.expectString();
+    }
+
+    if (this.consumePlanOptimizeFlag()) {
+      if (optimize) {
+        throw new Error("Duplicate plan optimize flag: --optimize");
+      }
+
+      optimize = true;
+    }
+
+    if (this.consumeKeyword("for")) {
+      if (target !== undefined) {
+        throw new Error("Duplicate plan target: for <string>");
+      }
+
+      target = this.expectString();
     }
 
     return {
       type: "plan",
+      ...(target !== undefined ? { target } : {}),
+      ...(optimize ? { optimize: true } : {}),
     };
   }
 
@@ -1206,6 +1232,20 @@ class Parser {
     return true;
   }
 
+  private consumePlanOptimizeFlag(): boolean {
+    const token = this.peek();
+    if (!token || (token.type !== "keyword" && token.type !== "identifier")) {
+      return false;
+    }
+
+    if (token.value.toLowerCase() !== CHOIR_PLAN_OPTIMIZE_FLAG) {
+      return false;
+    }
+
+    this.index += 1;
+    return true;
+  }
+
   private consumeSymbol(value: "=" | "," | "@"): boolean {
     const token = this.peek();
     if (!token || token.type !== "symbol" || token.value !== value) {
@@ -1258,7 +1298,9 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "plan") {
-    return node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
+    const targetValid = node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
+    const optimizeValid = node.optimize === undefined || node.optimize === true;
+    return targetValid && optimizeValid;
   }
 
   if (node.type === "refactor-rename") {

@@ -207,14 +207,19 @@ import {
   buildGlobalContext,
   buildGlobalDependencyGraph,
   compareStrategies,
+  compareStrategyMetricsLex,
+  computeStrategyScore,
   createGlobalPlanningCache,
   detectPolicyDrift,
+  evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
   executeGlobalPlan,
   orderPlan as orderGlobalPlan,
   OrgPolicy,
   propagatePolicies,
+  rankStrategies,
   Repo,
+  selectBestStrategy,
   simulatePlan,
   simulateUnits,
   synthesizeGlobalPlan,
@@ -657,6 +662,19 @@ const pass2: TestPass = {
           symbol: "queryResult",
         });
 
+        const optimizePlan = parseCommand("choir plan --optimize");
+        assert.deepStrictEqual(optimizePlan.ast, {
+          type: "plan",
+          optimize: true,
+        });
+
+        const optimizePlanForTarget = parseCommand("choir plan --optimize for \"service boundaries\"");
+        assert.deepStrictEqual(optimizePlanForTarget.ast, {
+          type: "plan",
+          target: "service boundaries",
+          optimize: true,
+        });
+
         const simulate = parseCommand("choir simulate");
         assert.deepStrictEqual(simulate.ast, {
           type: "simulate",
@@ -688,6 +706,7 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir define \"goal\" enforce"), /Expected one of/);
         assert.throws(() => parseCommand("choir define goal"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
+        assert.throws(() => parseCommand("choir plan --optimize --optimize"), /Duplicate plan optimize flag/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
         assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
         assert.throws(() => parseCommand("choir simulate units"), /Expected identifier/);
@@ -1542,7 +1561,7 @@ const pass2: TestPass = {
         assert.deepStrictEqual(analyzeTypes, ["workspace", "hotspots", "summary"]);
 
         const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
-        assert.deepStrictEqual(planTail, ["for", "then"]);
+        assert.deepStrictEqual(planTail, ["for", "--optimize", "then"]);
 
         const simulateTail = getDeterministicCompletions("choir simulate ").map((item) => item.label);
         assert.deepStrictEqual(simulateTail, ["plan", "units", "then"]);
@@ -5143,6 +5162,177 @@ const pass6: TestPass = {
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
         assert.ok(result.audit.violations.some((entry) => entry.includes("Simulation and execution diverged")));
+      },
+    },
+    {
+      id: "6.10h",
+      name: "strategy evaluation simulates all candidates deterministically",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const evaluated = await evaluateGlobalStrategies([
+          {
+            id: "strategy-beta",
+            plan: {
+              id: "plan-beta",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=2", dependsOn: [] }],
+            },
+          },
+          {
+            id: "strategy-alpha",
+            plan: {
+              id: "plan-alpha",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+            },
+          },
+        ], {
+          repos,
+          policies: [],
+        });
+
+        assert.deepStrictEqual(evaluated.map((entry) => entry.strategyId), ["strategy-alpha", "strategy-beta"]);
+        assert.strictEqual(evaluated.every((entry) => entry.result.trace.stepsExecuted.length === 1), true);
+      },
+    },
+    {
+      id: "6.10i",
+      name: "strategy metrics comparator enforces lexicographic priority and deterministic score",
+      run: async () => {
+        assert.strictEqual(compareStrategyMetricsLex(
+          { violations: 0, risk: 5, changes: 1, executionCost: 3 },
+          { violations: 1, risk: 0, changes: 0, executionCost: 0 }
+        ) < 0, true);
+
+        assert.strictEqual(compareStrategyMetricsLex(
+          { violations: 0, risk: 2, changes: 5, executionCost: 8 },
+          { violations: 0, risk: 3, changes: 0, executionCost: 0 }
+        ) < 0, true);
+
+        assert.strictEqual(compareStrategyMetricsLex(
+          { violations: 0, risk: 2, changes: 2, executionCost: 4 },
+          { violations: 0, risk: 2, changes: 2, executionCost: 5 }
+        ) < 0, true);
+
+        assert.strictEqual(
+          computeStrategyScore(
+            { violations: 0, risk: 2, changes: 3, executionCost: 4 },
+            { risk: 5, changes: 2, executionCost: 1 }
+          ),
+          20
+        );
+      },
+    },
+    {
+      id: "6.10j",
+      name: "strategy selection filters violations by default and emits explainable decision",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: {} },
+        ];
+
+        const strategies = [
+          {
+            id: "strategy-safe",
+            plan: {
+              id: "plan-safe",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+            },
+          },
+          {
+            id: "strategy-risky",
+            plan: {
+              id: "plan-risky",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:mutate", dependsOn: [] }],
+            },
+          },
+        ];
+
+        const selection = await selectBestStrategy(strategies, {
+          repos,
+          policies: [{
+            id: "org-deny-danger",
+            source: "org",
+            rules: [{
+              id: "deny-danger",
+              kind: "deny-action-prefix",
+              effect: "deny",
+              actionPrefix: "danger:",
+            }],
+          }],
+        });
+
+        assert.strictEqual(selection.selected.strategyId, "strategy-safe");
+        assert.strictEqual(selection.trace.strategiesEvaluated, 2);
+        assert.strictEqual(selection.trace.strategiesRejected, 1);
+        assert.ok(selection.decision.reason.includes("lexicographic priority"));
+        assert.ok(selection.decision.reason.includes("rejected strategies with violations: 1"));
+
+        await assert.rejects(
+          selectBestStrategy([
+            {
+              id: "strategy-a",
+              plan: {
+                id: "plan-a",
+                tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:a", dependsOn: [] }],
+              },
+            },
+            {
+              id: "strategy-b",
+              plan: {
+                id: "plan-b",
+                tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:b", dependsOn: [] }],
+              },
+            },
+          ], {
+            repos,
+            policies: [{
+              id: "org-deny-danger-all",
+              source: "org",
+              rules: [{
+                id: "deny-danger-all",
+                kind: "deny-action-prefix",
+                effect: "deny",
+                actionPrefix: "danger:",
+              }],
+            }],
+          }),
+          /No valid strategies/
+        );
+
+        const allowViolationsSelection = await selectBestStrategy([
+          {
+            id: "strategy-beta",
+            plan: {
+              id: "plan-beta",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:beta", dependsOn: [] }],
+            },
+          },
+          {
+            id: "strategy-alpha",
+            plan: {
+              id: "plan-alpha",
+              tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:alpha", dependsOn: [] }],
+            },
+          },
+        ], {
+          repos,
+          policies: [{
+            id: "org-deny-danger-allow",
+            source: "org",
+            rules: [{
+              id: "deny-danger-allow",
+              kind: "deny-action-prefix",
+              effect: "deny",
+              actionPrefix: "danger:",
+            }],
+          }],
+        }, {
+          allowViolations: true,
+        });
+
+        assert.strictEqual(allowViolationsSelection.selected.strategyId, "strategy-alpha");
       },
     },
     {

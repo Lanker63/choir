@@ -428,6 +428,10 @@ function compileActionToYAML(
   }
 
   if (action.type === "plan") {
+    if (action.optimize) {
+      return next;
+    }
+
     const generated = generatePlan(choirConfigToControlPlane(next), context.state);
     const draftPlan: Plan = {
       ...generated,

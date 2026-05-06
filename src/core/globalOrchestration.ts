@@ -210,6 +210,62 @@ export type SimulationResult = {
   context: SimulationContext;
 };
 
+export type Strategy = {
+  id: string;
+  plan: GlobalPlan;
+};
+
+export type EvaluatedStrategy = {
+  strategyId: string;
+  result: SimulationResult;
+};
+
+export type StrategyMetrics = {
+  violations: number;
+  risk: number;
+  changes: number;
+  executionCost: number;
+};
+
+export type ScoreWeights = {
+  risk: number;
+  changes: number;
+  executionCost: number;
+};
+
+export type StrategyConfig = {
+  allowViolations?: boolean;
+  weights?: ScoreWeights;
+  costModel?: CostModel;
+};
+
+export type RankedStrategy = EvaluatedStrategy & {
+  metrics: StrategyMetrics;
+  score: number | null;
+};
+
+export type StrategyDecision = {
+  selected: string;
+  ranking: {
+    strategyId: string;
+    metrics: StrategyMetrics;
+  }[];
+  reason: string;
+};
+
+export type StrategyTrace = {
+  strategiesEvaluated: number;
+  strategiesRejected: number;
+  selectionTime: number;
+};
+
+export type StrategySelectionResult = {
+  selected: RankedStrategy;
+  ranking: RankedStrategy[];
+  decision: StrategyDecision;
+  trace: StrategyTrace;
+};
+
 export type ComparisonResult = {
   bestStrategy: string;
   metrics: {
@@ -217,6 +273,13 @@ export type ComparisonResult = {
     changes: number;
     violations: number;
   };
+  ranking: {
+    strategyId: string;
+    metrics: StrategyMetrics;
+    score: number | null;
+  }[];
+  decision: StrategyDecision;
+  trace: StrategyTrace;
 };
 
 export type GlobalConsistencyResult = {
@@ -587,54 +650,236 @@ export async function simulateUnits(
   };
 }
 
-function strategyMetricsFromSimulation(
-  simulation: SimulationResult,
-  costModel: CostModel
-): { risk: number; changes: number; violations: number } {
-  const changes = simulation.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
-  const violations = simulation.violations.length;
-  const risk = (changes * costModel.changeCost) + (violations * costModel.riskScore) + (simulation.success ? 0 : costModel.riskScore);
+function defaultCostModel(): CostModel {
   return {
+    changeCost: 1,
+    riskScore: 5,
+  };
+}
+
+function defaultScoreWeights(): ScoreWeights {
+  return {
+    risk: 5,
+    changes: 1,
+    executionCost: 1,
+  };
+}
+
+export function computeStrategyMetrics(
+  result: SimulationResult,
+  costModel: CostModel = defaultCostModel()
+): StrategyMetrics {
+  const changes = result.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
+  const violations = result.violations.length;
+  const risk = (changes * costModel.changeCost) + (violations * costModel.riskScore) + (result.success ? 0 : costModel.riskScore);
+  const executionCost = changes + result.trace.stepsExecuted.length + result.trace.unitsAffected.length;
+
+  return {
+    violations,
     risk,
     changes,
-    violations,
+    executionCost,
+  };
+}
+
+export function compareStrategyMetricsLex(left: StrategyMetrics, right: StrategyMetrics): number {
+  if (left.violations !== right.violations) {
+    return left.violations - right.violations;
+  }
+
+  if (left.risk !== right.risk) {
+    return left.risk - right.risk;
+  }
+
+  if (left.changes !== right.changes) {
+    return left.changes - right.changes;
+  }
+
+  return left.executionCost - right.executionCost;
+}
+
+export function computeStrategyScore(metrics: StrategyMetrics, weights: ScoreWeights): number {
+  return (
+    (metrics.risk * weights.risk)
+    + (metrics.changes * weights.changes)
+    + (metrics.executionCost * weights.executionCost)
+  );
+}
+
+export async function evaluateStrategies(
+  strategies: Strategy[],
+  options: ExecuteGlobalPlanOptions
+): Promise<EvaluatedStrategy[]> {
+  const ordered = [...strategies].sort((left, right) => left.id.localeCompare(right.id));
+
+  return Promise.all(ordered.map(async (strategy) => ({
+    strategyId: strategy.id,
+    result: await simulatePlan(strategy.plan, options),
+  })));
+}
+
+export function rankStrategies(
+  evaluated: EvaluatedStrategy[],
+  config?: StrategyConfig
+): RankedStrategy[] {
+  const allowViolations = config?.allowViolations ?? false;
+  const weights = config?.weights;
+  const costModel = config?.costModel ?? defaultCostModel();
+
+  const enriched = [...evaluated]
+    .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
+    .map((entry) => {
+      const metrics = computeStrategyMetrics(entry.result, costModel);
+      return {
+        ...entry,
+        metrics,
+        score: weights ? computeStrategyScore(metrics, weights) : null,
+      } satisfies RankedStrategy;
+    });
+
+  const valid = allowViolations
+    ? enriched
+    : enriched.filter((entry) => entry.metrics.violations === 0);
+
+  return [...valid].sort((left, right) => {
+    const lex = compareStrategyMetricsLex(left.metrics, right.metrics);
+    if (lex !== 0) {
+      return lex;
+    }
+
+    if (weights && left.score !== null && right.score !== null && left.score !== right.score) {
+      return left.score - right.score;
+    }
+
+    return left.strategyId.localeCompare(right.strategyId);
+  });
+}
+
+function formatStrategyMetrics(metrics: StrategyMetrics): string {
+  return `violations=${metrics.violations}, risk=${metrics.risk}, changes=${metrics.changes}, executionCost=${metrics.executionCost}`;
+}
+
+function explainStrategyDecision(
+  ranking: RankedStrategy[],
+  selected: RankedStrategy,
+  rejected: number,
+  config?: StrategyConfig
+): string {
+  const lines: string[] = [
+    `Selected ${selected.strategyId}`,
+    "- lexicographic priority: violations -> risk -> changes -> executionCost",
+    `- selected metrics: ${formatStrategyMetrics(selected.metrics)}`,
+  ];
+
+  if (rejected > 0 && !config?.allowViolations) {
+    lines.push(`- rejected strategies with violations: ${rejected}`);
+  }
+
+  const runnerUp = ranking[1];
+  if (runnerUp) {
+    lines.push(`- next best ${runnerUp.strategyId}: ${formatStrategyMetrics(runnerUp.metrics)}`);
+  }
+
+  if (config?.weights) {
+    const weights = {
+      ...defaultScoreWeights(),
+      ...config.weights,
+    };
+    lines.push(`- weighted scoring enabled after lexicographic filtering: risk=${weights.risk}, changes=${weights.changes}, executionCost=${weights.executionCost}`);
+    if (selected.score !== null) {
+      lines.push(`- selected weighted score: ${selected.score}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+export async function selectBestStrategy(
+  strategies: Strategy[],
+  options: ExecuteGlobalPlanOptions,
+  config?: StrategyConfig
+): Promise<StrategySelectionResult> {
+  if (strategies.length === 0) {
+    throw new Error("No strategies provided for comparison");
+  }
+
+  const started = Date.now();
+  const evaluated = await evaluateStrategies(strategies, options);
+  const effectiveConfig: StrategyConfig = {
+    ...config,
+    ...(config?.weights
+      ? {
+        weights: {
+          ...defaultScoreWeights(),
+          ...config.weights,
+        },
+      }
+      : {}),
+    costModel: config?.costModel ?? defaultCostModel(),
+  };
+  const ranking = rankStrategies(evaluated, effectiveConfig);
+
+  if (ranking.length === 0) {
+    throw new Error("No valid strategies");
+  }
+
+  const selected = ranking[0] as RankedStrategy;
+  const rejected = evaluated.length - ranking.length;
+  const decision: StrategyDecision = {
+    selected: selected.strategyId,
+    ranking: ranking.map((entry) => ({
+      strategyId: entry.strategyId,
+      metrics: {
+        ...entry.metrics,
+      },
+    })),
+    reason: explainStrategyDecision(ranking, selected, rejected, effectiveConfig),
+  };
+  const trace: StrategyTrace = {
+    strategiesEvaluated: evaluated.length,
+    strategiesRejected: rejected,
+    selectionTime: Math.max(0, Date.now() - started),
+  };
+
+  return {
+    selected,
+    ranking,
+    decision,
+    trace,
   };
 }
 
 export async function compareStrategies(
   strategies: GlobalPlan[],
-  options: ExecuteGlobalPlanOptions & { costModel?: CostModel }
+  options: ExecuteGlobalPlanOptions & { costModel?: CostModel; strategyConfig?: StrategyConfig }
 ): Promise<ComparisonResult> {
-  const orderedPlans = [...strategies].sort((left, right) => left.id.localeCompare(right.id));
-  const costModel = options.costModel ?? {
-    changeCost: 1,
-    riskScore: 5,
-  };
-
-  if (orderedPlans.length === 0) {
-    throw new Error("No strategies provided for comparison");
-  }
-
-  const evaluated: Array<{ id: string; metrics: { risk: number; changes: number; violations: number } }> = [];
-
-  for (const strategy of orderedPlans) {
-    const simulation = await simulatePlan(strategy, options);
-    evaluated.push({
-      id: strategy.id,
-      metrics: strategyMetricsFromSimulation(simulation, costModel),
-    });
-  }
-
-  const best = [...evaluated].sort((left, right) =>
-    left.metrics.violations - right.metrics.violations
-    || left.metrics.risk - right.metrics.risk
-    || left.metrics.changes - right.metrics.changes
-    || left.id.localeCompare(right.id)
-  )[0] as { id: string; metrics: { risk: number; changes: number; violations: number } };
+  const selection = await selectBestStrategy(
+    [...strategies]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((plan) => ({ id: plan.id, plan })),
+    options,
+    {
+      ...options.strategyConfig,
+      costModel: options.costModel ?? options.strategyConfig?.costModel,
+    }
+  );
 
   return {
-    bestStrategy: best.id,
-    metrics: best.metrics,
+    bestStrategy: selection.selected.strategyId,
+    metrics: {
+      risk: selection.selected.metrics.risk,
+      changes: selection.selected.metrics.changes,
+      violations: selection.selected.metrics.violations,
+    },
+    ranking: selection.ranking.map((entry) => ({
+      strategyId: entry.strategyId,
+      metrics: {
+        ...entry.metrics,
+      },
+      score: entry.score,
+    })),
+    decision: selection.decision,
+    trace: selection.trace,
   };
 }
 

@@ -37,6 +37,7 @@ import {
     GlobalPlan,
     Repo,
     compareStrategies,
+    selectBestStrategy,
     simulatePlan as simulateGlobalPlan,
     simulateUnits as simulateGlobalUnits,
 } from "./core/globalOrchestration.js";
@@ -218,6 +219,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"enforce service boundaries\"",
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
+        "- choir plan --optimize",
         "- choir plan approve <planId>",
         "- choir simulate",
         "- choir simulate plan <planId>",
@@ -758,9 +760,10 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "refactor-extract"
                     || action.type === "refactor-inline"
                     || action.type === "graph"
+                    || (action.type === "plan" && action.optimize === true)
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|plan --optimize` cannot be chained with `then`.");
                 return;
             }
 
@@ -983,6 +986,56 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     const suffix = parsed.ast.nodeId ? ` ${parsed.ast.nodeId}` : "";
                     stream.markdown(`Graph opened in mode: ${parsed.ast.mode}${suffix}`);
+                    return;
+                }
+
+                if (parsed.ast.type === "plan" && parsed.ast.optimize) {
+                    const planNode = parsed.ast;
+                    const configuredPlans = [...control.execution.plans]
+                        .sort((left, right) => left.id.localeCompare(right.id));
+
+                    if (configuredPlans.length === 0) {
+                        stream.markdown("Plan optimization unavailable: no execution plans defined in control plane.");
+                        return;
+                    }
+
+                    const target = planNode.target;
+                    const targetedPlans = target
+                        ? configuredPlans.filter((plan) => (plan.goalRefs ?? []).includes(target))
+                        : configuredPlans;
+
+                    if (targetedPlans.length === 0) {
+                        stream.markdown(`Plan optimization found no matching strategies for target: ${target}`);
+                        return;
+                    }
+
+                    const strategies = targetedPlans.map((plan) => ({
+                        id: plan.id,
+                        plan: toGlobalPlanFromPlan(plan),
+                    }));
+                    const repos = buildSimulationRepos(strategies.map((entry) => entry.plan));
+                    const selection = await selectBestStrategy(strategies, {
+                        repos,
+                        policies: [],
+                    });
+
+                    const rankingLines = selection.ranking.map((entry, index) =>
+                        `- ${index + 1}. ${entry.strategyId} (violations=${entry.metrics.violations}, risk=${entry.metrics.risk}, changes=${entry.metrics.changes}, executionCost=${entry.metrics.executionCost})`
+                    );
+
+                    stream.markdown([
+                        "Plan optimization complete.",
+                        `- selected: ${selection.selected.strategyId}`,
+                        `- strategiesEvaluated: ${selection.trace.strategiesEvaluated}`,
+                        `- strategiesRejected: ${selection.trace.strategiesRejected}`,
+                        `- selectionTimeMs: ${selection.trace.selectionTime}`,
+                        "",
+                        "Reason:",
+                        ...selection.decision.reason.split("\n"),
+                        "",
+                        "Ranking:",
+                        ...rankingLines,
+                    ].join("\n"));
                     return;
                 }
 
