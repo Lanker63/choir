@@ -8,7 +8,7 @@ async function main(): Promise<void> {
       mode,
       throwOnFailure: false,
       detectFlakiness: true,
-      parallelCaseExecution: true,
+      parallelCaseExecution: false,
       flakeRuns: mode === "quick" ? 2 : 3,
     });
 

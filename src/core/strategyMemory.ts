@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import { ControlPlane, Plan, Task } from "../schema.js";
 import { StatePlane } from "./state.js";
+import { deterministicTimestampFromString } from "./deterministicCore.js";
 import type { StrategyMetrics, StrategyMutation, StrategyOutcome, StrategyType } from "./strategyPlanner.js";
 
 export type ContextSignature = {
@@ -418,7 +419,7 @@ export function recordStrategy(
     plan: outcome.plan,
     outcome: entryOutcome,
     ...(adaptive ? { adaptive } : {}),
-    createdAt: existingEntry?.createdAt ?? new Date().toISOString(),
+    createdAt: existingEntry?.createdAt ?? deterministicTimestampFromString(id),
   });
 
   persistStrategyMemory(root, [...existing, entry]);
@@ -458,7 +459,7 @@ export function recordStrategies(
       plan: item.outcome.plan,
       outcome: entryOutcome,
       ...(adaptive ? { adaptive } : {}),
-      createdAt: existingEntry?.createdAt ?? new Date().toISOString(),
+      createdAt: existingEntry?.createdAt ?? deterministicTimestampFromString(id),
     });
 
     pending.push(entry);

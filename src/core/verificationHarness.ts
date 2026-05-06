@@ -743,7 +743,7 @@ function allAssertionsPass(result: VerificationCaseResult): boolean {
 export async function runFullVerification(options: RunVerificationOptions = {}): Promise<VerificationReport> {
   const mode = options.mode ?? "full";
   const suite = options.suite ? clone(options.suite) : createVerificationSuite(mode);
-  const parallelCaseExecution = options.parallelCaseExecution ?? true;
+  const parallelCaseExecution = options.parallelCaseExecution ?? false;
   const detectFlakiness = options.detectFlakiness ?? true;
   const flakeRuns = Math.max(2, options.flakeRuns ?? 3);
 

@@ -30,6 +30,9 @@ jobs:
       - name: Run verification harness
         run: npm run verify
 
+      - name: Run deterministic verification
+        run: npm run verify:determinism
+
       - name: Run contract verification checklist
         run: npm run verify:contracts
 
@@ -70,6 +73,9 @@ jobs:
 
       - name: Verification harness (full)
         run: npm run verify
+
+      - name: Deterministic verification
+        run: npm run verify:determinism
 
       - name: Contract verification checklist (full)
         run: npm run verify:contracts:full

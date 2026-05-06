@@ -1,4 +1,14 @@
-import { createHash } from "crypto";
+import {
+  canonicalizeUnknown,
+  cloneDeterministicContext,
+  deterministicContextFromHash,
+  deterministicHash,
+  deterministicId,
+  stableSortBy,
+  stableSortStrings,
+  stableStringify,
+  type DeterministicContext,
+} from "./deterministicCore.js";
 import { SystemState } from "./distributedSync.js";
 
 export type RepoTask = {
@@ -189,8 +199,9 @@ export type ExecutionInput = {
 };
 
 export type ExecutionContext = {
-  fixedTimestamp: number;
+  baseTimestamp: number;
   seed: number;
+  logicalTime: number;
 };
 
 export type DeterministicOperation = {
@@ -367,6 +378,7 @@ export type TransactionContext = {
   snapshots: Map<string, Snapshot>;
   transaction: Transaction;
   compensations: CompensationAction[];
+  context: DeterministicContext;
 };
 
 export type Change = {
@@ -530,23 +542,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function stableSortUnknown(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => stableSortUnknown(entry));
-  }
-
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  return Object.fromEntries(
-    Object.keys(value)
-      .sort((left, right) => left.localeCompare(right))
-      .map((key) => [key, stableSortUnknown(value[key])])
-  );
-}
-
-function stableStringify(value: unknown): string {
-  return JSON.stringify(stableSortUnknown(value));
+  return canonicalizeUnknown(value);
 }
 
 function cloneUnknown<T>(value: T): T {
@@ -562,7 +558,7 @@ export function cloneState(state: GlobalState): GlobalState {
 }
 
 function sortedUnique(values: string[]): string[] {
-  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+  return stableSortStrings(Array.from(new Set(values)));
 }
 
 function uniqueInOrder(values: string[]): string[] {
@@ -581,7 +577,7 @@ function uniqueInOrder(values: string[]): string[] {
 }
 
 export function deterministicSort(items: string[]): string[] {
-  return [...items].sort((left, right) => left.localeCompare(right));
+  return stableSortStrings(items);
 }
 
 function normalizePlan(plan: GlobalPlan): GlobalPlan {
@@ -624,25 +620,16 @@ function normalizeExecutionInput(input: ExecutionInput): ExecutionInput {
 }
 
 export function hashState(state: GlobalState): string {
-  return createHash("sha256")
-    .update(stableStringify(stableSortUnknown(state)))
-    .digest("hex");
+  return deterministicHash(stableSortUnknown(state));
 }
 
 export function hashInput(input: ExecutionInput): string {
   const normalized = normalizeExecutionInput(input);
-  return createHash("sha256")
-    .update(stableStringify(normalized))
-    .digest("hex");
+  return deterministicHash(normalized);
 }
 
 function executionContextFromInputHash(inputHash: string): ExecutionContext {
-  const fixedTimestamp = Number.parseInt(inputHash.slice(0, 12), 16);
-  const seed = Number.parseInt(inputHash.slice(12, 20), 16);
-  return {
-    fixedTimestamp: Number.isFinite(fixedTimestamp) ? fixedTimestamp : 0,
-    seed: Number.isFinite(seed) ? seed : 0,
-  };
+  return deterministicContextFromHash(inputHash);
 }
 
 let traceStore: TraceStore = {
@@ -719,14 +706,21 @@ function setUnitExecutionState(state: ExecutionState, unitId: string, value: Uni
 const transactionLocks = new Map<string, Lock>();
 
 export function sortStages(stages: ExecutionStage[]): ExecutionStage[] {
-  return [...stages].sort((left, right) =>
+  return stableSortBy(stages, (stage) =>
+    `${stage.order.toString().padStart(8, "0")}:${stage.id}:${stableStringify(stage.units)}`
+  ).sort((left, right) =>
     left.order - right.order
     || left.id.localeCompare(right.id)
     || stableStringify(left.units).localeCompare(stableStringify(right.units))
   );
 }
 
-function createTransaction(baseState: GlobalState, stages: ExecutionStage[]): Transaction {
+function nextDeterministicTimestamp(ctx: TransactionContext): number {
+  ctx.context.logicalTime += 1;
+  return ctx.context.baseTimestamp + ctx.context.logicalTime;
+}
+
+function createTransaction(baseState: GlobalState, stages: ExecutionStage[], context: DeterministicContext): Transaction {
   const orderedStages = sortStages(stages);
   const id = hashId("transaction", {
     stages: orderedStages.map((stage) => ({
@@ -742,13 +736,20 @@ function createTransaction(baseState: GlobalState, stages: ExecutionStage[]): Tr
     id,
     stages: orderedStages,
     status: "pending",
-    startedAt: Date.now(),
+    startedAt: context.baseTimestamp,
   };
 }
 
-export function beginTransaction(state: GlobalState, stages: ExecutionStage[] = []): TransactionContext {
+export function beginTransaction(
+  state: GlobalState,
+  stages: ExecutionStage[] = [],
+  context?: ExecutionContext
+): TransactionContext {
   const baseState = cloneState(state);
-  const transaction = createTransaction(baseState, stages);
+  const deterministicContext = context
+    ? cloneDeterministicContext(context)
+    : deterministicContextFromHash(hashState(baseState));
+  const transaction = createTransaction(baseState, stages, deterministicContext);
   return {
     transactionId: transaction.id,
     workingState: cloneState(baseState),
@@ -756,6 +757,7 @@ export function beginTransaction(state: GlobalState, stages: ExecutionStage[] = 
     snapshots: new Map<string, Snapshot>(),
     transaction,
     compensations: [],
+    context: deterministicContext,
   };
 }
 
@@ -766,7 +768,7 @@ function applyGlobalState(state: GlobalState): GlobalState {
 export function commitTransaction(ctx: TransactionContext): void {
   ctx.workingState = applyGlobalState(ctx.workingState);
   ctx.transaction.status = "committed";
-  ctx.transaction.committedAt = Date.now();
+  ctx.transaction.committedAt = nextDeterministicTimestamp(ctx);
 }
 
 function runCompensations(ctx: TransactionContext): void {
@@ -793,7 +795,7 @@ export function snapshotUnit(ctx: TransactionContext, unitId: string): void {
   ctx.snapshots.set(unitId, {
     unitId,
     state: cloneUnknown(ctx.workingState[unitId] ?? {}),
-    timestamp: Date.now(),
+    timestamp: nextDeterministicTimestamp(ctx),
   });
 }
 
@@ -1033,8 +1035,7 @@ export function validateIsolation(
   };
 }
 
-function snapshotUnits(state: GlobalState, units: string[]): Snapshot[] {
-  const timestamp = Date.now();
+function snapshotUnits(state: GlobalState, units: string[], timestamp: number): Snapshot[] {
   return sortedUnique(units).map((unitId) => ({
     unitId,
     state: cloneUnknown(state[unitId] ?? {}),
@@ -1334,11 +1335,12 @@ function executionStagesFromBatches(batches: TaskBatch[]): ExecutionStage[] {
 }
 
 function buildTransactionTrace(ctx: TransactionContext, stagesExecuted: string[]): TransactionTrace {
+  const endTimestamp = ctx.transaction.committedAt ?? (ctx.context.baseTimestamp + ctx.context.logicalTime);
   return {
     transactionId: ctx.transactionId,
     stagesExecuted: uniqueInOrder(stagesExecuted),
     committed: ctx.transaction.status === "committed",
-    duration: Math.max(0, Date.now() - ctx.transaction.startedAt),
+    duration: Math.max(0, endTimestamp - ctx.transaction.startedAt),
   };
 }
 
@@ -1353,8 +1355,6 @@ export async function executeTransaction(
     const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
     const baseState = stateForRepos(normalizedRepos);
     const executionState = createExecutionState(Object.keys(baseState));
-    const tx = beginTransaction(baseState, []);
-    abortTransaction(tx);
     const input: ExecutionInput = {
       plan: normalizePlan(plan),
       state: cloneState(baseState),
@@ -1363,6 +1363,8 @@ export async function executeTransaction(
     };
     const inputHash = hashInput(input);
     const context = executionContextFromInputHash(inputHash);
+    const tx = beginTransaction(baseState, [], context);
+    abortTransaction(tx);
     const deterministicTrace: DeterministicTrace = {
       traceId: deterministicTraceId(inputHash, [], hashState(baseState)),
       inputHash,
@@ -1411,14 +1413,6 @@ export async function executeTransaction(
   const validateState = options.validateState ?? (() => true);
   const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
   const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
-  const tx = beginTransaction(baseState, stages);
-  const shouldLock = mode === "execution";
-  const lockOwnerToken = shouldLock ? Symbol(tx.transactionId) : undefined;
-  const lockUnits = sortedUnique(effectivePlan.tasks.map((task) => task.repoId));
-  const stepsExecuted: string[] = [];
-  const unitsAffected = new Set<string>();
-  const committedStages: string[] = [];
-  const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
   const deterministicInput: ExecutionInput = {
     plan: normalizePlan(effectivePlan),
     state: cloneState(baseState),
@@ -1427,6 +1421,14 @@ export async function executeTransaction(
   };
   const deterministicInputHash = hashInput(deterministicInput);
   const deterministicContext = executionContextFromInputHash(deterministicInputHash);
+  const tx = beginTransaction(baseState, stages, deterministicContext);
+  const shouldLock = mode === "execution";
+  const lockOwnerToken = shouldLock ? Symbol(tx.transactionId) : undefined;
+  const lockUnits = sortedUnique(effectivePlan.tasks.map((task) => task.repoId));
+  const stepsExecuted: string[] = [];
+  const unitsAffected = new Set<string>();
+  const committedStages: string[] = [];
+  const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
   const deterministicStages: DeterministicStageTrace[] = [];
   let expectedStageBeforeHash = hashState(baseState);
 
@@ -1472,7 +1474,7 @@ export async function executeTransaction(
           stageId: "transaction:lock",
           unitId: lockUnits[0] ?? "workspace:root",
           error: lockResult.errors.join("; "),
-          timestamp: Date.now(),
+          timestamp: nextDeterministicTimestamp(tx),
         },
       };
     }
@@ -1508,7 +1510,7 @@ export async function executeTransaction(
         continue;
       }
 
-      const stageTx = beginTransaction(tx.workingState, [stage]);
+      const stageTx = beginTransaction(tx.workingState, [stage], tx.context);
       let activeTask: GlobalPlanTask | null = null;
       const stageBeforeHash = hashState(tx.workingState);
       assertDeterministic(
@@ -1577,7 +1579,7 @@ export async function executeTransaction(
             stageId: stage.id,
             unitId: failedUnit,
             error: reason,
-            timestamp: Date.now(),
+            timestamp: nextDeterministicTimestamp(tx),
           },
         };
       }
@@ -1610,7 +1612,7 @@ export async function executeTransaction(
             stageId: `${stage.id}:prepare`,
             unitId: failedUnit,
             error: stagePrepare.errors.join("; "),
-            timestamp: Date.now(),
+            timestamp: nextDeterministicTimestamp(tx),
           },
         };
       }
@@ -1660,7 +1662,7 @@ export async function executeTransaction(
           stageId: "transaction:prepare",
           unitId: failedUnit,
           error: finalPrepare.errors.join("; "),
-          timestamp: Date.now(),
+          timestamp: nextDeterministicTimestamp(tx),
         },
       };
     }
@@ -1857,11 +1859,16 @@ export async function evaluateStrategies(
   options: ExecuteGlobalPlanOptions
 ): Promise<EvaluatedStrategy[]> {
   const ordered = [...strategies].sort((left, right) => left.id.localeCompare(right.id));
+  const evaluated: EvaluatedStrategy[] = [];
 
-  return Promise.all(ordered.map(async (strategy) => ({
-    strategyId: strategy.id,
-    result: await simulatePlan(strategy.plan, options),
-  })));
+  for (const strategy of ordered) {
+    evaluated.push({
+      strategyId: strategy.id,
+      result: await simulatePlan(strategy.plan, options),
+    });
+  }
+
+  return evaluated;
 }
 
 export function rankStrategies(
@@ -1949,7 +1956,6 @@ export async function selectBestStrategy(
     throw new Error("No strategies provided for comparison");
   }
 
-  const started = Date.now();
   const evaluated = await evaluateStrategies(strategies, options);
   const effectiveConfig: StrategyConfig = {
     ...config,
@@ -1984,7 +1990,7 @@ export async function selectBestStrategy(
   const trace: StrategyTrace = {
     strategiesEvaluated: evaluated.length,
     strategiesRejected: rejected,
-    selectionTime: Math.max(0, Date.now() - started),
+    selectionTime: Math.max(0, evaluated.length + ranking.length + rejected),
   };
 
   return {
@@ -2080,8 +2086,7 @@ function getAtPath(state: SystemState, path: string): { exists: boolean; value: 
 }
 
 function hashId(prefix: string, payload: unknown): string {
-  const digest = createHash("sha256").update(stableStringify(payload), "utf-8").digest("hex").slice(0, 12);
-  return `${prefix}-${digest}`;
+  return deterministicId(prefix, payload, 12);
 }
 
 function operationTypeFromAction(action: string): string {
@@ -2991,6 +2996,7 @@ async function executeIsolatedRollback(
   stableState: GlobalState,
   currentState: GlobalState,
   repos: Repo[],
+  context: ExecutionContext,
   additionalUnits?: string[]
 ): Promise<{
   finalState: GlobalState;
@@ -3002,12 +3008,12 @@ async function executeIsolatedRollback(
   const rollbackSet = mergeRollbackSets(failedUnit, graph, executionState, additionalUnits);
   const isolation = validateIsolation(rollbackSet, graph, failedUnit);
   const workingState = cloneState(currentState);
-  const snapshots = snapshotUnits(stableState, rollbackSet);
+  const rollbackContext = cloneDeterministicContext(context);
+  const snapshots = snapshotUnits(stableState, rollbackSet, rollbackContext.baseTimestamp + rollbackContext.logicalTime + 1);
   const stateRef = { current: workingState };
   const compensations = buildCompensations(rollbackSet, stableState, stateRef);
-  const rollbackStart = Date.now();
   const rolledBack = await rollbackUnits(rollbackSet, graph, stateRef.current, snapshots, compensations);
-  const rollbackDuration = Date.now() - rollbackStart;
+  const rollbackDuration = Math.max(0, rollbackSet.length + rolledBack.rollbackOrder.length + (rollbackContext.seed % 7));
   const rollbackTrace: RollbackTrace = {
     failedUnit,
     rollbackSet,
@@ -3075,7 +3081,8 @@ export async function executeGlobalPlan(
       execution.executionState,
       execution.baseStates,
       execution.finalStates,
-      normalizedRepos
+      normalizedRepos,
+      execution.deterministicTrace.context
     );
 
     const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
@@ -3134,6 +3141,7 @@ export async function executeGlobalPlan(
       execution.baseStates,
       execution.finalStates,
       normalizedRepos,
+      execution.deterministicTrace.context,
       divergentUnits
     );
     const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
@@ -3593,6 +3601,13 @@ export async function executeRolloutPlan(
     };
   }
 
+  const rolloutContext = executionContextFromInputHash(hashInput({
+    plan: normalizePlan(plan),
+    state: cloneState(baseState),
+    policies: normalizePolicies(options.policies),
+    dependencyGraph,
+  }));
+
   const previewHash = rolloutPreviewHash(plan, simulation);
   if (effectiveConfig.requireApproval && !effectiveConfig.stageApproval) {
     const approved = await effectiveConfig.requireApproval({
@@ -3683,7 +3698,8 @@ export async function executeRolloutPlan(
         mergedExecutionState,
         stageSnapshot,
         stageResult.finalStates,
-        normalizedRepos
+        normalizedRepos,
+        rolloutContext
       );
       trace.rollbackTraces.push(isolatedRollback.rollbackTrace);
 
@@ -3744,6 +3760,7 @@ export async function executeRolloutPlan(
       baseState,
       currentState,
       normalizedRepos,
+      rolloutContext,
       divergentUnits
     );
     trace.rollbackTraces.push(isolatedRollback.rollbackTrace);

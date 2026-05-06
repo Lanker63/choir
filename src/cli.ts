@@ -5,6 +5,7 @@ import path from "path";
 import * as YAML from "yaml";
 import { formatCIRunResult, runCI } from "./core/ci.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
+import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./core/propertyChaosHarness.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
@@ -18,6 +19,7 @@ function usage(): string {
     "  choir ci run",
     "  choir verify [--quick]",
     "  choir verify --contracts",
+    "  choir verify --determinism",
     "  choir verify --property [--seed <n>]",
     "  choir verify --chaos [none|light|moderate|extreme] [--seed <n>]",
   ].join("\n");
@@ -73,6 +75,7 @@ async function main(): Promise<void> {
           mode: remaining[0] === "--quick" ? "quick" : "full",
           throwOnFailure: false,
           detectFlakiness: true,
+          parallelCaseExecution: false,
         });
         console.log(formatVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
@@ -96,6 +99,13 @@ async function main(): Promise<void> {
           throwOnFailure: false,
         });
         console.log(formatContractVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--determinism") {
+        const report = await runDeterminismVerification();
+        console.log(formatDeterminismVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }

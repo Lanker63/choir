@@ -1825,6 +1825,11 @@ const pass2: TestPass = {
           mode: "contracts",
         });
 
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --determinism"), {
+          type: "verify",
+          mode: "determinism",
+        });
+
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos"), {
           type: "verify",
           mode: "chaos",

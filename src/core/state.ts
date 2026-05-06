@@ -2,6 +2,13 @@ import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import { Diagnostic } from "./types.js";
+import {
+  canonicalizeUnknown,
+  deterministicId,
+  deterministicTimestampFromCounter,
+  deterministicTimestampFromString,
+  stableStringify as deterministicStableStringify,
+} from "./deterministicCore.js";
 import type { YAMLDiff } from "./policyEngine.js";
 import type { AST as DSLAST, ActionNode } from "./choirRouter.js";
 import type { RuleResult } from "./astValidation.js";
@@ -257,23 +264,11 @@ const DEFAULT_WORKSPACE_UNIT_ID = "workspace:root";
 type UnknownRecord = Record<string, unknown>;
 
 function stableSortUnknown(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => stableSortUnknown(entry));
-  }
-
-  if (!isRecord(value)) {
-    return value;
-  }
-
-  const sortedEntries = Object.keys(value)
-    .sort((a, b) => a.localeCompare(b))
-    .map((key) => [key, stableSortUnknown(value[key])] as const);
-
-  return Object.fromEntries(sortedEntries);
+  return canonicalizeUnknown(value);
 }
 
 function stableStringify(value: unknown): string {
-  return JSON.stringify(stableSortUnknown(value));
+  return deterministicStableStringify(stableSortUnknown(value));
 }
 
 function deepClone<T>(value: T): T {
@@ -409,10 +404,6 @@ function stateWithoutHash(state: StatePlane): Omit<StatePlane, "stateHash"> {
 
 function hashStateContent(state: Omit<StatePlane, "stateHash">): string {
   return createHash("sha256").update(stableStringify(state)).digest("hex");
-}
-
-function formatTimestampForId(timestamp: string): string {
-  return timestamp.replace(/[:.TZ-]/g, "").slice(0, 14);
 }
 
 function normalizeStateIntent(intent?: Partial<StateIntent>): StateIntent {
@@ -1569,16 +1560,16 @@ function normalizeStateTransition(value: unknown): StateTransition | null {
     return null;
   }
 
-  const timestamp = typeof value.timestamp === "string" && value.timestamp.trim().length > 0
-    ? value.timestamp
-    : new Date(0).toISOString();
-  const id = typeof value.id === "string" && value.id.trim().length > 0
-    ? value.id
-    : `transition-${createHash("sha256").update(`${fromHash}:${toHash}:${action}:${timestamp}`).digest("hex").slice(0, 12)}`;
-  const metadata = normalizeStateMetadata(value.metadata);
   const logicalTime = typeof value.logicalTime === "number" && Number.isFinite(value.logicalTime) && value.logicalTime > 0
     ? Math.floor(value.logicalTime)
     : 0;
+  const timestamp = typeof value.timestamp === "string" && value.timestamp.trim().length > 0
+    ? value.timestamp
+    : deterministicTimestampFromCounter(logicalTime);
+  const id = typeof value.id === "string" && value.id.trim().length > 0
+    ? value.id
+    : deterministicId("transition", { fromHash, toHash, action, logicalTime }, 12);
+  const metadata = normalizeStateMetadata(value.metadata);
   const unitId = normalizeUnitId(
     typeof value.unitId === "string"
       ? value.unitId
@@ -1642,11 +1633,17 @@ export function validateTransition(previous: StatePlane | null, next: StatePlane
   };
 }
 
-export function saveSnapshot(root: string, state: StatePlane): StateSnapshot {
+export function saveSnapshot(root: string, state: StatePlane, logicalTime?: number): StateSnapshot {
   const normalized = materializeStatePlane(state);
-  const timestamp = new Date().toISOString();
+  const timestamp = typeof logicalTime === "number" && Number.isFinite(logicalTime) && logicalTime > 0
+    ? deterministicTimestampFromCounter(Math.floor(logicalTime))
+    : deterministicTimestampFromString(normalized.stateHash);
   const snapshot: StateSnapshot = {
-    id: `state-${formatTimestampForId(timestamp)}-${normalized.stateHash.slice(0, 8)}`,
+    id: deterministicId("state", {
+      hash: normalized.stateHash,
+      logicalTime: typeof logicalTime === "number" && Number.isFinite(logicalTime) ? Math.floor(logicalTime) : 0,
+      timestamp,
+    }, 12),
     timestamp,
     state: deepClone(normalized),
     hash: normalized.stateHash,
@@ -1727,14 +1724,13 @@ function fallbackToSnapshot(
   snapshots: StateSnapshot[],
   transitions: StateTransition[],
   targetIndex: number,
-  replayStart: number,
   visitedStates: string[]
 ): ReplayResult {
   const targetTransition = transitions[targetIndex];
   const targetHash = targetTransition.toHash;
   const direct = snapshots.find((snapshot) => snapshot.hash === targetHash);
   if (direct) {
-    const replayTime = Date.now() - replayStart;
+    const replayTime = visitedStates.length + 1;
     return {
       state: materializeStatePlane(direct.state),
       index: targetIndex,
@@ -1769,7 +1765,7 @@ function fallbackToSnapshot(
     throw new Error("Replay failed and no fallback snapshot is available");
   }
 
-  const replayTime = Date.now() - replayStart;
+  const replayTime = visitedStates.length + 1;
   return {
     state: materializeStatePlane(best.snapshot.state),
     index: targetIndex,
@@ -1784,7 +1780,6 @@ function fallbackToSnapshot(
 }
 
 export function jumpTo(root: string, index: number): ReplayResult {
-  const replayStart = Date.now();
   const timeline = buildStateTimeline(root);
 
   if (timeline.transitions.length === 0) {
@@ -1794,7 +1789,7 @@ export function jumpTo(root: string, index: number): ReplayResult {
       index: -1,
       trace: {
         visitedStates: [state.stateHash],
-        replayTime: Date.now() - replayStart,
+        replayTime: 0,
         consistencyCheck: true,
         fallbackUsed: false,
       },
@@ -1815,7 +1810,7 @@ export function jumpTo(root: string, index: number): ReplayResult {
       transition: target,
       trace: {
         visitedStates: [directSnapshot.hash],
-        replayTime: Date.now() - replayStart,
+        replayTime: 1,
         consistencyCheck: true,
         fallbackUsed: false,
       },
@@ -1872,13 +1867,13 @@ export function jumpTo(root: string, index: number): ReplayResult {
       transition: target,
       trace: {
         visitedStates,
-        replayTime: Date.now() - replayStart,
+        replayTime: visitedStates.length,
         consistencyCheck: true,
         fallbackUsed: false,
       },
     };
   } catch {
-    return fallbackToSnapshot(snapshots, transitions, clampedIndex, replayStart, visitedStates);
+    return fallbackToSnapshot(snapshots, transitions, clampedIndex, visitedStates);
   }
 }
 
@@ -2016,9 +2011,14 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
     }
 
     const previousHash = previousState?.stateHash ?? "GENESIS";
-    const timestamp = new Date().toISOString();
     const transitionNumber = transitionCountBeforeWrite + 1;
-    const transitionId = `transition-${formatTimestampForId(timestamp)}-${reloaded.stateHash.slice(0, 8)}`;
+    const timestamp = deterministicTimestampFromCounter(transitionNumber);
+    const transitionId = deterministicId("transition", {
+      fromHash: previousHash,
+      toHash: reloaded.stateHash,
+      action: options?.action ?? "persist-state",
+      logicalTime: transitionNumber,
+    }, 12);
     const transitionDiff = computeStateDiff(previousState, reloaded);
     const unitId = normalizeUnitId(options?.metadata?.unitId);
     const metadata: StateMetadata = {
@@ -2050,7 +2050,7 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
     if (!options?.skipSnapshot) {
       const shouldSaveSnapshot = transitionCountBeforeWrite === 0 || transitionNumber % SNAPSHOT_INTERVAL === 0;
       if (shouldSaveSnapshot) {
-        saveSnapshot(root, reloaded);
+        saveSnapshot(root, reloaded, transitionNumber);
       }
     }
 
