@@ -3,7 +3,7 @@ import { ControlPlane, Plan, Task } from "../schema.js";
 import { computeLayers } from "./orchestration.js";
 import { Patch } from "../fix/types.js";
 import { ValidationResult } from "./scheduler.js";
-import { StatePlane, StrategyHistory } from "./state.js";
+import { FailurePatternRecord, StatePlane, StrategyHistory } from "./state.js";
 import { Diagnostic } from "./types.js";
 import { FileChange, simulatePlanOutcome } from "./executionPreview.js";
 
@@ -34,6 +34,10 @@ export type StrategyOutcome = {
   success: boolean;
   fileChanges: FileChange[];
   previewHash: string;
+  failures?: {
+    type: string;
+    unitId?: string;
+  }[];
 };
 
 export type FailurePattern = {
@@ -42,23 +46,49 @@ export type FailurePattern = {
     | "high-remaining-violations"
     | "too-many-patches"
     | "too-many-files"
-    | "conflict-heavy";
+    | "conflict-heavy"
+    | "dependency-ordering"
+    | "policy-violation"
+    | "high-risk";
   strategyId: string;
   metrics: StrategyMetrics;
   details?: string;
+  units?: string[];
+  rule?: string;
+  thresholdExceeded?: number;
 };
 
 export type StrategyMutation = {
-  id: string;
-  fromStrategy: StrategyType;
-  condition: (pattern: FailurePattern) => boolean;
-  mutate: (plan: Plan, state: StatePlane) => Plan;
+  type: "reorder";
+  units: string[];
+} | {
+  type: "split-stage";
+  stageId: string;
+} | {
+  type: "reduce-scope";
+  units: string[];
+} | {
+  type: "add-validation";
+  stageId: string;
+} | {
+  type: "adjust-batching";
+  size: number;
+};
+
+export type StrategyEvolution = {
+  parentId: string;
+  childId: string;
+  mutation: StrategyMutation;
 };
 
 export type AdaptiveTrace = {
   iterations: number;
   strategiesEvaluated: number;
   mutationsApplied: number;
+  strategiesTested: string[];
+  mutationsAppliedDetails: StrategyMutation[];
+  evolution: StrategyEvolution[];
+  finalStrategy: string;
   selectedStrategyId: string;
   decisions: string[];
 };
@@ -78,6 +108,14 @@ export type StrategyTrace = StrategySelectionTrace;
 
 export const MAX_STRATEGIES = 4;
 export const MAX_ADAPTIVE_ITERATIONS = 3;
+
+const HISTORY_PATTERN_TYPES = new Set<FailurePatternRecord["type"]>([
+  "validation-failure",
+  "high-remaining-violations",
+  "too-many-patches",
+  "too-many-files",
+  "conflict-heavy",
+]);
 
 const PATCH_THRESHOLD = 25;
 const FILE_THRESHOLD = 8;
@@ -99,6 +137,13 @@ type RefineStrategiesOptions = {
   existingStrategies: Strategy[];
   historicalPatterns?: FailurePattern[];
   maxNewStrategies?: number;
+};
+
+type MutationRule = {
+  id: string;
+  fromStrategy: StrategyType;
+  condition: (pattern: FailurePattern) => boolean;
+  buildMutation: (pattern: FailurePattern) => StrategyMutation;
 };
 
 export type AdaptiveStrategySelection = {
@@ -380,11 +425,14 @@ const STRATEGY_REGISTRY: Strategy[] = [
 export const STRATEGIES: Strategy[] = [...STRATEGY_REGISTRY].sort((left, right) => left.id.localeCompare(right.id));
 
 function failurePatternTypeRank(type: FailurePattern["type"]): number {
+  if (type === "dependency-ordering") return 0;
+  if (type === "policy-violation") return 1;
+  if (type === "high-risk") return 2;
   if (type === "validation-failure") return 0;
-  if (type === "high-remaining-violations") return 1;
-  if (type === "conflict-heavy") return 2;
-  if (type === "too-many-patches") return 3;
-  return 4;
+  if (type === "high-remaining-violations") return 3;
+  if (type === "conflict-heavy") return 4;
+  if (type === "too-many-patches") return 5;
+  return 6;
 }
 
 function patternSort(left: FailurePattern, right: FailurePattern): number {
@@ -403,7 +451,55 @@ function patternKey(pattern: FailurePattern): string {
     strategyId: pattern.strategyId,
     metrics: pattern.metrics,
     details: pattern.details ?? "",
+    units: sortedUnique(pattern.units ?? []),
+    rule: pattern.rule ?? "",
+    thresholdExceeded: pattern.thresholdExceeded ?? 0,
   });
+}
+
+function mutationRank(type: StrategyMutation["type"]): number {
+  if (type === "reorder") return 0;
+  if (type === "split-stage") return 1;
+  if (type === "reduce-scope") return 2;
+  if (type === "add-validation") return 3;
+  return 4;
+}
+
+function mutationKey(mutation: StrategyMutation): string {
+  if (mutation.type === "reorder") {
+    return JSON.stringify({ type: mutation.type, units: sortedUnique(mutation.units) });
+  }
+
+  if (mutation.type === "split-stage") {
+    return JSON.stringify({ type: mutation.type, stageId: mutation.stageId });
+  }
+
+  if (mutation.type === "reduce-scope") {
+    return JSON.stringify({ type: mutation.type, units: sortedUnique(mutation.units) });
+  }
+
+  if (mutation.type === "add-validation") {
+    return JSON.stringify({ type: mutation.type, stageId: mutation.stageId });
+  }
+
+  return JSON.stringify({ type: mutation.type, size: mutation.size });
+}
+
+function mutationSort(left: StrategyMutation, right: StrategyMutation): number {
+  return mutationRank(left.type) - mutationRank(right.type)
+    || mutationKey(left).localeCompare(mutationKey(right));
+}
+
+function dedupeMutations(mutations: StrategyMutation[]): StrategyMutation[] {
+  const byKey = new Map<string, StrategyMutation>();
+  for (const mutation of mutations) {
+    const key = mutationKey(mutation);
+    if (!byKey.has(key)) {
+      byKey.set(key, mutation);
+    }
+  }
+
+  return [...byKey.values()].sort(mutationSort);
 }
 
 function dedupePatterns(patterns: FailurePattern[]): FailurePattern[] {
@@ -447,7 +543,7 @@ function generateStrategyId(
   const payload = JSON.stringify({
     fromStrategyId: outcome.strategyId,
     fromStrategyType: outcome.strategyType,
-    mutationId: mutation.id,
+    mutation: mutationKey(mutation),
     patternType: pattern.type,
     plan: planSignature(plan),
   });
@@ -533,32 +629,244 @@ function reorderByDependency(plan: Plan, state: StatePlane): Plan {
   return layeredStrategy(plan, state);
 }
 
-const splitLargeTasksMutation: StrategyMutation = {
+function adjustBatchingPlan(plan: Plan, size: number): Plan {
+  const batchSize = Math.max(1, Math.floor(size));
+  const cloned = clonePlan(plan);
+  const refactors = cloned.tasks
+    .filter((task) => task.type === "refactor")
+    .map((task) => normalizeTask(task))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  if (refactors.length === 0) {
+    return cloned;
+  }
+
+  const oldRefactorIds = new Set(refactors.map((task) => task.id));
+  const remap = new Map<string, string>();
+  const expanded: Task[] = [];
+  let counter = 1;
+
+  for (const task of refactors) {
+    const files = filesForTask(task);
+    if (files.length <= batchSize) {
+      expanded.push(task);
+      remap.set(task.id, task.id);
+      continue;
+    }
+
+    const externalDepends = sortedUnique((task.dependsOn ?? [])
+      .filter((dependencyId) => !oldRefactorIds.has(dependencyId)));
+    let previousId: string | undefined;
+    let lastId = task.id;
+
+    for (let index = 0; index < files.length; index += batchSize) {
+      const chunk = files.slice(index, index + batchSize);
+      const splitId = `t-refactor-adp-batch-${counter}`;
+      counter += 1;
+      const dependsOn = previousId ? [previousId] : externalDepends;
+      expanded.push(normalizeTask({
+        ...task,
+        id: splitId,
+        title: `${task.title} [batch ${counter - 1}]`,
+        description: `Adaptive batch split of ${task.id}`,
+        scope: {
+          ...(task.scope ?? {}),
+          files: chunk,
+        },
+        dependsOn,
+      }));
+      previousId = splitId;
+      lastId = splitId;
+    }
+
+    remap.set(task.id, lastId);
+  }
+
+  return composePlan(cloned, expanded, remap);
+}
+
+function reduceScopePlan(plan: Plan, units: string[]): Plan {
+  const selectedUnits = new Set(units);
+  const cloned = clonePlan(plan);
+  cloned.tasks = cloned.tasks
+    .map((task) => {
+      if (task.type !== "refactor") {
+        return normalizeTask(task);
+      }
+
+      if (selectedUnits.size > 0 && !selectedUnits.has(task.id)) {
+        return normalizeTask(task);
+      }
+
+      const files = filesForTask(task);
+      if (files.length <= 1) {
+        return normalizeTask(task);
+      }
+
+      return normalizeTask({
+        ...task,
+        scope: {
+          ...(task.scope ?? {}),
+          files: [files[0] as string],
+        },
+        title: `${task.title} [reduced-scope]`,
+      });
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return cloned;
+}
+
+function addValidationPlan(plan: Plan, stageId: string): Plan {
+  const cloned = clonePlan(plan);
+  const marker = `adaptive-validation:${stageId}`;
+  cloned.tasks = cloned.tasks
+    .map((task) => {
+      if (task.type !== "enforce") {
+        return normalizeTask(task);
+      }
+
+      return normalizeTask({
+        ...task,
+        successCriteria: sortedUnique([...(task.successCriteria ?? []), marker]),
+      });
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  return cloned;
+}
+
+function applyMutationToPlan(plan: Plan, state: StatePlane, mutation: StrategyMutation): Plan {
+  if (mutation.type === "reorder") {
+    return reorderByDependency(plan, state);
+  }
+
+  if (mutation.type === "split-stage") {
+    return splitRefactorTasks(plan, `t-refactor-adp-${mutation.stageId}`);
+  }
+
+  if (mutation.type === "reduce-scope") {
+    return reduceScopePlan(plan, mutation.units);
+  }
+
+  if (mutation.type === "add-validation") {
+    return addValidationPlan(plan, mutation.stageId);
+  }
+
+  return adjustBatchingPlan(plan, mutation.size);
+}
+
+const splitLargeTasksMutation: MutationRule = {
   id: "split-large-tasks",
   fromStrategy: "aggressive",
   condition: (pattern) => pattern.type === "too-many-patches" || pattern.type === "too-many-files",
-  mutate: splitLargeTasks,
+  buildMutation: () => ({
+    type: "split-stage",
+    stageId: "refactor",
+  }),
 };
 
-const increaseGranularityMutation: StrategyMutation = {
+const increaseGranularityMutation: MutationRule = {
   id: "increase-granularity",
   fromStrategy: "grouped",
   condition: (pattern) => pattern.type === "validation-failure" || pattern.type === "conflict-heavy",
-  mutate: breakIntoSmallerTasks,
+  buildMutation: (pattern) => ({
+    type: "reduce-scope",
+    units: sortedUnique(pattern.units ?? []),
+  }),
 };
 
-const enforceLayeringMutation: StrategyMutation = {
+const enforceLayeringMutation: MutationRule = {
   id: "enforce-layering",
   fromStrategy: "minimal",
-  condition: (pattern) => pattern.type === "conflict-heavy" || pattern.type === "validation-failure",
-  mutate: reorderByDependency,
+  condition: (pattern) => pattern.type === "conflict-heavy"
+    || pattern.type === "validation-failure"
+    || pattern.type === "dependency-ordering",
+  buildMutation: (pattern) => ({
+    type: "reorder",
+    units: sortedUnique(pattern.units ?? []),
+  }),
 };
 
-export const MUTATIONS: StrategyMutation[] = [
+const policyGuardMutation: MutationRule = {
+  id: "policy-guard",
+  fromStrategy: "adaptive",
+  condition: (pattern) => pattern.type === "policy-violation",
+  buildMutation: (pattern) => ({
+    type: "add-validation",
+    stageId: pattern.rule ?? "policy",
+  }),
+};
+
+const riskBatchingMutation: MutationRule = {
+  id: "risk-batching",
+  fromStrategy: "adaptive",
+  condition: (pattern) => pattern.type === "high-risk",
+  buildMutation: (pattern) => ({
+    type: "adjust-batching",
+    size: Math.max(1, Math.floor(pattern.thresholdExceeded ?? 1)),
+  }),
+};
+
+const BASE_MUTATIONS: StrategyMutation[] = [
+  { type: "reorder", units: [] },
+  { type: "split-stage", stageId: "refactor" },
+  { type: "reduce-scope", units: [] },
+  { type: "add-validation", stageId: "policy" },
+  { type: "adjust-batching", size: 1 },
+];
+
+export const MUTATIONS: StrategyMutation[] = [...BASE_MUTATIONS].sort(mutationSort);
+
+const MUTATION_RULES: MutationRule[] = [
   enforceLayeringMutation,
   increaseGranularityMutation,
   splitLargeTasksMutation,
+  policyGuardMutation,
+  riskBatchingMutation,
 ].sort((left, right) => left.id.localeCompare(right.id));
+
+export function generateMutations(strategy: Strategy, patterns: FailurePattern[]): StrategyMutation[] {
+  const normalizedPatterns = dedupePatterns(patterns);
+  const generated: StrategyMutation[] = [];
+
+  for (const pattern of normalizedPatterns) {
+    for (const rule of MUTATION_RULES) {
+      if (rule.fromStrategy !== strategy.type && !(rule.fromStrategy === "adaptive" && strategy.type === "adaptive")) {
+        continue;
+      }
+
+      if (!rule.condition(pattern)) {
+        continue;
+      }
+
+      generated.push(rule.buildMutation(pattern));
+    }
+  }
+
+  return dedupeMutations(generated);
+}
+
+export function applyMutations(strategy: Strategy, mutations: StrategyMutation[]): Strategy[] {
+  const ordered = dedupeMutations(mutations);
+  return ordered.map((mutation) => {
+    const id = createHash("sha256")
+      .update(JSON.stringify({ strategyId: strategy.id, mutation: mutationKey(mutation) }))
+      .digest("hex")
+      .slice(0, 12);
+    return {
+      id: `s-adaptive-${id}`,
+      type: "adaptive" as const,
+      description: `Adaptive mutation ${mutation.type} from ${strategy.id}`,
+      transform: (basePlan, state) => applyMutationToPlan(strategy.transform(basePlan, state), state, mutation),
+    };
+  });
+}
+
+export function limitVariants(variants: Strategy[], max: number): Strategy[] {
+  const bounded = Math.max(0, Math.floor(max));
+  return dedupeStrategies(variants).slice(0, bounded);
+}
 
 function failedOutcome(strategyId: string, strategyType: StrategyType, plan: Plan, message: string): StrategyOutcome {
   return {
@@ -630,8 +938,46 @@ function collectHistoricalPatterns(state: StatePlane, outcomes: StrategyOutcome[
   return dedupePatterns(relevant);
 }
 
-export function analyzeOutcome(outcome: StrategyOutcome): FailurePattern[] {
+export function analyzeFailure(outcome: StrategyOutcome): FailurePattern[] {
   const patterns: FailurePattern[] = [];
+
+  const sortedFailures = [...(outcome.failures ?? [])]
+    .sort((left, right) => left.type.localeCompare(right.type) || (left.unitId ?? "").localeCompare(right.unitId ?? ""));
+
+  const dependencyUnits = sortedUnique(sortedFailures
+    .filter((failure) => failure.type.includes("depend") || failure.type.includes("order"))
+    .flatMap((failure) => failure.unitId ? [failure.unitId] : []));
+  if (dependencyUnits.length > 0) {
+    patterns.push({
+      type: "dependency-ordering",
+      strategyId: outcome.strategyId,
+      metrics: outcome.metrics,
+      units: dependencyUnits,
+      details: "dependency ordering failure observed",
+    });
+  }
+
+  const policyFailures = sortedFailures.filter((failure) => failure.type.includes("policy") || failure.type.includes("approval"));
+  for (const failure of policyFailures) {
+    patterns.push({
+      type: "policy-violation",
+      strategyId: outcome.strategyId,
+      metrics: outcome.metrics,
+      rule: failure.type,
+      details: failure.unitId,
+    });
+  }
+
+  const riskScore = outcome.metrics.remainingViolations + outcome.metrics.introducedErrors;
+  if (riskScore > 0) {
+    patterns.push({
+      type: "high-risk",
+      strategyId: outcome.strategyId,
+      metrics: outcome.metrics,
+      thresholdExceeded: riskScore,
+      details: `risk=${riskScore}`,
+    });
+  }
 
   if (!outcome.success) {
     patterns.push({
@@ -680,8 +1026,29 @@ export function analyzeOutcome(outcome: StrategyOutcome): FailurePattern[] {
   return dedupePatterns(patterns);
 }
 
+export function analyzeOutcome(outcome: StrategyOutcome): FailurePattern[] {
+  return analyzeFailure(outcome);
+}
+
 export function isGoodEnough(outcome: StrategyOutcome): boolean {
   return outcome.success && outcome.metrics.remainingViolations === 0;
+}
+
+function validateGeneratedPlan(plan: Plan): boolean {
+  const taskIds = new Set(plan.tasks.map((task) => task.id));
+  if (taskIds.size !== plan.tasks.length) {
+    return false;
+  }
+
+  for (const task of plan.tasks) {
+    for (const dependencyId of task.dependsOn ?? []) {
+      if (!taskIds.has(dependencyId)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
 }
 
 export function refineStrategies(
@@ -691,6 +1058,8 @@ export function refineStrategies(
 ): {
   strategies: Strategy[];
   mutationsApplied: number;
+  mutationList: StrategyMutation[];
+  evolution: StrategyEvolution[];
   decisions: string[];
 } {
   const existingIds = new Set(options.existingStrategies.map((strategy) => strategy.id));
@@ -703,26 +1072,46 @@ export function refineStrategies(
   }
 
   const created: Strategy[] = [];
+  const mutationList: StrategyMutation[] = [];
+  const evolution: StrategyEvolution[] = [];
   const decisions: string[] = [];
   const maxNew = options.maxNewStrategies ?? MAX_NEW_STRATEGIES_PER_ITERATION;
 
   for (const outcome of [...outcomes].sort((left, right) => left.strategyId.localeCompare(right.strategyId))) {
     const patterns = dedupePatterns([
-      ...analyzeOutcome(outcome),
+      ...analyzeFailure(outcome),
       ...(historicalByStrategy.get(outcome.strategyId) ?? []),
     ]);
 
+    const parentStrategy: Strategy = {
+      id: outcome.strategyId,
+      type: outcome.strategyType,
+      description: `Recovered strategy ${outcome.strategyId}`,
+      transform: () => clonePlan(outcome.plan),
+    };
+
     for (const pattern of patterns) {
-      for (const mutation of MUTATIONS) {
+      const mutations = generateMutations(parentStrategy, [pattern]);
+      const variants = applyMutations(parentStrategy, mutations);
+      const bounded = limitVariants(variants, Math.max(0, maxNew - created.length));
+
+      for (let index = 0; index < bounded.length; index += 1) {
         if (created.length >= maxNew) {
           break;
         }
 
-        if (mutation.fromStrategy !== outcome.strategyType || !mutation.condition(pattern)) {
+        const mutation = mutations[index];
+        if (!mutation) {
           continue;
         }
 
-        const mutatedPlan = mutation.mutate(outcome.plan, state);
+        const variant = bounded[index] as Strategy;
+        const mutatedPlan = variant.transform(outcome.plan, state);
+        if (!validateGeneratedPlan(mutatedPlan)) {
+          decisions.push(`Rejected mutation ${mutation.type} for ${outcome.strategyId}: invalid plan graph`);
+          continue;
+        }
+
         const strategyId = generateStrategyId(outcome, mutation, pattern, mutatedPlan);
         if (existingIds.has(strategyId)) {
           continue;
@@ -732,10 +1121,16 @@ export function refineStrategies(
         created.push({
           id: strategyId,
           type: "adaptive",
-          description: `Adaptive strategy from ${outcome.strategyId} via ${mutation.id}`,
+          description: `Adaptive strategy from ${outcome.strategyId} via ${mutation.type}`,
           transform: () => clonePlan(mutatedPlan),
         });
-        decisions.push(`Applied ${mutation.id} to ${outcome.strategyId} due to ${pattern.type} -> ${strategyId}`);
+        mutationList.push(mutation);
+        evolution.push({
+          parentId: outcome.strategyId,
+          childId: strategyId,
+          mutation,
+        });
+        decisions.push(`Applied ${mutation.type} to ${outcome.strategyId} due to ${pattern.type} -> ${strategyId}`);
       }
 
       if (created.length >= maxNew) {
@@ -751,6 +1146,8 @@ export function refineStrategies(
   return {
     strategies: dedupeStrategies(created),
     mutationsApplied: created.length,
+    mutationList: dedupeMutations(mutationList),
+    evolution: [...evolution].sort((left, right) => left.parentId.localeCompare(right.parentId) || left.childId.localeCompare(right.childId)),
     decisions,
   };
 }
@@ -758,13 +1155,29 @@ export function refineStrategies(
 export function buildStrategyHistory(planId: string, outcomes: StrategyOutcome[]): StrategyHistory[] {
   return [...outcomes]
     .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
-    .map((outcome) => ({
-      planId,
-      strategyId: outcome.strategyId,
-      strategyType: outcome.strategyType,
-      patterns: analyzeOutcome(outcome),
-      outcomeMetrics: outcome.metrics,
-    }));
+    .map((outcome) => {
+      const patterns: FailurePatternRecord[] = analyzeOutcome(outcome)
+        .filter((pattern): pattern is FailurePattern & { type: FailurePatternRecord["type"] } => HISTORY_PATTERN_TYPES.has(pattern.type as FailurePatternRecord["type"]))
+        .map((pattern) => ({
+          type: pattern.type,
+          strategyId: pattern.strategyId,
+          metrics: {
+            filesChanged: pattern.metrics.filesChanged,
+            patchesCount: pattern.metrics.patchesCount,
+            remainingViolations: pattern.metrics.remainingViolations,
+            introducedErrors: pattern.metrics.introducedErrors,
+          },
+          ...(pattern.details ? { details: pattern.details } : {}),
+        }));
+
+      return {
+        planId,
+        strategyId: outcome.strategyId,
+        strategyType: outcome.strategyType,
+        patterns,
+        outcomeMetrics: outcome.metrics,
+      };
+    });
 }
 
 async function evaluateTransformedPlan(
@@ -829,6 +1242,163 @@ export async function evaluateStrategies(
   return [...results].sort((left, right) => left.strategyId.localeCompare(right.strategyId));
 }
 
+export function isImproved(candidate: StrategyMetrics, baseline: StrategyMetrics): boolean {
+  if (candidate.remainingViolations !== baseline.remainingViolations) {
+    return candidate.remainingViolations < baseline.remainingViolations;
+  }
+
+  if (candidate.introducedErrors !== baseline.introducedErrors) {
+    return candidate.introducedErrors < baseline.introducedErrors;
+  }
+
+  if (candidate.patchesCount !== baseline.patchesCount) {
+    return candidate.patchesCount < baseline.patchesCount;
+  }
+
+  return candidate.filesChanged < baseline.filesChanged;
+}
+
+export async function adaptiveCycle(
+  strategy: Strategy,
+  basePlan: Plan,
+  state: StatePlane,
+  options: EvaluateStrategyOptions
+): Promise<{
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  patterns: FailurePattern[];
+  mutations: StrategyMutation[];
+  variants: Strategy[];
+  evolution: StrategyEvolution[];
+}> {
+  const initial = await evaluateStrategy(strategy, basePlan, state, options);
+  if (isGoodEnough(initial)) {
+    return {
+      selected: initial,
+      outcomes: [initial],
+      patterns: [],
+      mutations: [],
+      variants: [],
+      evolution: [],
+    };
+  }
+
+  const patterns = analyzeFailure(initial);
+  const mutations = generateMutations(strategy, patterns);
+  const variants = limitVariants(applyMutations(strategy, mutations), MAX_NEW_STRATEGIES_PER_ITERATION);
+
+  if (variants.length === 0) {
+    return {
+      selected: initial,
+      outcomes: [initial],
+      patterns,
+      mutations,
+      variants,
+      evolution: [],
+    };
+  }
+
+  const outcomes = await evaluateStrategies(basePlan, state, {
+    ...options,
+    strategies: variants,
+    maxStrategies: variants.length,
+  });
+  const selected = selectBestOutcome(outcomes);
+  const evolution: StrategyEvolution[] = variants
+    .map((variant, index) => ({
+      parentId: strategy.id,
+      childId: variant.id,
+      mutation: mutations[index] as StrategyMutation,
+    }))
+    .filter((entry) => Boolean(entry.mutation))
+    .sort((left, right) => left.childId.localeCompare(right.childId));
+
+  return {
+    selected,
+    outcomes,
+    patterns,
+    mutations,
+    variants,
+    evolution,
+  };
+}
+
+export async function iterateStrategy(
+  strategy: Strategy,
+  maxIterations: number,
+  basePlan: Plan,
+  state: StatePlane,
+  options: EvaluateStrategyOptions
+): Promise<{
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  trace: AdaptiveTrace;
+}> {
+  const boundedIterations = Math.max(1, Math.floor(maxIterations));
+  let currentStrategy = strategy;
+  let selected = await evaluateStrategy(currentStrategy, basePlan, state, options);
+  let outcomes: StrategyOutcome[] = [selected];
+  const decisions: string[] = [];
+  const mutationDetails: StrategyMutation[] = [];
+  const evolution: StrategyEvolution[] = [];
+  const tested = new Set<string>([selected.strategyId]);
+  let completedIterations = 0;
+
+  for (let iteration = 1; iteration <= boundedIterations; iteration += 1) {
+    completedIterations = iteration;
+    if (isGoodEnough(selected)) {
+      decisions.push(`Stop: ${selected.strategyId} satisfied success criteria`);
+      break;
+    }
+
+    const cycle = await adaptiveCycle(currentStrategy, basePlan, state, options);
+    mutationDetails.push(...cycle.mutations);
+    evolution.push(...cycle.evolution);
+    outcomes = [...outcomes, ...cycle.outcomes].sort((left, right) => left.strategyId.localeCompare(right.strategyId));
+    cycle.outcomes.forEach((entry) => tested.add(entry.strategyId));
+
+    if (!isImproved(cycle.selected.metrics, selected.metrics)) {
+      decisions.push(`Stop: no improvement after iteration ${iteration}`);
+      break;
+    }
+
+    selected = cycle.selected;
+    const nextStrategy = cycle.variants.find((variant) => variant.id === cycle.selected.strategyId);
+    if (!nextStrategy) {
+      decisions.push(`Stop: selected variant ${cycle.selected.strategyId} not found in variant set`);
+      break;
+    }
+
+    currentStrategy = nextStrategy;
+  }
+
+  const evolutionByKey = new Map<string, StrategyEvolution>();
+  for (const item of evolution) {
+    const key = `${item.parentId}->${item.childId}:${mutationKey(item.mutation)}`;
+    if (!evolutionByKey.has(key)) {
+      evolutionByKey.set(key, item);
+    }
+  }
+
+  const trace: AdaptiveTrace = {
+    iterations: completedIterations > 0 ? completedIterations : 1,
+    strategiesEvaluated: outcomes.length,
+    mutationsApplied: mutationDetails.length,
+    strategiesTested: [...tested].sort((left, right) => left.localeCompare(right)),
+    mutationsAppliedDetails: dedupeMutations(mutationDetails),
+    evolution: [...evolutionByKey.values()].sort((left, right) => left.childId.localeCompare(right.childId)),
+    finalStrategy: selected.strategyId,
+    selectedStrategyId: selected.strategyId,
+    decisions,
+  };
+
+  return {
+    selected,
+    outcomes,
+    trace,
+  };
+}
+
 export async function adaptiveStrategySelection(
   basePlan: Plan,
   state: StatePlane,
@@ -841,7 +1411,11 @@ export async function adaptiveStrategySelection(
   let strategiesEvaluated = 0;
   let mutationsApplied = 0;
   const decisions: string[] = [];
+  const mutationDetails: StrategyMutation[] = [];
+  const evolution: StrategyEvolution[] = [];
+  const strategiesTested = new Set<string>();
   let latestOutcomes: StrategyOutcome[] = [];
+  let previousBest: StrategyOutcome | undefined;
 
   for (let iteration = 0; iteration < maxIterations; iteration += 1) {
     iterations = iteration + 1;
@@ -853,9 +1427,15 @@ export async function adaptiveStrategySelection(
 
     latestOutcomes = outcomes;
     strategiesEvaluated += outcomes.length;
+    outcomes.forEach((outcome) => strategiesTested.add(outcome.strategyId));
 
     const best = selectBestOutcome(outcomes);
     decisions.push(`Iteration ${iterations}: best=${best.strategyId} remaining=${best.metrics.remainingViolations} introduced=${best.metrics.introducedErrors}`);
+
+    if (previousBest && !isImproved(best.metrics, previousBest.metrics)) {
+      decisions.push(`Stop: no improvement from ${previousBest.strategyId} to ${best.strategyId}`);
+      break;
+    }
 
     if (isGoodEnough(best)) {
       decisions.push(`Stop: ${best.strategyId} satisfied isGoodEnough`);
@@ -863,6 +1443,10 @@ export async function adaptiveStrategySelection(
         iterations,
         strategiesEvaluated,
         mutationsApplied,
+        strategiesTested: [...strategiesTested].sort((left, right) => left.localeCompare(right)),
+        mutationsAppliedDetails: dedupeMutations(mutationDetails),
+        evolution: [...evolution].sort((left, right) => left.childId.localeCompare(right.childId)),
+        finalStrategy: best.strategyId,
         selectedStrategyId: best.strategyId,
         decisions,
       };
@@ -883,6 +1467,8 @@ export async function adaptiveStrategySelection(
     });
 
     mutationsApplied += refined.mutationsApplied;
+    mutationDetails.push(...refined.mutationList);
+    evolution.push(...refined.evolution);
     decisions.push(...refined.decisions);
 
     if (refined.strategies.length === 0) {
@@ -898,6 +1484,7 @@ export async function adaptiveStrategySelection(
 
     decisions.push(`Iteration ${iterations}: merged ${refined.strategies.length} adaptive strategies (pool=${merged.length})`);
     strategies = merged;
+    previousBest = best;
   }
 
   const finalBest = selectBestOutcome(latestOutcomes);
@@ -905,6 +1492,10 @@ export async function adaptiveStrategySelection(
     iterations,
     strategiesEvaluated,
     mutationsApplied,
+    strategiesTested: [...strategiesTested].sort((left, right) => left.localeCompare(right)),
+    mutationsAppliedDetails: dedupeMutations(mutationDetails),
+    evolution: [...evolution].sort((left, right) => left.childId.localeCompare(right.childId)),
+    finalStrategy: finalBest.strategyId,
     selectedStrategyId: finalBest.strategyId,
     decisions,
   };
