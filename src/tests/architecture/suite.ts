@@ -214,6 +214,7 @@ import {
   computeStrategyScore,
   createGlobalPlanningCache,
   detectPolicyDrift,
+  executeTransaction,
   executeRolloutPlan,
   evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
@@ -5643,6 +5644,124 @@ const pass6: TestPass = {
         ]);
         assert.strictEqual(post.valid, false);
         assert.ok(post.errors.some((entry) => entry.includes("dependency violation")));
+      },
+    },
+    {
+      id: "6.10s",
+      name: "transaction abort prevents stage partial state leakage",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+          { id: "repo-b", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "transaction-stage-abort",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=1", dependsOn: [] },
+          ],
+        };
+
+        const result = await executeTransaction(plan, {
+          repos,
+          policies: [],
+          executeTask: async (task, state) => {
+            if (task.repoId === "repo-b") {
+              throw new Error("boom:stage");
+            }
+
+            return { ...state, meta: { value: "1" } };
+          },
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.transaction.status, "aborted");
+        assert.strictEqual((result.finalState["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
+        assert.strictEqual((result.finalState["repo-b"] as { meta?: { value?: string } }).meta?.value, "0");
+        assert.deepStrictEqual(result.trace.stagesExecuted, []);
+      },
+    },
+    {
+      id: "6.10t",
+      name: "transaction trace id and stage sequence are deterministic",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+          { id: "repo-b", dependencies: ["repo-a"], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "transaction-deterministic-trace",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const first = await executeTransaction(plan, {
+          repos,
+          policies: [],
+        });
+
+        const second = await executeTransaction(plan, {
+          repos,
+          policies: [],
+        });
+
+        assert.strictEqual(first.success, true);
+        assert.strictEqual(second.success, true);
+        assert.strictEqual(first.trace.transactionId, second.trace.transactionId);
+        assert.deepStrictEqual(first.trace.stagesExecuted, second.trace.stagesExecuted);
+      },
+    },
+    {
+      id: "6.10u",
+      name: "transaction lock conflicts fail closed with deterministic error",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "transaction-lock-conflict",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+          ],
+        };
+
+        let releaseFirst: (() => void) | undefined;
+        let firstTaskEntered: (() => void) | undefined;
+        const firstTaskGate = new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+        const firstTaskStarted = new Promise<void>((resolve) => {
+          firstTaskEntered = resolve;
+        });
+
+        const first = executeTransaction(plan, {
+          repos,
+          policies: [],
+          executeTask: async (_task, state) => {
+            firstTaskEntered?.();
+            await firstTaskGate;
+            return { ...state, meta: { value: "1" } };
+          },
+        });
+
+        await firstTaskStarted;
+
+        const second = await executeTransaction(plan, {
+          repos,
+          policies: [],
+        });
+
+        releaseFirst?.();
+        const firstResult = await first;
+
+        assert.strictEqual(firstResult.success, true);
+        assert.strictEqual(second.success, false);
+        assert.ok(second.violations.some((entry) => entry.includes("Lock conflict")));
       },
     },
     {

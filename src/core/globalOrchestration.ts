@@ -140,6 +140,7 @@ export type GlobalTrace = {
   executionOrder: string[];
   policyDecisions: string[];
   convergence: boolean;
+  transactionTrace?: TransactionTrace;
 };
 
 export type GlobalContext = {
@@ -273,6 +274,19 @@ export type RolloutStrategy =
   | { type: "phased"; phases: number[] }
   | { type: "batched"; batchSize: number };
 
+export type TransactionStage = {
+  stageId: string;
+  units: string[];
+};
+
+export type Transaction = {
+  id: string;
+  stages: ExecutionStage[];
+  status: "pending" | "committed" | "aborted";
+  startedAt: number;
+  committedAt?: number;
+};
+
 export type ExecutionFailure = {
   stageId: string;
   unitId: string;
@@ -303,9 +317,33 @@ export type Snapshot = {
   timestamp: number;
 };
 
+export type TransactionContext = {
+  transactionId: string;
+  workingState: GlobalState;
+  baseState: GlobalState;
+  snapshots: Map<string, Snapshot>;
+  transaction: Transaction;
+  compensations: CompensationAction[];
+};
+
+export type Change = {
+  unitId: string;
+  nextState: SystemState;
+};
+
 export type Compensation = {
   unitId: string;
   apply(): void;
+};
+
+export type CompensationAction = {
+  unitId: string;
+  undo(): void;
+};
+
+export type Lock = {
+  unitId: string;
+  transactionId: string;
 };
 
 export type RollbackTrace = {
@@ -313,6 +351,17 @@ export type RollbackTrace = {
   rollbackSet: string[];
   rollbackOrder: string[];
   duration: number;
+};
+
+export type TransactionTrace = {
+  transactionId: string;
+  stagesExecuted: string[];
+  committed: boolean;
+  duration: number;
+};
+
+export type TransactionBatch = {
+  transactions: Transaction[];
 };
 
 export type ExecutionStage = {
@@ -344,6 +393,7 @@ export type RolloutTrace = {
   failedStage?: string;
   metrics: Record<string, StageMetrics>;
   rollbackTraces: RollbackTrace[];
+  transactionTraces: TransactionTrace[];
   canResume?: boolean;
 };
 
@@ -360,7 +410,24 @@ export type StageExecutionResult = {
   unitsAffected: string[];
   finalStates: GlobalState;
   executionState: ExecutionState;
+  transactionTrace?: TransactionTrace;
   failure?: ExecutionFailure;
+};
+
+export type TransactionExecutionResult = {
+  success: boolean;
+  finalState: GlobalState;
+  baseState: GlobalState;
+  policyResult: PolicyResult;
+  orderedTaskIds: string[];
+  plan: GlobalPlan;
+  violations: string[];
+  stepsExecuted: string[];
+  unitsAffected: string[];
+  executionState: ExecutionState;
+  failure?: ExecutionFailure;
+  transaction: Transaction;
+  trace: TransactionTrace;
 };
 
 export type RolloutExecutionResult = {
@@ -405,6 +472,8 @@ type InternalRunResult = {
   stepsExecuted: string[];
   unitsAffected: string[];
   executionState: ExecutionState;
+  transaction: Transaction;
+  transactionTrace: TransactionTrace;
   failure?: ExecutionFailure;
 };
 
@@ -483,6 +552,185 @@ function cloneExecutionState(state: ExecutionState): ExecutionState {
 
 function setUnitExecutionState(state: ExecutionState, unitId: string, value: UnitExecutionState): void {
   state.units[unitId] = value;
+}
+
+const transactionLocks = new Map<string, Lock>();
+let transactionLockOwnerCounter = 0;
+
+function nextTransactionLockOwner(transactionId: string): string {
+  transactionLockOwnerCounter += 1;
+  return `${transactionId}:${transactionLockOwnerCounter}`;
+}
+
+export function sortStages(stages: ExecutionStage[]): ExecutionStage[] {
+  return [...stages].sort((left, right) =>
+    left.order - right.order
+    || left.id.localeCompare(right.id)
+    || stableStringify(left.units).localeCompare(stableStringify(right.units))
+  );
+}
+
+function createTransaction(baseState: GlobalState, stages: ExecutionStage[]): Transaction {
+  const orderedStages = sortStages(stages);
+  const id = hashId("transaction", {
+    stages: orderedStages.map((stage) => ({
+      id: stage.id,
+      order: stage.order,
+      units: sortedUnique(stage.units),
+      percentage: stage.percentage,
+    })),
+    baseState,
+  });
+
+  return {
+    id,
+    stages: orderedStages,
+    status: "pending",
+    startedAt: Date.now(),
+  };
+}
+
+export function beginTransaction(state: GlobalState, stages: ExecutionStage[] = []): TransactionContext {
+  const baseState = cloneState(state);
+  const transaction = createTransaction(baseState, stages);
+  return {
+    transactionId: transaction.id,
+    workingState: cloneState(baseState),
+    baseState,
+    snapshots: new Map<string, Snapshot>(),
+    transaction,
+    compensations: [],
+  };
+}
+
+function applyGlobalState(state: GlobalState): GlobalState {
+  return cloneState(state);
+}
+
+export function commitTransaction(ctx: TransactionContext): void {
+  ctx.workingState = applyGlobalState(ctx.workingState);
+  ctx.transaction.status = "committed";
+  ctx.transaction.committedAt = Date.now();
+}
+
+function runCompensations(ctx: TransactionContext): void {
+  for (let index = ctx.compensations.length - 1; index >= 0; index -= 1) {
+    ctx.compensations[index]?.undo();
+  }
+}
+
+export function abortTransaction(ctx: TransactionContext): void {
+  runCompensations(ctx);
+  ctx.workingState = cloneState(ctx.baseState);
+  ctx.transaction.status = "aborted";
+}
+
+function applyToState(state: GlobalState, change: Change): GlobalState {
+  const next = cloneState(state);
+  next[change.unitId] = cloneUnknown(change.nextState);
+  return next;
+}
+
+export function snapshotUnit(ctx: TransactionContext, unitId: string): void {
+  if (ctx.snapshots.has(unitId)) {
+    return;
+  }
+
+  ctx.snapshots.set(unitId, {
+    unitId,
+    state: cloneUnknown(ctx.workingState[unitId] ?? {}),
+    timestamp: Date.now(),
+  });
+}
+
+export function applyChange(ctx: TransactionContext, change: Change): void {
+  snapshotUnit(ctx, change.unitId);
+  ctx.workingState = applyToState(ctx.workingState, change);
+}
+
+export function registerCompensationAction(ctx: TransactionContext, action: CompensationAction): void {
+  ctx.compensations.push(action);
+}
+
+type TransactionValidationInput = {
+  repos?: Repo[];
+  graph?: DependencyGraph;
+  executionState?: ExecutionState;
+  policyResult?: PolicyResult;
+  violations?: string[];
+};
+
+export function validateTransaction(ctx: TransactionContext, input?: TransactionValidationInput): RolloutValidationResult {
+  const errors: string[] = [];
+
+  if (input?.policyResult) {
+    if (!input.policyResult.allowed) {
+      errors.push("Transaction validation failed: policy denied execution");
+    }
+
+    errors.push(...input.policyResult.violations);
+  }
+
+  if (input?.graph && input.executionState) {
+    const dependencyValidation = validatePostRollback(ctx.workingState, input.graph, input.executionState, input.repos);
+    errors.push(...dependencyValidation.errors);
+  }
+
+  const consistency = validateGlobalConsistency(ctx.workingState, input?.repos);
+  errors.push(...consistency.errors);
+  errors.push(...(input?.violations ?? []));
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
+export function preparePhase(ctx: TransactionContext, input?: TransactionValidationInput): RolloutValidationResult {
+  return validateTransaction(ctx, input);
+}
+
+export function commitPhase(ctx: TransactionContext): void {
+  commitTransaction(ctx);
+}
+
+function acquireLocks(transactionId: string, units: string[]): RolloutValidationResult {
+  const errors: string[] = [];
+  const uniqueUnits = sortedUnique(units);
+
+  for (const unit of uniqueUnits) {
+    const existing = transactionLocks.get(unit);
+    if (existing && existing.transactionId !== transactionId) {
+      errors.push(`Lock conflict: unit ${unit} is held by transaction ${existing.transactionId}`);
+    }
+  }
+
+  if (errors.length > 0) {
+    return {
+      valid: false,
+      errors: sortedUnique(errors),
+    };
+  }
+
+  for (const unit of uniqueUnits) {
+    transactionLocks.set(unit, {
+      unitId: unit,
+      transactionId,
+    });
+  }
+
+  return {
+    valid: true,
+    errors: [],
+  };
+}
+
+function releaseLocks(transactionId: string): void {
+  for (const [unit, lock] of transactionLocks.entries()) {
+    if (lock.transactionId === transactionId) {
+      transactionLocks.delete(unit);
+    }
+  }
 }
 
 export function buildRollbackDependencyGraph(plan: GlobalPlan): DependencyGraph {
@@ -920,35 +1168,59 @@ function filterPlanForUnits(plan: GlobalPlan, units: string[]): GlobalPlan {
   };
 }
 
-async function runGlobalPlanInternal(
+function executionStagesFromBatches(batches: TaskBatch[]): ExecutionStage[] {
+  const total = Math.max(1, batches.length);
+  return batches.map((batch, index) => ({
+    id: batch.id,
+    units: sortedUnique(batch.tasks.map((task) => task.repoId)),
+    percentage: Math.round(((index + 1) / total) * 100),
+    order: index + 1,
+  }));
+}
+
+function buildTransactionTrace(ctx: TransactionContext, stagesExecuted: string[]): TransactionTrace {
+  return {
+    transactionId: ctx.transactionId,
+    stagesExecuted: sortedUnique(stagesExecuted),
+    committed: ctx.transaction.status === "committed",
+    duration: Math.max(0, Date.now() - ctx.transaction.startedAt),
+  };
+}
+
+export async function executeTransaction(
   plan: GlobalPlan,
   options: ExecuteGlobalPlanOptions,
-  mode: "simulation" | "execution",
+  mode: "simulation" | "execution" = "execution",
   units?: string[]
-): Promise<InternalRunResult> {
+): Promise<TransactionExecutionResult> {
   const validation = validateGlobalPlan(plan);
   if (!validation.valid) {
     const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
-    const baseStates = stateForRepos(normalizedRepos);
-    const executionState = createExecutionState(Object.keys(baseStates));
+    const baseState = stateForRepos(normalizedRepos);
+    const executionState = createExecutionState(Object.keys(baseState));
+    const tx = beginTransaction(baseState, []);
+    abortTransaction(tx);
+    const policyResult = {
+      allowed: false,
+      requiresApproval: false,
+      violations: validation.errors,
+      policyDecisions: ["deny:plan-validation"],
+      appliedPolicyIds: [],
+    } satisfies PolicyResult;
+
     return {
       success: false,
-      rolledBack: false,
-      finalStates: cloneState(baseStates),
-      baseStates,
-      policyResult: {
-        allowed: false,
-        requiresApproval: false,
-        violations: validation.errors,
-        policyDecisions: ["deny:plan-validation"],
-        appliedPolicyIds: [],
-      },
+      finalState: cloneState(baseState),
+      baseState: cloneState(baseState),
+      policyResult,
       orderedTaskIds: [],
       plan,
       violations: validation.errors,
       stepsExecuted: [],
       unitsAffected: [],
       executionState,
+      transaction: cloneUnknown(tx.transaction),
+      trace: buildTransactionTrace(tx, []),
     };
   }
 
@@ -957,22 +1229,58 @@ async function runGlobalPlanInternal(
   const policyResult = evaluateGlobalPolicies(effectivePlan, flattenPolicies(options.policies), normalizedRepos);
   const ordered = orderPlan(effectivePlan);
   const batches = batchTasks(effectivePlan);
+  const stages = executionStagesFromBatches(batches);
+  const batchById = new Map(batches.map((batch) => [batch.id, batch] as const));
 
-  const states = stateForRepos(normalizedRepos);
-  const snapshot = cloneState(states);
+  const baseState = stateForRepos(normalizedRepos);
   const validateState = options.validateState ?? (() => true);
   const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
+  const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
+  const tx = beginTransaction(baseState, stages);
+  const shouldLock = mode === "execution";
+  const lockOwnerId = shouldLock ? nextTransactionLockOwner(tx.transactionId) : undefined;
+  const lockUnits = sortedUnique(effectivePlan.tasks.map((task) => task.repoId));
   const stepsExecuted: string[] = [];
   const unitsAffected = new Set<string>();
-  const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
+  const committedStages: string[] = [];
   const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
 
+  if (shouldLock && lockOwnerId) {
+    const lockResult = acquireLocks(lockOwnerId, lockUnits);
+    if (!lockResult.valid) {
+      abortTransaction(tx);
+      return {
+        success: false,
+        finalState: cloneState(tx.workingState),
+        baseState: cloneState(baseState),
+        policyResult,
+        orderedTaskIds: ordered.orderedTaskIds,
+        plan: effectivePlan,
+        violations: sortedUnique([...policyResult.violations, ...lockResult.errors]),
+        stepsExecuted,
+        unitsAffected: [],
+        executionState,
+        transaction: cloneUnknown(tx.transaction),
+        trace: buildTransactionTrace(tx, committedStages),
+        failure: {
+          stageId: "transaction:lock",
+          unitId: lockUnits[0] ?? "workspace:root",
+          error: lockResult.errors.join("; "),
+          timestamp: Date.now(),
+        },
+      };
+    }
+  }
+
   if (!policyResult.allowed) {
+    abortTransaction(tx);
+    if (lockOwnerId) {
+      releaseLocks(lockOwnerId);
+    }
     return {
       success: false,
-      rolledBack: false,
-      finalStates: cloneState(snapshot),
-      baseStates: snapshot,
+      finalState: cloneState(tx.workingState),
+      baseState: cloneState(baseState),
       policyResult,
       orderedTaskIds: ordered.orderedTaskIds,
       plan: effectivePlan,
@@ -980,62 +1288,153 @@ async function runGlobalPlanInternal(
       stepsExecuted,
       unitsAffected: [],
       executionState,
+      transaction: cloneUnknown(tx.transaction),
+      trace: buildTransactionTrace(tx, committedStages),
     };
   }
 
-  let activeTask: GlobalPlanTask | null = null;
-  let activeStageId = "stage:0";
-
   try {
-    for (const batch of batches) {
-      activeStageId = batch.id;
-      const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
-      for (const task of sortedTasks) {
-        activeTask = task;
-        const currentState = cloneUnknown(states[task.repoId] ?? {});
-        const nextState = await executeTask(task, currentState, task.repoId, cloneState(states), mode);
-        states[task.repoId] = cloneUnknown(nextState);
-        stepsExecuted.push(task.id);
-        unitsAffected.add(task.repoId);
-        setUnitExecutionState(executionState, task.repoId, "executed");
-
-        if (!validateState(states[task.repoId], task.repoId)) {
-          throw new Error(`State validation failed after task ${task.id}`);
-        }
+    for (const stage of sortStages(stages)) {
+      const batch = batchById.get(stage.id);
+      if (!batch) {
+        continue;
       }
+
+      const stageTx = beginTransaction(tx.workingState, [stage]);
+      let activeTask: GlobalPlanTask | null = null;
+
+      try {
+        const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
+        for (const task of sortedTasks) {
+          activeTask = task;
+          const currentState = cloneUnknown(stageTx.workingState[task.repoId] ?? {});
+          const allStates = cloneState(stageTx.workingState);
+          const nextState = await executeTask(task, currentState, task.repoId, allStates, mode);
+          const previousState = cloneUnknown(stageTx.workingState[task.repoId] ?? {});
+          applyChange(stageTx, {
+            unitId: task.repoId,
+            nextState,
+          });
+          registerCompensationAction(stageTx, {
+            unitId: task.repoId,
+            undo: () => {
+              stageTx.workingState = applyToState(stageTx.workingState, {
+                unitId: task.repoId,
+                nextState: previousState,
+              });
+            },
+          });
+          stepsExecuted.push(task.id);
+          unitsAffected.add(task.repoId);
+          setUnitExecutionState(executionState, task.repoId, "executed");
+
+          if (!validateState(stageTx.workingState[task.repoId], task.repoId)) {
+            throw new Error(`State validation failed after task ${task.id}`);
+          }
+        }
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+        setUnitExecutionState(executionState, failedUnit, "failed");
+        abortTransaction(stageTx);
+        abortTransaction(tx);
+        return {
+          success: false,
+          finalState: cloneState(tx.workingState),
+          baseState: cloneState(baseState),
+          policyResult,
+          orderedTaskIds: ordered.orderedTaskIds,
+          plan: effectivePlan,
+          violations: sortedUnique([...policyResult.violations, reason]),
+          stepsExecuted,
+          unitsAffected: sortedUnique([...unitsAffected]),
+          executionState,
+          transaction: cloneUnknown(tx.transaction),
+          trace: buildTransactionTrace(tx, committedStages),
+          failure: {
+            stageId: stage.id,
+            unitId: failedUnit,
+            error: reason,
+            timestamp: Date.now(),
+          },
+        };
+      }
+
+      const stagePrepare = preparePhase(stageTx, {
+        repos: normalizedRepos,
+        policyResult,
+      });
+      if (!stagePrepare.valid) {
+        const failedUnit = stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+        setUnitExecutionState(executionState, failedUnit, "failed");
+        abortTransaction(stageTx);
+        abortTransaction(tx);
+        return {
+          success: false,
+          finalState: cloneState(tx.workingState),
+          baseState: cloneState(baseState),
+          policyResult,
+          orderedTaskIds: ordered.orderedTaskIds,
+          plan: effectivePlan,
+          violations: sortedUnique([...policyResult.violations, ...stagePrepare.errors]),
+          stepsExecuted,
+          unitsAffected: sortedUnique([...unitsAffected]),
+          executionState,
+          transaction: cloneUnknown(tx.transaction),
+          trace: buildTransactionTrace(tx, committedStages),
+          failure: {
+            stageId: `${stage.id}:prepare`,
+            unitId: failedUnit,
+            error: stagePrepare.errors.join("; "),
+            timestamp: Date.now(),
+          },
+        };
+      }
+
+      commitPhase(stageTx);
+      tx.workingState = cloneState(stageTx.workingState);
+      tx.baseState = cloneState(stageTx.workingState);
+      committedStages.push(stage.id);
     }
 
-    const consistency = validateGlobalConsistency(states, normalizedRepos);
-    if (!consistency.valid) {
+    const finalPrepare = preparePhase(tx, {
+      repos: normalizedRepos,
+      policyResult,
+      violations: policyResult.violations,
+    });
+
+    if (!finalPrepare.valid) {
       const fallbackTask = taskById.get(stepsExecuted[stepsExecuted.length - 1] ?? "") ?? null;
       const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
       setUnitExecutionState(executionState, failedUnit, "failed");
+      abortTransaction(tx);
       return {
         success: false,
-        rolledBack: false,
-        finalStates: cloneState(states),
-        baseStates: snapshot,
+        finalState: cloneState(tx.workingState),
+        baseState: cloneState(baseState),
         policyResult,
         orderedTaskIds: ordered.orderedTaskIds,
         plan: effectivePlan,
-        violations: consistency.errors,
+        violations: sortedUnique([...policyResult.violations, ...finalPrepare.errors]),
         stepsExecuted,
         unitsAffected: sortedUnique([...unitsAffected]),
         executionState,
+        transaction: cloneUnknown(tx.transaction),
+        trace: buildTransactionTrace(tx, committedStages),
         failure: {
-          stageId: `${activeStageId}:validation`,
+          stageId: "transaction:prepare",
           unitId: failedUnit,
-          error: consistency.errors.join("; "),
+          error: finalPrepare.errors.join("; "),
           timestamp: Date.now(),
         },
       };
     }
 
+    commitPhase(tx);
     return {
       success: true,
-      rolledBack: false,
-      finalStates: cloneState(states),
-      baseStates: snapshot,
+      finalState: cloneState(tx.workingState),
+      baseState: cloneState(baseState),
       policyResult,
       orderedTaskIds: ordered.orderedTaskIds,
       plan: effectivePlan,
@@ -1043,31 +1442,61 @@ async function runGlobalPlanInternal(
       stepsExecuted,
       unitsAffected: sortedUnique([...unitsAffected]),
       executionState,
+      transaction: cloneUnknown(tx.transaction),
+      trace: buildTransactionTrace(tx, committedStages),
     };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    const failedUnit = activeTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
-    setUnitExecutionState(executionState, failedUnit, "failed");
-    return {
-      success: false,
-      rolledBack: false,
-      finalStates: cloneState(states),
-      baseStates: snapshot,
-      policyResult,
-      orderedTaskIds: ordered.orderedTaskIds,
-      plan: effectivePlan,
-      violations: sortedUnique([...policyResult.violations, reason]),
-      stepsExecuted,
-      unitsAffected: sortedUnique([...unitsAffected]),
-      executionState,
-      failure: {
-        stageId: activeStageId,
-        unitId: failedUnit,
-        error: reason,
-        timestamp: Date.now(),
-      },
-    };
+  } finally {
+    if (lockOwnerId) {
+      releaseLocks(lockOwnerId);
+    }
   }
+}
+
+export async function executeTransactionBatch(
+  plans: GlobalPlan[],
+  options: ExecuteGlobalPlanOptions,
+  mode: "simulation" | "execution" = "execution"
+): Promise<TransactionBatch> {
+  const orderedPlans = [...plans].sort((left, right) => left.id.localeCompare(right.id));
+  const transactions: Transaction[] = [];
+
+  for (const plan of orderedPlans) {
+    const result = await executeTransaction(plan, options, mode);
+    transactions.push(cloneUnknown(result.transaction));
+    if (!result.success) {
+      break;
+    }
+  }
+
+  return {
+    transactions,
+  };
+}
+
+async function runGlobalPlanInternal(
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions,
+  mode: "simulation" | "execution",
+  units?: string[]
+): Promise<InternalRunResult> {
+  const transactionResult = await executeTransaction(plan, options, mode, units);
+
+  return {
+    success: transactionResult.success,
+    rolledBack: false,
+    finalStates: cloneState(transactionResult.finalState),
+    baseStates: cloneState(transactionResult.baseState),
+    policyResult: cloneUnknown(transactionResult.policyResult),
+    orderedTaskIds: [...transactionResult.orderedTaskIds],
+    plan: cloneUnknown(transactionResult.plan),
+    violations: [...transactionResult.violations],
+    stepsExecuted: [...transactionResult.stepsExecuted],
+    unitsAffected: [...transactionResult.unitsAffected],
+    executionState: cloneExecutionState(transactionResult.executionState),
+    transaction: cloneUnknown(transactionResult.transaction),
+    transactionTrace: cloneUnknown(transactionResult.trace),
+    failure: transactionResult.failure ? cloneUnknown(transactionResult.failure) : undefined,
+  };
 }
 
 export async function simulatePlan(
@@ -2257,6 +2686,7 @@ export async function executeGlobalPlan(
         executionOrder: execution.orderedTaskIds,
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
+        transactionTrace: cloneUnknown(execution.transactionTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
     };
@@ -2303,6 +2733,7 @@ export async function executeGlobalPlan(
         executionOrder: execution.orderedTaskIds,
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
+        transactionTrace: cloneUnknown(execution.transactionTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
     };
@@ -2323,6 +2754,7 @@ export async function executeGlobalPlan(
       executionOrder: execution.orderedTaskIds,
       policyDecisions: execution.policyResult.policyDecisions,
       convergence: execution.success,
+      transactionTrace: cloneUnknown(execution.transactionTrace),
     },
   };
 }
@@ -2620,6 +3052,7 @@ export async function executeStage(
     unitsAffected: [...run.unitsAffected],
     finalStates: cloneState(run.finalStates),
     executionState: cloneExecutionState(run.executionState),
+    transactionTrace: cloneUnknown(run.transactionTrace),
     ...(run.failure ? { failure: run.failure } : {}),
   };
 }
@@ -2693,6 +3126,7 @@ export async function executeRolloutPlan(
     completedStages: [],
     metrics: {},
     rollbackTraces: [],
+    transactionTraces: [],
   };
 
   if (trace.stages.length === 0) {
@@ -2786,6 +3220,9 @@ export async function executeRolloutPlan(
     trace.metrics[stage.id] = {
       ...stageResult.metrics,
     };
+    if (stageResult.transactionTrace) {
+      trace.transactionTraces.push(cloneUnknown(stageResult.transactionTrace));
+    }
 
     const stageValidation = validateStage(stageResult, plan, [...completedUnits], effectiveConfig);
     if (!stageValidation.valid) {
