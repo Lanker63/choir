@@ -168,6 +168,11 @@ export type GlobalPlanningCache = {
 export type ExecuteGlobalPlanOptions = {
   repos: Repo[];
   policies: CompiledPolicy[];
+  approveExecution?: (input: {
+    planId: string;
+    policyResult: PolicyResult;
+    mode: "simulation" | "execution";
+  }) => boolean | Promise<boolean>;
   validateState?: (state: SystemState, repoId: string) => boolean;
   executeTask?: (
     task: GlobalPlanTask,
@@ -335,9 +340,10 @@ export type RolloutStrategy =
 
 export type Transaction = {
   id: string;
+  planId: string;
   stages: ExecutionStage[];
-  status: "pending" | "committed" | "aborted";
-  startedAt: number;
+  status: "pending" | "prepared" | "validated" | "committed" | "aborted";
+  createdAt: number;
   committedAt?: number;
 };
 
@@ -376,14 +382,27 @@ export type TransactionContext = {
   workingState: GlobalState;
   baseState: GlobalState;
   snapshots: Map<string, Snapshot>;
+  transitions: StateTransition[];
   transaction: Transaction;
   compensations: CompensationAction[];
+  appliedChangeFingerprints: Set<string>;
   context: DeterministicContext;
 };
 
 export type Change = {
   unitId: string;
   nextState: SystemState;
+  type?: string;
+};
+
+export type StateTransition = {
+  id: string;
+  transactionId: string;
+  unitId: string;
+  fromHash: string;
+  toHash: string;
+  operation: string;
+  logicalTime: number;
 };
 
 export type Compensation = {
@@ -414,6 +433,8 @@ export type TransactionTrace = {
   stagesExecuted: string[];
   committed: boolean;
   duration: number;
+  transitions: StateTransition[];
+  finalStateHash: string;
 };
 
 export type TransactionBatch = {
@@ -720,9 +741,15 @@ function nextDeterministicTimestamp(ctx: TransactionContext): number {
   return ctx.context.baseTimestamp + ctx.context.logicalTime;
 }
 
-function createTransaction(baseState: GlobalState, stages: ExecutionStage[], context: DeterministicContext): Transaction {
+function createTransaction(
+  planId: string,
+  baseState: GlobalState,
+  stages: ExecutionStage[],
+  context: DeterministicContext
+): Transaction {
   const orderedStages = sortStages(stages);
   const id = hashId("transaction", {
+    planId,
     stages: orderedStages.map((stage) => ({
       id: stage.id,
       order: stage.order,
@@ -734,29 +761,33 @@ function createTransaction(baseState: GlobalState, stages: ExecutionStage[], con
 
   return {
     id,
+    planId,
     stages: orderedStages,
     status: "pending",
-    startedAt: context.baseTimestamp,
+    createdAt: context.baseTimestamp,
   };
 }
 
 export function beginTransaction(
   state: GlobalState,
   stages: ExecutionStage[] = [],
-  context?: ExecutionContext
+  context?: ExecutionContext,
+  planId = "global-plan"
 ): TransactionContext {
   const baseState = cloneState(state);
   const deterministicContext = context
     ? cloneDeterministicContext(context)
     : deterministicContextFromHash(hashState(baseState));
-  const transaction = createTransaction(baseState, stages, deterministicContext);
+  const transaction = createTransaction(planId, baseState, stages, deterministicContext);
   return {
     transactionId: transaction.id,
     workingState: cloneState(baseState),
     baseState,
     snapshots: new Map<string, Snapshot>(),
+    transitions: [],
     transaction,
     compensations: [],
+    appliedChangeFingerprints: new Set<string>(),
     context: deterministicContext,
   };
 }
@@ -766,6 +797,10 @@ function applyGlobalState(state: GlobalState): GlobalState {
 }
 
 export function commitTransaction(ctx: TransactionContext): void {
+  if (ctx.transaction.status !== "validated") {
+    throw new Error(`Transaction ${ctx.transaction.id} commit blocked: transaction is not validated`);
+  }
+
   ctx.workingState = applyGlobalState(ctx.workingState);
   ctx.transaction.status = "committed";
   ctx.transaction.committedAt = nextDeterministicTimestamp(ctx);
@@ -799,9 +834,57 @@ export function snapshotUnit(ctx: TransactionContext, unitId: string): void {
   });
 }
 
+function changeFingerprint(change: Change): string {
+  return deterministicId("change", {
+    unitId: change.unitId,
+    nextState: change.nextState,
+    type: change.type ?? "set",
+  }, 16);
+}
+
+export function assertIdempotent(change: Change): void {
+  if (typeof change.unitId !== "string" || change.unitId.trim().length === 0) {
+    throw new Error("Idempotency guard failed: change.unitId is required");
+  }
+
+  // Enforce canonical serializability for deterministic re-application checks.
+  stableStringify(change.nextState);
+}
+
 export function applyChange(ctx: TransactionContext, change: Change): void {
+  if (ctx.transaction.status !== "prepared") {
+    throw new Error(`Transaction ${ctx.transaction.id} apply blocked: transaction is not prepared`);
+  }
+
+  assertIdempotent(change);
+  const fingerprint = changeFingerprint(change);
+  if (ctx.appliedChangeFingerprints.has(fingerprint)) {
+    return;
+  }
+
   snapshotUnit(ctx, change.unitId);
+  const beforeUnitState = cloneUnknown(ctx.workingState[change.unitId] ?? {});
+  const fromHash = hashState({ [change.unitId]: beforeUnitState });
   setTransactionUnitState(ctx, change.unitId, change.nextState);
+  const afterUnitState = cloneUnknown(ctx.workingState[change.unitId] ?? {});
+  const toHash = hashState({ [change.unitId]: afterUnitState });
+  ctx.appliedChangeFingerprints.add(fingerprint);
+  ctx.transitions.push({
+    id: deterministicId("transition", {
+      transactionId: ctx.transactionId,
+      unitId: change.unitId,
+      fromHash,
+      toHash,
+      operation: change.type ?? "set",
+      logicalTime: ctx.context.logicalTime + 1,
+    }, 16),
+    transactionId: ctx.transactionId,
+    unitId: change.unitId,
+    fromHash,
+    toHash,
+    operation: change.type ?? "set",
+    logicalTime: nextDeterministicTimestamp(ctx),
+  });
 }
 
 export function registerCompensationAction(ctx: TransactionContext, action: CompensationAction): void {
@@ -842,8 +925,37 @@ export function validateTransaction(ctx: TransactionContext, input?: Transaction
   };
 }
 
-export function preparePhase(ctx: TransactionContext, input?: TransactionValidationInput): RolloutValidationResult {
-  return validateTransaction(ctx, input);
+export function preparePhase(ctx: TransactionContext): RolloutValidationResult {
+  if (ctx.transaction.status !== "pending") {
+    return {
+      valid: false,
+      errors: [`Transaction ${ctx.transaction.id} cannot enter prepare from status ${ctx.transaction.status}`],
+    };
+  }
+
+  ctx.transaction.status = "prepared";
+  return {
+    valid: true,
+    errors: [],
+  };
+}
+
+export function validatePhase(ctx: TransactionContext, input?: TransactionValidationInput): RolloutValidationResult {
+  if (ctx.transaction.status !== "prepared") {
+    return {
+      valid: false,
+      errors: [`Transaction ${ctx.transaction.id} cannot validate from status ${ctx.transaction.status}`],
+    };
+  }
+
+  const result = validateTransaction(ctx, input);
+  if (!result.valid) {
+    abortTransaction(ctx);
+    return result;
+  }
+
+  ctx.transaction.status = "validated";
+  return result;
 }
 
 export function commitPhase(ctx: TransactionContext): void {
@@ -1340,7 +1452,9 @@ function buildTransactionTrace(ctx: TransactionContext, stagesExecuted: string[]
     transactionId: ctx.transactionId,
     stagesExecuted: uniqueInOrder(stagesExecuted),
     committed: ctx.transaction.status === "committed",
-    duration: Math.max(0, endTimestamp - ctx.transaction.startedAt),
+    duration: Math.max(0, endTimestamp - ctx.transaction.createdAt),
+    transitions: cloneUnknown(ctx.transitions),
+    finalStateHash: hashState(ctx.workingState),
   };
 }
 
@@ -1363,7 +1477,7 @@ export async function executeTransaction(
     };
     const inputHash = hashInput(input);
     const context = executionContextFromInputHash(inputHash);
-    const tx = beginTransaction(baseState, [], context);
+    const tx = beginTransaction(baseState, [], context, plan.id);
     abortTransaction(tx);
     const deterministicTrace: DeterministicTrace = {
       traceId: deterministicTraceId(inputHash, [], hashState(baseState)),
@@ -1421,7 +1535,7 @@ export async function executeTransaction(
   };
   const deterministicInputHash = hashInput(deterministicInput);
   const deterministicContext = executionContextFromInputHash(deterministicInputHash);
-  const tx = beginTransaction(baseState, stages, deterministicContext);
+  const tx = beginTransaction(baseState, stages, deterministicContext, effectivePlan.id);
   const shouldLock = mode === "execution";
   const lockOwnerToken = shouldLock ? Symbol(tx.transactionId) : undefined;
   const lockUnits = sortedUnique(effectivePlan.tasks.map((task) => task.repoId));
@@ -1450,6 +1564,33 @@ export async function executeTransaction(
     recordDeterministicTrace(trace);
     return trace;
   };
+
+  const prepare = preparePhase(tx);
+  if (!prepare.valid) {
+    abortTransaction(tx);
+    const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
+    return {
+      success: false,
+      finalState: cloneState(tx.workingState),
+      baseState: cloneState(baseState),
+      policyResult,
+      orderedTaskIds: ordered.orderedTaskIds,
+      plan: effectivePlan,
+      violations: sortedUnique([...policyResult.violations, ...prepare.errors]),
+      stepsExecuted,
+      unitsAffected: [],
+      executionState,
+      transaction: cloneUnknown(tx.transaction),
+      trace: buildTransactionTrace(tx, committedStages),
+      deterministicTrace,
+      failure: {
+        stageId: "transaction:prepare",
+        unitId: lockUnits[0] ?? "workspace:root",
+        error: prepare.errors.join("; "),
+        timestamp: nextDeterministicTimestamp(tx),
+      },
+    };
+  }
 
   if (shouldLock && lockOwnerToken) {
     const lockResult = acquireLocks(lockOwnerToken, tx.transactionId, lockUnits);
@@ -1503,6 +1644,43 @@ export async function executeTransaction(
     };
   }
 
+  if (mode === "execution" && policyResult.requiresApproval) {
+    const approved = await options.approveExecution?.({
+      planId: effectivePlan.id,
+      policyResult,
+      mode,
+    });
+    if (!approved) {
+      abortTransaction(tx);
+      if (lockOwnerToken) {
+        releaseLocks(lockOwnerToken);
+      }
+
+      const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
+      return {
+        success: false,
+        finalState: cloneState(tx.workingState),
+        baseState: cloneState(baseState),
+        policyResult,
+        orderedTaskIds: ordered.orderedTaskIds,
+        plan: effectivePlan,
+        violations: sortedUnique([...policyResult.violations, "Execution requires approval and was denied"]),
+        stepsExecuted,
+        unitsAffected: [],
+        executionState,
+        transaction: cloneUnknown(tx.transaction),
+        trace: buildTransactionTrace(tx, committedStages),
+        deterministicTrace,
+        failure: {
+          stageId: "transaction:approval",
+          unitId: normalizedRepos[0]?.id ?? "workspace:root",
+          error: "approval required",
+          timestamp: nextDeterministicTimestamp(tx),
+        },
+      };
+    }
+  }
+
   try {
     for (const stage of sortStages(stages)) {
       const batch = batchById.get(stage.id);
@@ -1510,7 +1688,7 @@ export async function executeTransaction(
         continue;
       }
 
-      const stageTx = beginTransaction(tx.workingState, [stage], tx.context);
+      const stageTx = beginTransaction(tx.workingState, [stage], tx.context, `${effectivePlan.id}:${stage.id}`);
       let activeTask: GlobalPlanTask | null = null;
       const stageBeforeHash = hashState(tx.workingState);
       assertDeterministic(
@@ -1518,6 +1696,33 @@ export async function executeTransaction(
         `stage ${stage.id} expected state hash ${expectedStageBeforeHash}, got ${stageBeforeHash}`
       );
       const stageOperations: DeterministicOperation[] = [];
+      const stagePrepared = preparePhase(stageTx);
+      if (!stagePrepared.valid) {
+        abortTransaction(stageTx);
+        abortTransaction(tx);
+        const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
+        return {
+          success: false,
+          finalState: cloneState(tx.workingState),
+          baseState: cloneState(baseState),
+          policyResult,
+          orderedTaskIds: ordered.orderedTaskIds,
+          plan: effectivePlan,
+          violations: sortedUnique([...policyResult.violations, ...stagePrepared.errors]),
+          stepsExecuted,
+          unitsAffected: sortedUnique([...unitsAffected]),
+          executionState,
+          transaction: cloneUnknown(tx.transaction),
+          trace: buildTransactionTrace(tx, committedStages),
+          deterministicTrace,
+          failure: {
+            stageId: `${stage.id}:prepare`,
+            unitId: stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root",
+            error: stagePrepared.errors.join("; "),
+            timestamp: nextDeterministicTimestamp(tx),
+          },
+        };
+      }
 
       try {
         const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
@@ -1530,6 +1735,7 @@ export async function executeTransaction(
           applyChange(stageTx, {
             unitId: task.repoId,
             nextState,
+            type: operationTypeFromAction(task.action),
           });
           registerCompensationAction(stageTx, {
             unitId: task.repoId,
@@ -1584,14 +1790,13 @@ export async function executeTransaction(
         };
       }
 
-      const stagePrepare = preparePhase(stageTx, {
+      const stageValidation = validatePhase(stageTx, {
         repos: normalizedRepos,
         policyResult,
       });
-      if (!stagePrepare.valid) {
+      if (!stageValidation.valid) {
         const failedUnit = stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
         setUnitExecutionState(executionState, failedUnit, "failed");
-        abortTransaction(stageTx);
         abortTransaction(tx);
         const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
         return {
@@ -1601,7 +1806,7 @@ export async function executeTransaction(
           policyResult,
           orderedTaskIds: ordered.orderedTaskIds,
           plan: effectivePlan,
-          violations: sortedUnique([...policyResult.violations, ...stagePrepare.errors]),
+          violations: sortedUnique([...policyResult.violations, ...stageValidation.errors]),
           stepsExecuted,
           unitsAffected: sortedUnique([...unitsAffected]),
           executionState,
@@ -1609,9 +1814,9 @@ export async function executeTransaction(
           trace: buildTransactionTrace(tx, committedStages),
           deterministicTrace,
           failure: {
-            stageId: `${stage.id}:prepare`,
+            stageId: `${stage.id}:validate`,
             unitId: failedUnit,
-            error: stagePrepare.errors.join("; "),
+            error: stageValidation.errors.join("; "),
             timestamp: nextDeterministicTimestamp(tx),
           },
         };
@@ -1628,21 +1833,57 @@ export async function executeTransaction(
       });
       expectedStageBeforeHash = stageAfterHash;
       tx.workingState = cloneState(stageTx.workingState);
-      tx.baseState = cloneState(stageTx.workingState);
+      tx.transitions.push(...cloneUnknown(stageTx.transitions));
       committedStages.push(stage.id);
     }
 
-    const finalPrepare = preparePhase(tx, {
+    if (mode === "execution") {
+      const simulationReplay = await simulateTransaction(effectivePlan, {
+        ...options,
+        repos: normalizedRepos,
+      }, units);
+      const simulationHash = hashState(simulationReplay.finalState);
+      const workingHash = hashState(tx.workingState);
+      if (simulationHash !== workingHash) {
+        abortTransaction(tx);
+        const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
+        return {
+          success: false,
+          finalState: cloneState(tx.workingState),
+          baseState: cloneState(baseState),
+          policyResult,
+          orderedTaskIds: ordered.orderedTaskIds,
+          plan: effectivePlan,
+          violations: sortedUnique([
+            ...policyResult.violations,
+            `Simulation divergence: expected ${simulationHash} but transaction produced ${workingHash}`,
+          ]),
+          stepsExecuted,
+          unitsAffected: sortedUnique([...unitsAffected]),
+          executionState,
+          transaction: cloneUnknown(tx.transaction),
+          trace: buildTransactionTrace(tx, committedStages),
+          deterministicTrace,
+          failure: {
+            stageId: "transaction:simulate",
+            unitId: normalizedRepos[0]?.id ?? "workspace:root",
+            error: "simulation mismatch",
+            timestamp: nextDeterministicTimestamp(tx),
+          },
+        };
+      }
+    }
+
+    const finalValidation = validatePhase(tx, {
       repos: normalizedRepos,
       policyResult,
       violations: policyResult.violations,
     });
 
-    if (!finalPrepare.valid) {
+    if (!finalValidation.valid) {
       const fallbackTask = taskById.get(stepsExecuted[stepsExecuted.length - 1] ?? "") ?? null;
       const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
       setUnitExecutionState(executionState, failedUnit, "failed");
-      abortTransaction(tx);
       const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
       return {
         success: false,
@@ -1651,7 +1892,7 @@ export async function executeTransaction(
         policyResult,
         orderedTaskIds: ordered.orderedTaskIds,
         plan: effectivePlan,
-        violations: sortedUnique([...policyResult.violations, ...finalPrepare.errors]),
+          violations: sortedUnique([...policyResult.violations, ...finalValidation.errors]),
         stepsExecuted,
         unitsAffected: sortedUnique([...unitsAffected]),
         executionState,
@@ -1659,9 +1900,9 @@ export async function executeTransaction(
         trace: buildTransactionTrace(tx, committedStages),
         deterministicTrace,
         failure: {
-          stageId: "transaction:prepare",
+          stageId: "transaction:validate",
           unitId: failedUnit,
-          error: finalPrepare.errors.join("; "),
+          error: finalValidation.errors.join("; "),
           timestamp: nextDeterministicTimestamp(tx),
         },
       };
@@ -1710,6 +1951,14 @@ export async function executeTransactionBatch(
   return {
     transactions,
   };
+}
+
+export async function simulateTransaction(
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions,
+  units?: string[]
+): Promise<TransactionExecutionResult> {
+  return executeTransaction(plan, options, "simulation", units);
 }
 
 async function runGlobalPlanInternal(

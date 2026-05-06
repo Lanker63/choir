@@ -33,6 +33,9 @@ jobs:
       - name: Run deterministic verification
         run: npm run verify:determinism
 
+      - name: Run transaction verification
+        run: npm run verify:transactions
+
       - name: Run contract verification checklist
         run: npm run verify:contracts
 
@@ -76,6 +79,9 @@ jobs:
 
       - name: Deterministic verification
         run: npm run verify:determinism
+
+      - name: Transaction verification
+        run: npm run verify:transactions
 
       - name: Contract verification checklist (full)
         run: npm run verify:contracts:full

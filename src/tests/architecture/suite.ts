@@ -205,6 +205,8 @@ import {
   validateReplicaConvergence,
 } from "../../core/distributedSync.js";
 import {
+  applyChange,
+  beginTransaction,
   blockGlobalExecution,
   batchTasks as batchGlobalTasks,
   buildRollbackDependencyGraph,
@@ -224,6 +226,7 @@ import {
   evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
   executeGlobalPlan,
+  commitPhase,
   hashInput,
   hashState as hashGlobalState,
   replay,
@@ -237,9 +240,12 @@ import {
   RolloutStrategy,
   selectBestStrategy,
   simulatePlan,
+  preparePhase,
   simulateUnits,
   synthesizeGlobalPlan,
+  validatePhase,
   validateTrace,
+  assertIdempotent,
   validateIsolation,
   validatePostRollback,
   verifyReplay,
@@ -1828,6 +1834,11 @@ const pass2: TestPass = {
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --determinism"), {
           type: "verify",
           mode: "determinism",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --transactions"), {
+          type: "verify",
+          mode: "transactions",
         });
 
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos"), {
@@ -5237,7 +5248,7 @@ const pass6: TestPass = {
 
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
-        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a", appliedBy: "repo-a:ok" });
+        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a" });
         assert.deepStrictEqual(result.finalStates["repo-b"], { value: "initial-b" });
         assert.strictEqual(result.rollbackTrace?.failedUnit, "repo-b");
         assert.deepStrictEqual(result.rollbackTrace?.rollbackSet, ["repo-b"]);
@@ -5521,10 +5532,13 @@ const pass6: TestPass = {
           },
         });
 
-        assert.deepStrictEqual(modeCalls, ["simulation", "execution"]);
+        assert.deepStrictEqual(modeCalls, ["simulation", "execution", "simulation"]);
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
-        assert.ok(result.audit.violations.some((entry) => entry.includes("Simulation and execution diverged")));
+        assert.ok(result.audit.violations.some((entry) =>
+          entry.includes("Simulation and execution diverged")
+          || entry.includes("Simulation divergence:")
+        ));
       },
     },
     {
@@ -5864,7 +5878,11 @@ const pass6: TestPass = {
 
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
-        assert.ok(result.failures.some((entry) => entry.includes("diverged")));
+        assert.ok(result.failures.some((entry) =>
+          entry.includes("diverged")
+          || entry.includes("Simulation divergence:")
+          || entry.includes("simulation mismatch")
+        ));
         assert.strictEqual((result.finalStates["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
       },
     },
@@ -6163,6 +6181,85 @@ const pass6: TestPass = {
       name: "deterministic sort is stable and ordered",
       run: async () => {
         assert.deepStrictEqual(deterministicSort(["repo-b", "repo-a", "repo-b"]), ["repo-a", "repo-b", "repo-b"]);
+      },
+    },
+    {
+      id: "6.10z",
+      name: "transaction lifecycle enforces prepare-validate-commit ordering",
+      run: async () => {
+        const ctx = beginTransaction({
+          "repo-a": { meta: { value: "0" } },
+        }, [], undefined, "test-lifecycle-plan");
+
+        assert.strictEqual(ctx.transaction.status, "pending");
+
+        const prepared = preparePhase(ctx);
+        assert.strictEqual(prepared.valid, true);
+        assert.strictEqual(ctx.transaction.status, "prepared");
+
+        applyChange(ctx, {
+          unitId: "repo-a",
+          nextState: { meta: { value: "1" } },
+          type: "set",
+        });
+
+        let blocked = false;
+        try {
+          commitPhase(ctx);
+        } catch {
+          blocked = true;
+        }
+        assert.strictEqual(blocked, true);
+
+        const validated = validatePhase(ctx, {
+          repos: [{ id: "repo-a", dependencies: [], state: { meta: { value: "0" } } }],
+          graph: buildRollbackDependencyGraph({
+            id: "test-lifecycle-plan",
+            tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+          }),
+          executionState: { units: { "repo-a": "executed" } },
+          policyResult: {
+            allowed: true,
+            requiresApproval: false,
+            violations: [],
+            policyDecisions: [],
+            appliedPolicyIds: [],
+          },
+        });
+
+        assert.strictEqual(validated.valid, true);
+        assert.strictEqual(ctx.transaction.status, "validated");
+
+        commitPhase(ctx);
+        assert.strictEqual(ctx.transaction.status, "committed");
+        assert.strictEqual(ctx.transitions.length, 1);
+      },
+    },
+    {
+      id: "6.10aa",
+      name: "idempotency guard suppresses duplicate deterministic changes",
+      run: async () => {
+        const ctx = beginTransaction({
+          "repo-a": { meta: { value: "0" } },
+        }, [], undefined, "test-idempotency-plan");
+
+        const prepared = preparePhase(ctx);
+        assert.strictEqual(prepared.valid, true);
+
+        const change = {
+          unitId: "repo-a",
+          nextState: { meta: { value: "9" } },
+          type: "set",
+        };
+
+        assertIdempotent(change);
+        applyChange(ctx, change);
+        applyChange(ctx, change);
+
+        assert.strictEqual(ctx.transitions.length, 1);
+        assert.strictEqual(hashGlobalState(ctx.workingState), hashGlobalState({
+          "repo-a": { meta: { value: "9" } },
+        }));
       },
     },
     {

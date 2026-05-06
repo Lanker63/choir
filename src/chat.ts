@@ -56,6 +56,7 @@ import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
 import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
+import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 import {
@@ -710,6 +711,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     if (verifyChatCommand.mode === "determinism") {
                         const report = await runDeterminismVerification();
                         stream.markdown(formatDeterminismVerificationReport(report));
+                        return;
+                    }
+
+                    if (verifyChatCommand.mode === "transactions") {
+                        const report = await runTransactionVerification();
+                        stream.markdown(formatTransactionVerificationReport(report));
                         return;
                     }
 
