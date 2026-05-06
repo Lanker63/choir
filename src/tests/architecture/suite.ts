@@ -151,6 +151,7 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
+import { parseInitChatCommand } from "../../core/chatCommands.js";
 import {
   getAbstraction,
   listAbstractions,
@@ -1588,6 +1589,34 @@ const pass2: TestPass = {
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
+      },
+    },
+    {
+      id: "2.30a",
+      name: "init chat shortcut parser accepts prefixed and stripped participant input",
+      run: async () => {
+        assert.deepStrictEqual(parseInitChatCommand("@choir init"), {
+          type: "init",
+        });
+        assert.deepStrictEqual(parseInitChatCommand("init"), {
+          type: "init",
+        });
+
+        assert.deepStrictEqual(parseInitChatCommand("@choir init --template backend"), {
+          type: "init",
+          template: "backend",
+        });
+        assert.deepStrictEqual(parseInitChatCommand("init --template frontend"), {
+          type: "init",
+          template: "frontend",
+        });
+
+        assert.deepStrictEqual(parseInitChatCommand("init --template invalid"), {
+          type: "init",
+          invalidTemplate: "invalid",
+        });
+
+        assert.strictEqual(parseInitChatCommand("choir init"), null);
       },
     },
     {

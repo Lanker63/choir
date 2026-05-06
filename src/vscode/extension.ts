@@ -1,9 +1,13 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { registerChoir } from "../chat.js";
+import { ChoirProductService } from "./ChoirProductService.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
 import { GraphViewProvider } from "./GraphViewProvider.js";
+import { TimelineViewProvider } from "./TimelineViewProvider.js";
+import { ChoirEventBus, MessageTraceStore, WebviewRegistry } from "./choirWebviewSync.js";
+import { readStatePlane } from "../core/state.js";
 import { runPipelineForWorkspace } from "../enforcer.js";
 import { registerFixCodeActions } from "./diagnostics.js";
 import { registerChoirLanguageSupport } from "./choirLanguageSupport.js";
@@ -17,9 +21,24 @@ export function activate(context: vscode.ExtensionContext) {
     registerFixCodeActions(context);
     registerChoirLanguageSupport(context);
 
+    const eventBus = new ChoirEventBus();
+    const traceStore = new MessageTraceStore();
+    const webviewRegistry = new WebviewRegistry();
+    const productService = new ChoirProductService(context);
+
+    const emitStateUpdated = () => {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const stateHash = root ? (readStatePlane(root)?.stateHash ?? "GENESIS") : "GENESIS";
+        eventBus.emit({ type: "STATE_UPDATED", stateHash });
+    };
+
     const triggerPipeline = async () => {
         try {
             await runPipelineForWorkspace();
+            emitStateUpdated();
+            eventBus.emit({ type: "PLAN_UPDATED" });
+            eventBus.emit({ type: "GRAPH_UPDATED" });
+            eventBus.emit({ type: "TIMELINE_UPDATED" });
         } catch (error) {
             console.error("Choir: pipeline execution failed", error);
         }
@@ -32,12 +51,9 @@ export function activate(context: vscode.ExtensionContext) {
     };
     
     try {
-        const provider = new RuleEditorProvider(context);
-        const graphProvider = new GraphViewProvider(context);
-
-        // Register the sidebar webview view so resolveWebviewView is invoked.
-        addSubscription(context, vscode.window.registerWebviewViewProvider("choir.ruleEditor", provider));
-        addSubscription(context, vscode.window.registerWebviewViewProvider("choir.graphView", graphProvider));
+        const provider = new RuleEditorProvider(context, productService, eventBus, traceStore, webviewRegistry);
+        const graphProvider = new GraphViewProvider(context, eventBus, traceStore, webviewRegistry);
+        const timelineProvider = new TimelineViewProvider(context, productService, eventBus, traceStore, webviewRegistry);
 
         // Register tree provider for the activity view that lists rules
         const tree = new RuleTreeProvider();
@@ -66,47 +82,36 @@ export function activate(context: vscode.ExtensionContext) {
                 const yaml = await import("yaml");
                 const dslText = yaml.stringify([rule]);
 
-                // Reuse the sidebar control center instead of opening a second panel.
+                // Preserve existing API shape; control center is panel-based for full layout.
                 provider.setDslText(dslText);
-                await vscode.commands.executeCommand("workbench.view.extension.choir");
-                await vscode.commands.executeCommand("choir.ruleEditor.focus");
+                provider.openPanel(vscode.ViewColumn.One);
             } catch (err) {
                 console.error("Choir: openRuleEditorForRule failed", err);
             }
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditor", () => {
-            vscode.commands.executeCommand("workbench.view.extension.choir");
-            vscode.commands.executeCommand("choir.ruleEditor.focus");
+            provider.openPanel(vscode.ViewColumn.One);
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.openDependencyGraph", async () => {
-            await vscode.commands.executeCommand("workbench.view.extension.choir");
-            await vscode.commands.executeCommand("choir.graphView.focus");
+            graphProvider.openPanel(vscode.ViewColumn.One);
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.openTimeline", async () => {
+            timelineProvider.openPanel(vscode.ViewColumn.Two);
+            eventBus.emit({ type: "TIMELINE_UPDATED" });
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.graph.setMode", async (mode?: string, nodeId?: string) => {
             const normalizedMode = mode === "focused" || mode === "dependency" || mode === "dependents" ? mode : "full";
             await graphProvider.setMode(normalizedMode, typeof nodeId === "string" ? nodeId : undefined);
-            await vscode.commands.executeCommand("workbench.view.extension.choir");
-            await vscode.commands.executeCommand("choir.graphView.focus");
+            graphProvider.openPanel(vscode.ViewColumn.One);
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorPanel", () => {
             try {
-                const panel = vscode.window.createWebviewPanel(
-                    "choir.ruleEditor.panel",
-                    "Choir Control Center (Panel)",
-                    vscode.ViewColumn.One,
-                    { enableScripts: true }
-                );
-
-                // reuse provider HTML generation
-                panel.webview.html = provider.getHtml(panel.webview);
-
-                panel.webview.onDidReceiveMessage((msg) => {
-                    console.log("RuleEditorPanel: received message", msg);
-                });
+                provider.openPanel(vscode.ViewColumn.One);
             } catch (err) {
                 console.error("Choir: openRuleEditorPanel failed", err);
             }
@@ -114,26 +119,7 @@ export function activate(context: vscode.ExtensionContext) {
 
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorPanelResolve", () => {
             try {
-                const panel = vscode.window.createWebviewPanel(
-                    "choir.ruleEditor.panel.resolve",
-                    "Choir Control Center (Panel Resolve)",
-                    vscode.ViewColumn.One,
-                    { enableScripts: true }
-                );
-
-                const fakeView: any = {
-                    viewType: "choir.ruleEditor",
-                    title: "Control Center",
-                    webview: panel.webview,
-                    show: (_preserveFocus?: boolean) => {},
-                };
-
-                // call the provider's resolve directly to reproduce the lifecycle
-                // and capture logs/errors
-                // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-                // @ts-ignore
-                provider.resolveWebviewView(fakeView as vscode.WebviewView);
-                console.log("Choir: invoked provider.resolveWebviewView on panel webview");
+                provider.openPanel(vscode.ViewColumn.One);
             } catch (err) {
                 console.error("Choir: openRuleEditorPanelResolve failed", err);
             }
@@ -141,14 +127,20 @@ export function activate(context: vscode.ExtensionContext) {
 
         addSubscription(context, vscode.commands.registerCommand("choir.revealRuleEditorDebug", async () => {
             try {
-                await vscode.commands.executeCommand("workbench.view.extension.choir");
-                await vscode.commands.executeCommand("workbench.action.toggleSidebarVisibility");
-                await new Promise((r) => setTimeout(r, 120));
-                await vscode.commands.executeCommand("workbench.view.extension.choir");
+                provider.openPanel(vscode.ViewColumn.One);
                 console.log("Choir: reveal debug attempted");
             } catch (err) {
                 console.error("Choir: reveal debug failed", err);
             }
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.showWebviewSyncTrace", () => {
+            const lines = traceStore.list()
+                .map((entry) => `[${new Date(entry.timestamp).toISOString()}] ${entry.direction} (${entry.viewId}) ${entry.type}`)
+                .join("\n");
+
+            void vscode.window.showInformationMessage(lines.length > 0 ? "Choir webview sync trace copied to output." : "No webview sync trace yet.");
+            console.log(lines.length > 0 ? lines : "No webview sync trace yet.");
         }));
         // provider instance created; panel-based editor will use it
     } catch (error) {

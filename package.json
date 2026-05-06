@@ -23,7 +23,8 @@
       {
         "command": "choir.openRuleEditor",
         "title": "Choir: Open Control Center",
-        "category": "Choir"
+        "category": "Choir",
+        "icon": "$(dashboard)"
       },
       {
         "command": "choir.revealRuleEditorDebug",
@@ -48,11 +49,23 @@
       {
         "command": "choir.openDependencyGraph",
         "title": "Choir: Open Dependency Graph",
-        "category": "Choir"
+        "category": "Choir",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "choir.openTimeline",
+        "title": "Choir: Open Timeline",
+        "category": "Choir",
+        "icon": "$(history)"
       },
       {
         "command": "choir.graph.setMode",
         "title": "Choir: Set Graph Mode",
+        "category": "Choir"
+      },
+      {
+        "command": "choir.showWebviewSyncTrace",
+        "title": "Choir: Show Webview Sync Trace",
         "category": "Choir"
       }
     ],
@@ -111,18 +124,25 @@
           "id": "choir.ruleList",
           "name": "Rules",
           "icon": "media/choir.png"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "choir.openRuleEditor",
+          "when": "view == choir.ruleList",
+          "group": "navigation@1"
         },
         {
-          "type": "webview",
-          "id": "choir.ruleEditor",
-          "name": "Control Center",
-          "icon": "media/choir.png"
+          "command": "choir.openDependencyGraph",
+          "when": "view == choir.ruleList",
+          "group": "navigation@2"
         },
         {
-          "type": "webview",
-          "id": "choir.graphView",
-          "name": "Dependency Graph",
-          "icon": "media/choir.png"
+          "command": "choir.openTimeline",
+          "when": "view == choir.ruleList",
+          "group": "navigation@3"
         }
       ]
     }

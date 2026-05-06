@@ -4,10 +4,12 @@ import * as vscode from "vscode";
 import { getControlPlanePath, readControlPlane } from "../choirManager.js";
 import { buildGraphSnapshot, type GraphMode, type GraphSnapshot } from "../core/dependencyGraphUi.js";
 import { createEmptyStatePlane, readStatePlane } from "../core/state.js";
+import { ChoirEventBus, MessageTraceStore, WebviewRegistry, sendToWebview, traceInbound } from "./choirWebviewSync.js";
+import type { ChoirEvent } from "./webviewProtocol.js";
 
 type GraphInboundMessage =
   | { type: "ready" }
-  | { type: "refresh" }
+  | { type: "refresh" | "request-state" }
   | { type: "open-node"; id?: string }
   | { type: "set-mode"; mode?: GraphMode; focusNodeId?: string };
 
@@ -15,20 +17,31 @@ type GraphOutboundMessage =
   | { type: "snapshot"; payload: GraphSnapshot }
   | { type: "error"; message: string };
 
-const REFRESH_INTERVAL_MS = 1000;
-
 function isGraphMode(value: unknown): value is GraphMode {
   return value === "full" || value === "focused" || value === "dependency" || value === "dependents";
 }
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
-  private refreshTimer?: ReturnType<typeof setInterval>;
+  private panel?: vscode.WebviewPanel;
+  private readonly webviews = new Set<vscode.Webview>();
+  private readonly webviewRegistrations = new Map<vscode.Webview, vscode.Disposable>();
+  private readonly eventSubscription: vscode.Disposable;
   private mode: GraphMode = "full";
   private focusNodeId: string | undefined;
   private lastSnapshot: GraphSnapshot | undefined;
 
-  constructor(private readonly context: vscode.ExtensionContext) {}
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly eventBus: ChoirEventBus,
+    private readonly traceStore: MessageTraceStore,
+    private readonly registry: WebviewRegistry
+  ) {
+    this.eventSubscription = this.eventBus.subscribe(async (event) => {
+      await this.handleEvent(event);
+    });
+    this.context.subscriptions.push(this.eventSubscription);
+  }
 
   async setMode(mode: GraphMode, focusNodeId?: string): Promise<void> {
     this.mode = mode;
@@ -36,11 +49,60 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       ? focusNodeId.trim()
       : undefined;
     await this.postSnapshot();
+    this.eventBus.emit({ type: "GRAPH_UPDATED" });
+  }
+
+  openPanel(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
+    if (this.panel) {
+      this.panel.reveal(column, false);
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "choir.dependencyGraph",
+      "Choir Dependency Graph",
+      column,
+      {
+        enableScripts: true,
+        localResourceRoots: [
+          vscode.Uri.file(path.join(this.context.extensionPath, "media")),
+          vscode.Uri.file(path.join(this.context.extensionPath, "node_modules")),
+        ],
+      }
+    );
+
+    this.panel = panel;
+    this.configureWebview(panel.webview);
+
+    panel.onDidDispose(() => {
+      this.webviewRegistrations.get(panel.webview)?.dispose();
+      this.webviewRegistrations.delete(panel.webview);
+      this.webviews.delete(panel.webview);
+      this.panel = undefined;
+    });
+
+    void this.postSnapshot();
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
     this.view = view;
-    view.webview.options = {
+    this.configureWebview(view.webview);
+
+    view.onDidDispose(() => {
+      this.webviewRegistrations.get(view.webview)?.dispose();
+      this.webviewRegistrations.delete(view.webview);
+      this.webviews.delete(view.webview);
+      this.view = undefined;
+    });
+
+    void this.postSnapshot();
+  }
+
+  private configureWebview(webview: vscode.Webview): void {
+    this.webviews.add(webview);
+    const registration = this.registry.register("graph", webview);
+    this.webviewRegistrations.set(webview, registration);
+    webview.options = {
       enableScripts: true,
       localResourceRoots: [
         vscode.Uri.file(path.join(this.context.extensionPath, "media")),
@@ -48,32 +110,39 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       ],
     };
 
-    view.webview.html = this.getHtml(view.webview);
+    webview.html = this.getHtml(webview);
 
-    view.webview.onDidReceiveMessage(async (message: GraphInboundMessage) => {
+    webview.onDidReceiveMessage(async (message: GraphInboundMessage) => {
+      traceInbound(this.traceStore, "graph", message as { type?: unknown });
       await this.handleMessage(message);
     });
+  }
 
-    view.onDidDispose(() => {
-      this.stopRefreshLoop();
-      this.view = undefined;
-    });
+  private async handleEvent(event: ChoirEvent): Promise<void> {
+    if (this.webviews.size === 0) {
+      return;
+    }
 
-    view.onDidChangeVisibility(() => {
-      if (view.visible) {
-        this.startRefreshLoop();
-        void this.postSnapshot();
-      } else {
-        this.stopRefreshLoop();
+    if (event.type === "STATE_UPDATED" || event.type === "GRAPH_UPDATED" || event.type === "PLAN_UPDATED") {
+      await this.postSnapshot();
+      return;
+    }
+
+    if (event.type === "NAVIGATE") {
+      if (event.intent.type === "focusUnit") {
+        this.mode = "focused";
+        this.focusNodeId = event.intent.unitId;
+      } else if (event.intent.type === "showDependencies") {
+        this.mode = "dependency";
+        this.focusNodeId = event.intent.unitId;
       }
-    });
 
-    this.startRefreshLoop();
-    void this.postSnapshot();
+      await this.postSnapshot();
+    }
   }
 
   private async handleMessage(message: GraphInboundMessage): Promise<void> {
-    if (message.type === "ready" || message.type === "refresh") {
+    if (message.type === "ready" || message.type === "refresh" || message.type === "request-state") {
       await this.postSnapshot();
       return;
     }
@@ -87,6 +156,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         ? message.focusNodeId.trim()
         : undefined;
       await this.postSnapshot();
+      if (this.focusNodeId) {
+        this.eventBus.emit({
+          type: "NAVIGATE",
+          intent: {
+            type: this.mode === "dependency" ? "showDependencies" : "focusUnit",
+            unitId: this.focusNodeId,
+          },
+        });
+      }
+      this.eventBus.emit({ type: "GRAPH_UPDATED" });
       return;
     }
 
@@ -94,6 +173,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const nodeId = typeof message.id === "string" ? message.id.trim() : "";
       if (nodeId.length > 0) {
         await this.openNode(nodeId);
+        this.eventBus.emit({ type: "NAVIGATE", intent: { type: "showTimeline", unitId: nodeId } });
       }
     }
   }
@@ -145,35 +225,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private startRefreshLoop(): void {
-    if (this.refreshTimer) {
-      return;
-    }
-
-    this.refreshTimer = setInterval(() => {
-      if (!this.view?.visible) {
-        return;
-      }
-
-      void this.postSnapshot();
-    }, REFRESH_INTERVAL_MS);
-  }
-
-  private stopRefreshLoop(): void {
-    if (!this.refreshTimer) {
-      return;
-    }
-
-    clearInterval(this.refreshTimer);
-    this.refreshTimer = undefined;
-  }
-
   private postMessage(message: GraphOutboundMessage): void {
-    if (!this.view) {
-      return;
+    for (const webview of this.webviews) {
+      void sendToWebview(this.traceStore, "graph", webview, message);
     }
-
-    void this.view.webview.postMessage(message);
   }
 
   private async openNode(nodeId: string): Promise<void> {

@@ -888,12 +888,4 @@ roleSelect.addEventListener("change", () => {
   });
 });
 
-setInterval(() => {
-  postAction({
-    type: "refresh",
-    role: getActiveRole(),
-    filters: auditFilters,
-  });
-}, 5000);
-
 vscode.postMessage({ type: "ready" });

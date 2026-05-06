@@ -67,6 +67,13 @@ Additional commands:
   - @choir graph focus <node>
   - @choir graph dependencies <node>
   - @choir graph dependents <node>
+- Chat panel shortcuts:
+  - @choir control
+  - @choir timeline
+- UI panels:
+  - Choir: Open Control Center
+  - Choir: Open Dependency Graph
+  - Choir: Open Timeline
 - Governance:
   - choir policy status
   - choir audit log|query|report
@@ -167,13 +174,29 @@ Artifacts:
 ## UI Surfaces
 
 - Rules view
-- Rule Editor view
-- Dependency Graph view
-- Timeline replay inspector
+- Control Center panel (full editor webview)
+- Dependency Graph panel (full editor webview)
+- Timeline panel (full editor webview)
+
+Webview synchronization contract:
+
+- Extension host is the single state owner
+- Control Center, Graph, and Timeline are pure projections
+- Sync is push-based via typed event bus
+- No polling-based state sync
+
+From the main Choir activity bar, persistent toolbar icons on the Rules view header open:
+
+- Control Center panel
+- Dependency Graph panel
+- Timeline panel
 
 Command palette:
 
-- Choir: Open Rule Editor
+- Choir: Open Control Center
+- Choir: Open Dependency Graph
+- Choir: Open Timeline
+- Choir: Show Webview Sync Trace
 - Choir: Show DSL Editor Trace
 
 ## Key Artifacts

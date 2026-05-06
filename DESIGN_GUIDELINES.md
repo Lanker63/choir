@@ -196,6 +196,24 @@ Workspace detection contract:
 - DSL is strict grammar, no natural language parsing
 - .choir language support is grammar-state driven (completions, hover, validation)
 - internal roles (architect, analyst, conductor, enforcer) are routing boundaries, not user-facing participants
+- panel chat shortcuts:
+   - @choir control
+   - @choir timeline
+- UI opening model:
+   - Control Center, Dependency Graph, and Timeline open as full editor webview panels
+   - primary open commands: Choir: Open Control Center, Choir: Open Dependency Graph, Choir: Open Timeline
+   - main Choir activity bar container keeps Rules as the persistent view
+   - persistent Rules view title icons open Control Center, Dependency Graph, and Timeline panels
+
+## Webview Sync Contract
+
+- Extension host is the single source of truth for state and replay
+- Webviews are stateless projections (control, graph, timeline)
+- Messaging uses typed host<->webview protocol
+- Synchronization uses push-based event bus broadcasts
+- Polling-based state synchronization is forbidden
+- View lifecycle must support deterministic rehydrate on reopen
+- All inbound webview messages must be validated before execution
 
 ## Non-Negotiable Safeguards
 

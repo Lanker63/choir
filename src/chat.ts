@@ -40,8 +40,13 @@ import {
     writeDSL,
 } from "./core/yamlDslGenerator.js";
 import {
+    parseAbstractionChatCommand,
+    parseGraphChatCommand,
+    parseInitChatCommand,
+    parsePanelChatCommand,
+} from "./core/chatCommands.js";
+import {
     InitApplyMode,
-    InitTemplateName,
     InitWizard,
     InitWizardSession,
     buildDSL,
@@ -69,17 +74,6 @@ type InitTrace = {
     resumed: boolean;
     currentStep?: string;
     statePath?: string;
-};
-
-type InitChatCommand = {
-    type: "init";
-    template?: InitTemplateName;
-    invalidTemplate?: string;
-};
-
-type GraphChatCommand = {
-    mode: "full" | "focused" | "dependency" | "dependents";
-    nodeId?: string;
 };
 
 function registerParticipant(
@@ -169,6 +163,8 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir init",
         "- @choir init --template backend",
         "- @choir init --template frontend",
+        "- @choir control",
+        "- @choir timeline",
         "- @choir list abstractions",
         "- @choir describe <abstraction>",
         "- @choir run <abstraction>",
@@ -196,82 +192,6 @@ function countCompletedInitSteps(step: string): number {
     }
 }
 
-function parseAbstractionChatCommand(input: string): AbstractionChatCommand | null {
-    const normalized = input.trim();
-
-    if (/^@choir\s+list\s+abstractions\s*$/i.test(normalized)) {
-        return { type: "list" };
-    }
-
-    const describe = normalized.match(/^@choir\s+describe\s+([a-zA-Z0-9._-]+)\s*$/i);
-    if (describe) {
-        return { type: "describe", id: describe[1] as string };
-    }
-
-    const run = normalized.match(/^@choir\s+run\s+([a-zA-Z0-9._-]+)\s*$/i);
-    if (run) {
-        return { type: "run", id: run[1] as string };
-    }
-
-    return null;
-}
-
-function parseInitChatCommand(input: string): InitChatCommand | null {
-    const normalized = input.trim();
-    const match = normalized.match(/^@choir\s+init(?:\s+--template\s+([a-zA-Z0-9._-]+))?\s*$/i);
-    if (!match) {
-        return null;
-    }
-
-    const templateValue = match[1]?.toLowerCase();
-    if (!templateValue) {
-        return { type: "init" };
-    }
-
-    if (templateValue === "backend" || templateValue === "frontend") {
-        return { type: "init", template: templateValue };
-    }
-
-    return {
-        type: "init",
-        invalidTemplate: templateValue,
-    };
-}
-
-function parseGraphChatCommand(input: string): GraphChatCommand | null {
-    const normalized = input.trim();
-
-    if (/^@choir\s+graph\s*$/i.test(normalized)) {
-        return { mode: "full" };
-    }
-
-    const focus = normalized.match(/^@choir\s+graph\s+focus\s+([a-zA-Z0-9._/-]+)\s*$/i);
-    if (focus) {
-        return {
-            mode: "focused",
-            nodeId: focus[1],
-        };
-    }
-
-    const dependencies = normalized.match(/^@choir\s+graph\s+dependencies\s+([a-zA-Z0-9._/-]+)\s*$/i);
-    if (dependencies) {
-        return {
-            mode: "dependency",
-            nodeId: dependencies[1],
-        };
-    }
-
-    const dependents = normalized.match(/^@choir\s+graph\s+dependents\s+([a-zA-Z0-9._/-]+)\s*$/i);
-    if (dependents) {
-        return {
-            mode: "dependents",
-            nodeId: dependents[1],
-        };
-    }
-
-    return null;
-}
-
 export function registerChoir(context: vscode.ExtensionContext) {
     registerParticipant(
         context,
@@ -287,6 +207,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const abstractionChatCommand = parseAbstractionChatCommand(raw);
             const initChatCommand = parseInitChatCommand(raw);
             const graphChatCommand = parseGraphChatCommand(raw);
+            const panelChatCommand = parsePanelChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
                     stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
@@ -604,11 +525,22 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             if (graphChatCommand) {
-                await vscode.commands.executeCommand("workbench.view.extension.choir");
                 await vscode.commands.executeCommand("choir.graph.setMode", graphChatCommand.mode, graphChatCommand.nodeId);
                 stream.markdown(graphChatCommand.nodeId
                     ? `Graph opened in mode: ${graphChatCommand.mode} ${graphChatCommand.nodeId}`
                     : `Graph opened in mode: ${graphChatCommand.mode}`);
+                return;
+            }
+
+            if (panelChatCommand) {
+                if (panelChatCommand.target === "control") {
+                    await vscode.commands.executeCommand("choir.openRuleEditor");
+                    stream.markdown("Control Center opened.");
+                    return;
+                }
+
+                await vscode.commands.executeCommand("choir.openTimeline");
+                stream.markdown("Timeline opened.");
                 return;
             }
 
@@ -952,7 +884,6 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (parsed.ast.type === "graph") {
-                    await vscode.commands.executeCommand("workbench.view.extension.choir");
                     await vscode.commands.executeCommand("choir.graph.setMode", parsed.ast.mode, parsed.ast.nodeId);
 
                     const suffix = parsed.ast.nodeId ? ` ${parsed.ast.nodeId}` : "";
