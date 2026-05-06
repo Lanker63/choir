@@ -222,6 +222,10 @@ import {
   buildGraphSnapshot,
   toUIGraph,
 } from "../../core/dependencyGraphUi.js";
+import {
+  rollbackRefactor,
+  runRefactorIntent,
+} from "../../core/refactorEngine.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -624,6 +628,33 @@ const pass2: TestPass = {
     },
     {
       id: "2.8",
+      name: "choir DSL parser supports refactor commands",
+      run: async () => {
+        const rename = parseCommand("choir refactor rename runQuery executeQuery");
+        assert.deepStrictEqual(rename.ast, {
+          type: "refactor-rename",
+          symbol: "runQuery",
+          newName: "executeQuery",
+        });
+
+        const extract = parseCommand("choir refactor extract queryService packages.core");
+        assert.deepStrictEqual(extract.ast, {
+          type: "refactor-extract",
+          symbol: "queryService",
+          targetUnit: "packages.core",
+        });
+
+        const inline = parseCommand("choir refactor inline queryResult");
+        assert.deepStrictEqual(inline.ast, {
+          type: "refactor-inline",
+          symbol: "queryResult",
+        });
+
+        assert.strictEqual(routeAST(rename.ast), "conductor");
+      },
+    },
+    {
+      id: "2.81",
       name: "choir DSL rejects invalid syntax deterministically",
       run: async () => {
         assert.throws(() => parseCommand("plan"), /Expected keyword 'choir'/);
@@ -631,6 +662,7 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir define goal"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
+        assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
       },
     },
     {
@@ -1458,6 +1490,7 @@ const pass2: TestPass = {
           "define",
           "analyze",
           "plan",
+          "refactor",
           "preview",
           "execute",
           "status",
@@ -2668,6 +2701,75 @@ const pass2: TestPass = {
     },
     {
       id: "2.59",
+      name: "refactor engine preview is deterministic and rollback restores snapshots",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-engine-"));
+
+        fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
+        fs.mkdirSync(path.join(root, "packages", "app", "src"), { recursive: true });
+
+        fs.writeFileSync(path.join(root, "packages", "core", "src", "math.ts"), [
+          "export function addOne(value: number): number {",
+          "  return value + 1;",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, "packages", "app", "src", "main.ts"), [
+          "import { addOne } from \"../../core/src/math\";",
+          "",
+          "export const result = addOne(1);",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "rename" as const,
+          symbol: "addOne",
+          newName: "increment",
+        };
+
+        const first = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: false,
+        });
+
+        const second = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: false,
+        });
+
+        assert.deepStrictEqual(first.preview, second.preview);
+        assert.strictEqual(first.simulation.validation.passed, true);
+        assert.strictEqual(first.preview.changes.length >= 1, true);
+
+        const executed = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+        assert.strictEqual(executed.preview.hash, first.preview.hash);
+
+        const appAfter = fs.readFileSync(path.join(root, "packages", "app", "src", "main.ts"), "utf-8");
+        const coreAfter = fs.readFileSync(path.join(root, "packages", "core", "src", "math.ts"), "utf-8");
+        assert.ok(appAfter.includes("increment"));
+        assert.ok(coreAfter.includes("function increment"));
+
+        const snapshotId = executed.execution?.snapshotId;
+        assert.ok(snapshotId);
+        await rollbackRefactor(root, snapshotId as string);
+
+        const appRolledBack = fs.readFileSync(path.join(root, "packages", "app", "src", "main.ts"), "utf-8");
+        const coreRolledBack = fs.readFileSync(path.join(root, "packages", "core", "src", "math.ts"), "utf-8");
+        assert.ok(appRolledBack.includes("addOne"));
+        assert.ok(coreRolledBack.includes("function addOne"));
+      },
+    },
+    {
+      id: "2.60",
       name: "macro execution is blocked outside pipeline in ci mode",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-ci-mode-"));

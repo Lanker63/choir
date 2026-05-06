@@ -33,6 +33,7 @@ import { formatCIRunResult, runCI } from "./core/ci.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import { detectEnvironment } from "./core/policyEngine.js";
+import { runRefactorIntent } from "./core/refactorEngine.js";
 import {
     formatDSL,
     generateDSL,
@@ -136,6 +137,10 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
         "- choir plan approve <planId>",
+        "- choir refactor rename <symbol> <newName>",
+        "- choir refactor move <symbol> <targetUnit>",
+        "- choir refactor extract <symbol> <targetUnit>",
+        "- choir refactor inline <symbol>",
         "- choir export dsl",
         "- choir export dsl intent",
         "- choir macro list",
@@ -662,10 +667,14 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-list"
                     || action.type === "macro-show"
                     || action.type === "macro-run"
+                    || action.type === "refactor-rename"
+                    || action.type === "refactor-move"
+                    || action.type === "refactor-extract"
+                    || action.type === "refactor-inline"
                     || action.type === "graph"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|refactor` cannot be chained with `then`.");
                 return;
             }
 
@@ -888,6 +897,80 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     const suffix = parsed.ast.nodeId ? ` ${parsed.ast.nodeId}` : "";
                     stream.markdown(`Graph opened in mode: ${parsed.ast.mode}${suffix}`);
+                    return;
+                }
+
+                if (
+                    parsed.ast.type === "refactor-rename"
+                    || parsed.ast.type === "refactor-move"
+                    || parsed.ast.type === "refactor-extract"
+                    || parsed.ast.type === "refactor-inline"
+                ) {
+                    const intent = parsed.ast.type === "refactor-rename"
+                        ? {
+                            type: "rename" as const,
+                            symbol: parsed.ast.symbol,
+                            newName: parsed.ast.newName,
+                        }
+                        : parsed.ast.type === "refactor-move"
+                            ? {
+                                type: "move" as const,
+                                symbol: parsed.ast.symbol,
+                                from: "*",
+                                to: parsed.ast.targetUnit,
+                            }
+                            : parsed.ast.type === "refactor-extract"
+                                ? {
+                                    type: "extract" as const,
+                                    symbol: parsed.ast.symbol,
+                                    targetUnit: parsed.ast.targetUnit,
+                                }
+                                : {
+                                    type: "inline" as const,
+                                    symbol: parsed.ast.symbol,
+                                };
+
+                    const refactorResult = await runRefactorIntent(intent, {
+                        root: workspaceRoot,
+                        controlPlane: control,
+                        execute: true,
+                    });
+
+                    const validation = refactorResult.simulation.validation;
+                    const execution = refactorResult.execution;
+                    const details = [
+                        `Refactor intent: ${intent.type}`,
+                        `- affectedUnits: ${refactorResult.impact.affectedUnits.length}`,
+                        `- affectedFiles: ${refactorResult.impact.affectedFiles.length}`,
+                        `- previewHash: ${refactorResult.preview.hash}`,
+                        `- validation: ${validation.passed ? "passed" : "failed"}`,
+                        `- execution: ${execution?.committed ? "committed" : (execution?.rolledBack ? "rolled-back" : "not-committed")}`,
+                        execution?.snapshotId ? `- snapshotId: ${execution.snapshotId}` : "",
+                    ].filter((line) => line.length > 0);
+
+                    const failureDetails = !validation.passed
+                        ? [
+                            ...(validation.policy.violations.map((violation) => `- policy: ${violation}`)),
+                            ...(validation.missingReferenceErrors.map((violation) => `- references: ${violation}`)),
+                            ...(validation.consistencyErrors.map((violation) => `- consistency: ${violation}`)),
+                        ]
+                        : [];
+
+                    const diffBlocks = refactorResult.preview.changes.length === 0
+                        ? ["No file changes generated."]
+                        : refactorResult.preview.changes.slice(0, 5).flatMap((change) => [
+                            `File: ${change.file}`,
+                            "```diff",
+                            change.diff,
+                            "```",
+                        ]);
+
+                    stream.markdown([
+                        ...details,
+                        ...(failureDetails.length > 0 ? ["", "Validation details:", ...failureDetails] : []),
+                        "",
+                        ...diffBlocks,
+                    ].join("\n"));
                     return;
                 }
 

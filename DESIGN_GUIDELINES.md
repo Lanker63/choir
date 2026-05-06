@@ -9,6 +9,7 @@ Choir is deterministic, policy-driven workspace governance:
 - intent and policy compilation
 - rule evaluation and diagnostics
 - plan synthesis, preview, execution
+- deterministic AST-based refactor intent, preview, and guarded execution
 - audit/compliance evidence
 - macro libraries and abstractions
 - distributed state sync
@@ -143,6 +144,21 @@ Hard constraints:
 - simulation mode never commits
 - rollback restores pre-execution state on failure
 
+## Refactor Contract (PASS 1)
+
+- Refactor operations are AST/symbol-based. Raw string replacement refactors are forbidden.
+- Refactor flow is deterministic and must follow the same execution primitive:
+
+```text
+intent -> impact -> plan -> preview -> simulate -> validate -> commit|rollback
+```
+
+- Refactor preview must be deterministic and hash-stable for identical inputs.
+- Execution must snapshot impacted files and support deterministic rollback.
+- Unsupported refactor execution intents must fail closed (no writes).
+- PASS 1 executable intents: rename, inline.
+- PASS 1 parsed/planned intents (execution not yet enabled): move, extract.
+
 ## Planning Contract
 
 Cost model (static, deterministic):
@@ -204,6 +220,11 @@ Workspace detection contract:
 - DSL is strict grammar, no natural language parsing
 - .choir language support is grammar-state driven (completions, hover, validation)
 - internal roles (architect, analyst, conductor, enforcer) are routing boundaries, not user-facing participants
+- refactor DSL surface:
+   - choir refactor rename <symbol> <newName>
+   - choir refactor inline <symbol>
+   - choir refactor move <symbol> <targetUnit> (parsed/planned in PASS 1)
+   - choir refactor extract <symbol> <targetUnit> (parsed/planned in PASS 1)
 - panel chat shortcuts:
    - @choir control
    - @choir timeline

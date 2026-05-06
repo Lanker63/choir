@@ -77,6 +77,11 @@ Additional commands:
 - Governance:
   - choir policy status
   - choir audit log|query|report
+- Refactor (PASS 1):
+  - choir refactor rename <symbol> <newName>
+  - choir refactor inline <symbol>
+  - choir refactor move <symbol> <targetUnit> (parsed/planned; execution path not yet enabled)
+  - choir refactor extract <symbol> <targetUnit> (parsed/planned; execution path not yet enabled)
 - Libraries:
   - choir import <lib>@<selector>
   - choir library list|install|update|lock
@@ -89,12 +94,16 @@ Additional commands:
 <command> ::= "choir" <action> ("then" <action>)*
 
 <action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
-           | <export> | <approve> | <reject> | <policy-status>
+           | <refactor> | <export> | <approve> | <reject> | <policy-status>
            | <graph> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
 <plan> ::= "plan" ["for" <string>] | "plan" "approve" <identifier>
+<refactor> ::= "refactor" "rename" <identifier> <identifier>
+             | "refactor" "move" <identifier> <identifier>
+             | "refactor" "extract" <identifier> <identifier>
+             | "refactor" "inline" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>]
 <status> ::= "status"
@@ -129,6 +138,12 @@ Preview hash gate:
 ```text
 hash = sha256(JSON.stringify(preview.fileChanges))
 ```
+
+Refactor safety notes (PASS 1):
+
+- Refactors run through the same deterministic preview/validation/commit pipeline.
+- Rename and inline are executable with rollback snapshots.
+- Move and extract are accepted at DSL parse/plan level, but execution is intentionally fail-closed until full transformation support lands.
 
 ## Workspace Detection
 

@@ -344,6 +344,39 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
       return;
     }
 
+    case "refactor-rename": {
+      if (!action.symbol || typeof action.symbol !== "string") {
+        issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
+      }
+
+      if (!action.newName || typeof action.newName !== "string") {
+        issues.push(issue("refactor-new-name-missing", "error", "Refactor newName is required", `${path}.newName`));
+      }
+
+      return;
+    }
+
+    case "refactor-move":
+    case "refactor-extract": {
+      if (!action.symbol || typeof action.symbol !== "string") {
+        issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
+      }
+
+      if (!action.targetUnit || typeof action.targetUnit !== "string") {
+        issues.push(issue("refactor-target-missing", "error", "Refactor targetUnit is required", `${path}.targetUnit`));
+      }
+
+      return;
+    }
+
+    case "refactor-inline": {
+      if (!action.symbol || typeof action.symbol !== "string") {
+        issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
+      }
+
+      return;
+    }
+
     case "plan-approve": {
       if (typeof action.planId !== "string" || action.planId.length === 0) {
         issues.push(issue("plan-approve-id-missing", "error", "Missing plan id for plan approve command", `${path}.planId`));

@@ -4,6 +4,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
     <define>
   | <analyze>
   | <plan>
+  | <refactor>
   | <preview>
   | <execute>
   | <status>
@@ -29,6 +30,11 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <plan> ::= "plan" ["for" <string>]
          | "plan" "approve" <identifier>
+
+<refactor> ::= "refactor" "rename" <identifier> <identifier>
+             | "refactor" "move" <identifier> <identifier>
+             | "refactor" "extract" <identifier> <identifier>
+             | "refactor" "inline" <identifier>
 
 <preview> ::= "preview" [<plan-ref>]
 
@@ -102,6 +108,7 @@ export const CHOIR_ACTION_KEYWORDS = [
   "define",
   "analyze",
   "plan",
+  "refactor",
   "preview",
   "execute",
   "status",
@@ -171,6 +178,29 @@ export type AnalyzeNode = {
 export type PlanNode = {
   type: "plan";
   target?: string;
+};
+
+export type RefactorRenameNode = {
+  type: "refactor-rename";
+  symbol: string;
+  newName: string;
+};
+
+export type RefactorMoveNode = {
+  type: "refactor-move";
+  symbol: string;
+  targetUnit: string;
+};
+
+export type RefactorExtractNode = {
+  type: "refactor-extract";
+  symbol: string;
+  targetUnit: string;
+};
+
+export type RefactorInlineNode = {
+  type: "refactor-inline";
+  symbol: string;
 };
 
 export type PlanApproveNode = {
@@ -295,6 +325,10 @@ export type ActionNode =
   | DefineNode
   | AnalyzeNode
   | PlanNode
+  | RefactorRenameNode
+  | RefactorMoveNode
+  | RefactorExtractNode
+  | RefactorInlineNode
   | PlanApproveNode
   | PreviewNode
   | ExecuteNode
@@ -571,6 +605,8 @@ class Parser {
         return this.parseAnalyze();
       case "plan":
         return this.parsePlan();
+      case "refactor":
+        return this.parseRefactor();
       case "preview":
         return this.parsePreview();
       case "execute":
@@ -777,6 +813,44 @@ class Parser {
     return {
       type: "plan",
     };
+  }
+
+  private parseRefactor(): RefactorRenameNode | RefactorMoveNode | RefactorExtractNode | RefactorInlineNode {
+    this.expectKeyword("refactor");
+    const mode = this.expectIdentifierLike().toLowerCase();
+
+    if (mode === "rename") {
+      return {
+        type: "refactor-rename",
+        symbol: this.expectIdentifierLike(),
+        newName: this.expectIdentifierLike(),
+      };
+    }
+
+    if (mode === "move") {
+      return {
+        type: "refactor-move",
+        symbol: this.expectIdentifierLike(),
+        targetUnit: this.expectIdentifierLike(),
+      };
+    }
+
+    if (mode === "extract") {
+      return {
+        type: "refactor-extract",
+        symbol: this.expectIdentifierLike(),
+        targetUnit: this.expectIdentifierLike(),
+      };
+    }
+
+    if (mode === "inline") {
+      return {
+        type: "refactor-inline",
+        symbol: this.expectIdentifierLike(),
+      };
+    }
+
+    throw new Error("Expected refactor command: rename|move|extract|inline");
   }
 
   private parsePlanRef(): PlanRef {
@@ -1142,6 +1216,18 @@ function validateActionNode(node: ActionNode): boolean {
     return node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
   }
 
+  if (node.type === "refactor-rename") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && CHOIR_IDENTIFIER_PATTERN.test(node.newName);
+  }
+
+  if (node.type === "refactor-move" || node.type === "refactor-extract") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && CHOIR_IDENTIFIER_PATTERN.test(node.targetUnit);
+  }
+
+  if (node.type === "refactor-inline") {
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol);
+  }
+
   if (node.type === "plan-approve") {
     return CHOIR_IDENTIFIER_PATTERN.test(node.planId);
   }
@@ -1263,6 +1349,10 @@ export function routeActionToRole(action: ActionNode): RoutedRole {
       return "analyst";
     case "plan":
     case "preview":
+    case "refactor-rename":
+    case "refactor-move":
+    case "refactor-extract":
+    case "refactor-inline":
     case "macro-run":
     case "abstraction-run":
       return "conductor";
@@ -1325,6 +1415,26 @@ async function compileAction<TContext>(
       trace.rolesInvoked.push("conductor");
       trace.steps.push("conductor.plan");
       trace.compiledActions.push("conductor.plan");
+      return;
+
+    case "refactor-rename":
+      trace.steps.push("system.refactor.rename");
+      trace.compiledActions.push("system.refactor.rename");
+      return;
+
+    case "refactor-move":
+      trace.steps.push("system.refactor.move");
+      trace.compiledActions.push("system.refactor.move");
+      return;
+
+    case "refactor-extract":
+      trace.steps.push("system.refactor.extract");
+      trace.compiledActions.push("system.refactor.extract");
+      return;
+
+    case "refactor-inline":
+      trace.steps.push("system.refactor.inline");
+      trace.compiledActions.push("system.refactor.inline");
       return;
 
     case "plan-approve":
