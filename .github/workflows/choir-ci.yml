@@ -39,6 +39,9 @@ jobs:
       - name: Run state verification
         run: npm run verify:state
 
+      - name: Run compiler verification
+        run: npm run verify:compiler
+
       - name: Run contract verification checklist
         run: npm run verify:contracts
 
@@ -88,6 +91,9 @@ jobs:
 
       - name: State verification
         run: npm run verify:state
+
+      - name: Compiler verification
+        run: npm run verify:compiler
 
       - name: Contract verification checklist (full)
         run: npm run verify:contracts:full

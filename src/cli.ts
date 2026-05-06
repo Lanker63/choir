@@ -5,6 +5,7 @@ import path from "path";
 import * as YAML from "yaml";
 import { formatCIRunResult, runCI } from "./core/ci.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
+import { formatCompilerVerificationReport, runCompilerVerification } from "./core/compilerVerification.js";
 import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
 import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
@@ -24,6 +25,7 @@ function usage(): string {
     "  choir verify --determinism",
     "  choir verify --transactions",
     "  choir verify --state",
+    "  choir verify --compiler",
     "  choir verify --property [--seed <n>]",
     "  choir verify --chaos [none|light|moderate|extreme] [--seed <n>]",
   ].join("\n");
@@ -124,6 +126,13 @@ async function main(): Promise<void> {
       if (remaining.length === 1 && remaining[0] === "--state") {
         const report = await runStateVerification();
         console.log(formatStateVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--compiler") {
+        const report = await runCompilerVerification();
+        console.log(formatCompilerVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }

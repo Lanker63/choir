@@ -23,15 +23,12 @@ import {
 import {
   AST,
   ActionNode,
-  parse,
-  tokenize,
-  validateAST,
 } from "./choirRouter.js";
 import {
   RuleResult,
   ValidationTrace,
-  processAST,
 } from "./astValidation.js";
+import { compileInput } from "./compilerPipeline.js";
 import { MacroLibraryTrace } from "./macroLibraries.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
 import {
@@ -80,6 +77,32 @@ export type CompilationTrace = {
 };
 
 export type CompilationDecision = "allow" | "deny" | "require-approval" | "no-change";
+
+export type NormalizedPlan = {
+  plans: Array<{
+    id: string;
+    status: Plan["status"];
+    goalRefs: string[];
+    tasks: Array<{
+      id: string;
+      action: string;
+      dependsOn: string[];
+    }>;
+  }>;
+};
+
+export type NormalizedPolicies = {
+  rules: Array<{
+    id: string;
+    effect: string;
+  }>;
+};
+
+export type IR = {
+  plan: NormalizedPlan;
+  policies: NormalizedPolicies;
+  config: ChoirConfig;
+};
 
 type CompilerContext = {
   state: StatePlane;
@@ -326,6 +349,41 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
       plans: canonical.execution.plans,
     },
   });
+}
+
+export function buildIR(controlPlane: ControlPlane): IR {
+  const config = controlPlaneToChoirConfig(controlPlane);
+  return {
+    plan: {
+      plans: config.execution.plans
+        .map((plan) => ({
+          id: plan.id,
+          status: plan.status,
+          goalRefs: sortedUnique(plan.goalRefs ?? []),
+          tasks: [...plan.tasks]
+            .map((task) => ({
+              id: task.id,
+              action: task.type,
+              dependsOn: sortedUnique(task.dependsOn ?? []),
+            }))
+            .sort((left, right) => left.id.localeCompare(right.id)),
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    },
+    policies: {
+      rules: [...config.policy.rules]
+        .map((rule) => ({
+          id: rule.id,
+          effect: rule.constraint.type,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id)),
+    },
+    config,
+  };
+}
+
+export function compileToYAML(ir: IR): string {
+  return serializeYAML(ir.config);
 }
 
 export function upsert(list: string[], value: string): string[] {
@@ -586,20 +644,14 @@ export function compileDSL(
   changed: boolean;
   trace: CompilationTrace;
 } {
-  const tokens = tokenize(input);
-  const ast = parse(tokens);
-  validateAST(ast);
-
-  const processed = processAST(ast, {
-    controlPlane,
-  });
+  const pipeline = compileInput(input, controlPlane);
 
   const baseConfig = controlPlaneToChoirConfig(controlPlane);
   const state = options?.workspaceRoot
     ? (readStatePlane(options.workspaceRoot) ?? createEmptyStatePlane())
     : createEmptyStatePlane();
 
-  const compiled = compileASTToYAML(processed.ast, baseConfig, { state });
+  const compiled = compileASTToYAML(pipeline.normalizedAst, baseConfig, { state });
   const updatedControl = validateSchema(compiled.config);
 
   const beforeHash = hashConfig(baseConfig);
@@ -610,12 +662,24 @@ export function compileDSL(
     changed: beforeHash !== afterHash,
     trace: {
       input,
-      ast: processed.ast,
+      ast: pipeline.normalizedAst,
       changes: compiled.changes,
-      validation: processed.trace,
-      ruleResults: processed.results,
+      validation: pipeline.validationTrace,
+      ruleResults: pipeline.ruleResults,
     },
   };
+}
+
+export function compile(
+  input: string,
+  controlPlane: ControlPlane,
+  options?: {
+    workspaceRoot?: string;
+  }
+): string {
+  const compiled = compileDSL(input, controlPlane, options);
+  const ir = buildIR(compiled.updatedControlPlane);
+  return compileToYAML(ir);
 }
 
 export function compileDSLAndWrite(

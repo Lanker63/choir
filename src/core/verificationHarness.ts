@@ -36,6 +36,7 @@ import {
   validatePlanStillApplies,
 } from "./strategyMemory.js";
 import { StatePlane, createEmptyStatePlane } from "./state.js";
+import { runCompilerVerification } from "./compilerVerification.js";
 import { runTransactionVerification } from "./transactionVerification.js";
 import { runStateVerification } from "./stateVerification.js";
 
@@ -68,6 +69,7 @@ export type VerificationReport = {
     replay: boolean;
     simulation: boolean;
     rollback: boolean;
+    compiler: boolean;
     transactions: boolean;
     state: boolean;
     strategy: boolean;
@@ -682,7 +684,7 @@ async function executeSuite(
 
 function runFingerprint(
   cases: VerificationCaseResult[],
-  metrics: { transactions: boolean; state: boolean; strategy: boolean; memory: boolean; adaptive: boolean }
+  metrics: { compiler: boolean; transactions: boolean; state: boolean; strategy: boolean; memory: boolean; adaptive: boolean }
 ): string {
   return stableStringify({
     cases: cases.map((entry) => ({
@@ -765,6 +767,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const transactionReport = await runTransactionVerification();
     const transactions = transactionReport.passed;
     failures.push(...transactionReport.failures.map((failure) => `transactions: ${failure}`));
+    const compilerReport = await runCompilerVerification();
+    const compiler = compilerReport.passed;
+    failures.push(...compilerReport.failures.map((failure) => `compiler: ${failure}`));
     const stateReport = await runStateVerification();
     const state = stateReport.passed;
     failures.push(...stateReport.failures.map((failure) => `state: ${failure}`));
@@ -778,7 +783,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { transactions, state, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, { compiler, transactions, state, strategy, memory, adaptive });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
@@ -788,9 +793,11 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunMemory = verifyMemoryReuse(await createMemoryContext(rerunMemoryRoot));
         const rerunAdaptiveRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
+        const rerunCompiler = (await runCompilerVerification()).passed;
         const rerunTransactions = (await runTransactionVerification()).passed;
         const rerunState = (await runStateVerification()).passed;
         const rerunFingerprint = runFingerprint(rerunCases, {
+          compiler: rerunCompiler,
           transactions: rerunTransactions,
           state: rerunState,
           strategy: rerunStrategy,
@@ -813,13 +820,14 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const casesPass = caseResults.every((entry) => allAssertionsPass(entry));
 
     report = {
-      passed: casesPass && failures.length === 0 && determinism && replay && simulation && rollback && transactions && state && strategy && memory && adaptive && flakeFree,
+      passed: casesPass && failures.length === 0 && determinism && replay && simulation && rollback && compiler && transactions && state && strategy && memory && adaptive && flakeFree,
       failures,
       metrics: {
         determinism,
         replay,
         simulation,
         rollback,
+        compiler,
         transactions,
         state,
         strategy,
@@ -850,6 +858,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- replay: ${report.metrics.replay}`,
     `- simulation: ${report.metrics.simulation}`,
     `- rollback: ${report.metrics.rollback}`,
+    `- compiler: ${report.metrics.compiler}`,
     `- transactions: ${report.metrics.transactions}`,
     `- state: ${report.metrics.state}`,
     `- strategy: ${report.metrics.strategy}`,

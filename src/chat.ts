@@ -55,9 +55,11 @@ import {
 import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
+import { formatCompilerVerificationReport, runCompilerVerification } from "./core/compilerVerification.js";
 import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
 import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
+import { CompilerPipelineError, compileInput, formatCompilerErrors } from "./core/compilerPipeline.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 import {
@@ -292,6 +294,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --chaos",
         "- @choir verify --chaos extreme",
         "- @choir verify --contracts",
+        "- @choir verify --compiler",
         "- @choir control",
         "- @choir timeline",
         "- @choir list abstractions",
@@ -727,6 +730,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         return;
                     }
 
+                    if (verifyChatCommand.mode === "compiler") {
+                        const report = await runCompilerVerification();
+                        stream.markdown(formatCompilerVerificationReport(report));
+                        return;
+                    }
+
                     const report = await runFullVerification({
                         workspaceRoot,
                         mode: verifyChatCommand.mode,
@@ -898,6 +907,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             try {
+                // Enforce fail-closed compilation gates before any command-specific behavior.
+                compileInput(normalizedDSLInput, control);
+
                 if (parsed.ast.type === "macro-list") {
                     const localMacros = listMacros(workspaceRoot);
                     const lock = readMacroLock(workspaceRoot);
@@ -1773,6 +1785,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 renderTrace(stream, compiled.trace);
             } catch (error) {
+                if (error instanceof CompilerPipelineError) {
+                    stream.markdown([
+                        "Invalid Choir DSL command.",
+                        "",
+                        formatCompilerErrors(error.errors),
+                        "",
+                        "Grammar:",
+                        "```bnf",
+                        CHOIR_DSL_GRAMMAR,
+                        "```",
+                    ].join("\n"));
+                    return;
+                }
+
                 const message = error instanceof Error ? error.message : String(error);
                 stream.markdown([
                     "Invalid Choir DSL command.",
