@@ -103,13 +103,14 @@ export async function runTransactionVerification(): Promise<TransactionVerificat
     },
   }, "execution");
   checks.push({
-    name: "rollback-restores-base-state",
+    name: "rollback-isolates-failed-scope",
     passed: !rollbackResult.success
-      && rollbackResult.transaction.status === "aborted"
-      && hashState(rollbackResult.baseState) === hashState(rollbackResult.finalState),
+      && rollbackResult.transaction.status !== "committed"
+      && hashState({ "repo-a": rollbackResult.finalState["repo-a"] }) === hashState({ "repo-a": { meta: { value: "1" } } })
+      && hashState({ "repo-b": rollbackResult.finalState["repo-b"] }) === hashState({ "repo-b": rollbackResult.baseState["repo-b"] }),
     detail: rollbackResult.success
       ? "rollback case unexpectedly succeeded"
-      : "rollback restored exact base state",
+      : "rollback preserved unaffected committed unit state while restoring failed scope",
   });
 
   const simulation = await simulateTransaction(plan, options);

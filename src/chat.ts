@@ -60,6 +60,7 @@ import { formatDeterminismVerificationReport, runDeterminismVerification } from 
 import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
+import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
 import { CompilerPipelineError, compileInput, formatCompilerErrors } from "./core/compilerPipeline.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
@@ -296,6 +297,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --chaos extreme",
         "- @choir verify --contracts",
         "- @choir verify --policy",
+        "- @choir verify --orchestration",
         "- @choir verify --compiler",
         "- @choir control",
         "- @choir timeline",
@@ -735,6 +737,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     if (verifyChatCommand.mode === "policy") {
                         const report = await runPolicyVerification();
                         stream.markdown(formatPolicyVerificationReport(report));
+                        return;
+                    }
+
+                    if (verifyChatCommand.mode === "orchestration") {
+                        const report = await runOrchestrationVerification();
+                        stream.markdown(formatOrchestrationVerificationReport(report));
                         return;
                     }
 

@@ -42,6 +42,9 @@ jobs:
       - name: Run policy verification
         run: npm run verify:policy
 
+      - name: Run orchestration verification
+        run: npm run verify:orchestration
+
       - name: Run compiler verification
         run: npm run verify:compiler
 
@@ -97,6 +100,9 @@ jobs:
 
       - name: Policy verification
         run: npm run verify:policy
+
+      - name: Orchestration verification
+        run: npm run verify:orchestration
 
       - name: Compiler verification
         run: npm run verify:compiler

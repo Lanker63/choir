@@ -1851,6 +1851,11 @@ const pass2: TestPass = {
           mode: "policy",
         });
 
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --orchestration"), {
+          type: "verify",
+          mode: "orchestration",
+        });
+
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --compiler"), {
           type: "verify",
           mode: "compiler",
@@ -5263,7 +5268,10 @@ const pass6: TestPass = {
 
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
-        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a" });
+        assert.deepStrictEqual(result.finalStates["repo-a"], {
+          value: "initial-a",
+          appliedBy: "repo-a:ok",
+        });
         assert.deepStrictEqual(result.finalStates["repo-b"], { value: "initial-b" });
         assert.strictEqual(result.rollbackTrace?.failedUnit, "repo-b");
         assert.deepStrictEqual(result.rollbackTrace?.rollbackSet, ["repo-b"]);

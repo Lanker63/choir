@@ -40,6 +40,7 @@ import { runCompilerVerification } from "./compilerVerification.js";
 import { runTransactionVerification } from "./transactionVerification.js";
 import { runStateVerification } from "./stateVerification.js";
 import { runPolicyVerification } from "./policyVerification.js";
+import { runOrchestrationVerification } from "./orchestrationVerification.js";
 
 export type VerificationCase = {
   name: string;
@@ -71,6 +72,7 @@ export type VerificationReport = {
     simulation: boolean;
     rollback: boolean;
     policy: boolean;
+    orchestration: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -688,6 +690,7 @@ function runFingerprint(
   cases: VerificationCaseResult[],
   metrics: {
     policy: boolean;
+    orchestration: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -780,6 +783,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const policyReport = await runPolicyVerification();
     const policy = policyReport.passed;
     failures.push(...policyReport.failures.map((failure) => `policy: ${failure}`));
+    const orchestrationReport = await runOrchestrationVerification();
+    const orchestration = orchestrationReport.passed;
+    failures.push(...orchestrationReport.failures.map((failure) => `orchestration: ${failure}`));
     const compilerReport = await runCompilerVerification();
     const compiler = compilerReport.passed;
     failures.push(...compilerReport.failures.map((failure) => `compiler: ${failure}`));
@@ -796,7 +802,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { policy, compiler, transactions, state, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, { policy, orchestration, compiler, transactions, state, strategy, memory, adaptive });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
@@ -807,11 +813,13 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunAdaptiveRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
         const rerunPolicy = (await runPolicyVerification()).passed;
+        const rerunOrchestration = (await runOrchestrationVerification()).passed;
         const rerunCompiler = (await runCompilerVerification()).passed;
         const rerunTransactions = (await runTransactionVerification()).passed;
         const rerunState = (await runStateVerification()).passed;
         const rerunFingerprint = runFingerprint(rerunCases, {
           policy: rerunPolicy,
+          orchestration: rerunOrchestration,
           compiler: rerunCompiler,
           transactions: rerunTransactions,
           state: rerunState,
@@ -842,6 +850,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         && simulation
         && rollback
         && policy
+        && orchestration
         && compiler
         && transactions
         && state
@@ -856,6 +865,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         simulation,
         rollback,
         policy,
+        orchestration,
         compiler,
         transactions,
         state,
@@ -888,6 +898,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- simulation: ${report.metrics.simulation}`,
     `- rollback: ${report.metrics.rollback}`,
     `- policy: ${report.metrics.policy}`,
+    `- orchestration: ${report.metrics.orchestration}`,
     `- compiler: ${report.metrics.compiler}`,
     `- transactions: ${report.metrics.transactions}`,
     `- state: ${report.metrics.state}`,

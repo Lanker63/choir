@@ -55,6 +55,37 @@ export type GlobalPlan = {
   tasks: GlobalPlanTask[];
 };
 
+export type GlobalUnit = {
+  id: string;
+  repo: string;
+  path: string;
+  dependencies: string[];
+  hash: string;
+};
+
+export type DAG = {
+  nodes: GlobalUnit[];
+  edges: GlobalDependencyEdge[];
+  dependenciesByNode: Record<string, string[]>;
+  dependentsByNode: Record<string, string[]>;
+};
+
+export type Stage = {
+  id: string;
+  order: number;
+  unitIds: string[];
+  units: GlobalUnit[];
+};
+
+export type NodeExecution = {
+  nodeId: string;
+  assignedUnits: string[];
+};
+
+export type LogicalClock = {
+  time: number;
+};
+
 export type ExecutionOrder = {
   orderedTaskIds: string[];
   tasks: GlobalPlanTask[];
@@ -153,7 +184,9 @@ export type GlobalAudit = {
 
 export type GlobalTrace = {
   plan: GlobalPlan;
+  stages: Stage[];
   executionOrder: string[];
+  failures: string[];
   policyDecisions: string[];
   convergence: boolean;
   transactionTrace?: TransactionTrace;
@@ -593,6 +626,362 @@ function sortedUnique(values: string[]): string[] {
   return stableSortStrings(Array.from(new Set(values)));
 }
 
+function normalizeGlobalUnit(unit: GlobalUnit): GlobalUnit {
+  const dependencies = sortedUnique(unit.dependencies.map((entry) => entry.trim()).filter((entry) => entry.length > 0));
+  const base = {
+    id: unit.id.trim(),
+    repo: unit.repo.trim(),
+    path: unit.path.trim(),
+    dependencies,
+  };
+
+  return {
+    ...base,
+    hash: unit.hash.trim().length > 0
+      ? unit.hash.trim()
+      : hashId("global-unit", base),
+  };
+}
+
+function unitFromTask(task: GlobalPlanTask): GlobalUnit {
+  return normalizeGlobalUnit({
+    id: task.id,
+    repo: task.repoId,
+    path: task.id,
+    dependencies: task.dependsOn,
+    hash: hashId("global-unit", {
+      id: task.id,
+      repo: task.repoId,
+      action: task.action,
+      dependencies: sortedUnique(task.dependsOn),
+    }),
+  });
+}
+
+function planUnits(plan: GlobalPlan): GlobalUnit[] {
+  return [...plan.tasks]
+    .sort((left, right) => left.id.localeCompare(right.id))
+    .map((task) => unitFromTask(task));
+}
+
+function emptyDagMaps(unitIds: string[]): {
+  dependenciesByNode: Map<string, Set<string>>;
+  dependentsByNode: Map<string, Set<string>>;
+} {
+  return {
+    dependenciesByNode: new Map(unitIds.map((unitId) => [unitId, new Set<string>()] as const)),
+    dependentsByNode: new Map(unitIds.map((unitId) => [unitId, new Set<string>()] as const)),
+  };
+}
+
+function mapRecordSorted(map: Map<string, Set<string>>): Record<string, string[]> {
+  return Object.fromEntries(
+    [...map.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([unitId, deps]) => [unitId, sortedUnique([...deps])] as const)
+  ) as Record<string, string[]>;
+}
+
+export function buildGlobalDAG(units: GlobalUnit[]): DAG {
+  const normalizedUnits = [...units]
+    .map((unit) => normalizeGlobalUnit(unit))
+    .sort((left, right) => left.id.localeCompare(right.id));
+  const unitIds = normalizedUnits.map((unit) => unit.id);
+  const uniqueIds = new Set(unitIds);
+
+  if (uniqueIds.size !== unitIds.length) {
+    throw new Error("Global DAG construction failed: duplicate unit ids detected");
+  }
+
+  const maps = emptyDagMaps(unitIds);
+  const edges: GlobalDependencyEdge[] = [];
+
+  for (const unit of normalizedUnits) {
+    for (const dependencyId of unit.dependencies) {
+      if (!uniqueIds.has(dependencyId)) {
+        throw new Error(`Global DAG construction failed: unit ${unit.id} references missing dependency ${dependencyId}`);
+      }
+
+      maps.dependenciesByNode.get(unit.id)?.add(dependencyId);
+      maps.dependentsByNode.get(dependencyId)?.add(unit.id);
+      edges.push({
+        from: dependencyId,
+        to: unit.id,
+      });
+    }
+  }
+
+  const orderedEdges = edges.sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
+  return {
+    nodes: normalizedUnits,
+    edges: orderedEdges,
+    dependenciesByNode: mapRecordSorted(maps.dependenciesByNode),
+    dependentsByNode: mapRecordSorted(maps.dependentsByNode),
+  };
+}
+
+export function detectCycles(dag: DAG): boolean {
+  const indegree = new Map(dag.nodes.map((node) => [node.id, dag.dependenciesByNode[node.id]?.length ?? 0] as const));
+  const outgoing = new Map(
+    dag.nodes.map((node) => [node.id, [...(dag.dependentsByNode[node.id] ?? [])].sort((left, right) => left.localeCompare(right))] as const)
+  );
+
+  const ready = dag.nodes
+    .map((node) => node.id)
+    .filter((unitId) => (indegree.get(unitId) ?? 0) === 0)
+    .sort((left, right) => left.localeCompare(right));
+  let visited = 0;
+
+  while (ready.length > 0) {
+    const unitId = ready.shift() as string;
+    visited += 1;
+
+    for (const dependentId of outgoing.get(unitId) ?? []) {
+      const nextDegree = (indegree.get(dependentId) ?? 0) - 1;
+      indegree.set(dependentId, nextDegree);
+      if (nextDegree === 0) {
+        ready.push(dependentId);
+        ready.sort((left, right) => left.localeCompare(right));
+      }
+    }
+  }
+
+  return visited !== dag.nodes.length;
+}
+
+export function topologicalSort(dag: DAG): GlobalUnit[] {
+  if (detectCycles(dag)) {
+    throw new Error("Topological sort failed: dependency cycle detected");
+  }
+
+  const nodeById = new Map(dag.nodes.map((node) => [node.id, node] as const));
+  const indegree = new Map(dag.nodes.map((node) => [node.id, dag.dependenciesByNode[node.id]?.length ?? 0] as const));
+  const outgoing = new Map(
+    dag.nodes.map((node) => [node.id, [...(dag.dependentsByNode[node.id] ?? [])].sort((left, right) => left.localeCompare(right))] as const)
+  );
+
+  const ready = dag.nodes
+    .map((node) => node.id)
+    .filter((unitId) => (indegree.get(unitId) ?? 0) === 0)
+    .sort((left, right) => left.localeCompare(right));
+  const ordered: GlobalUnit[] = [];
+
+  while (ready.length > 0) {
+    const unitId = ready.shift() as string;
+    const node = nodeById.get(unitId);
+    if (node) {
+      ordered.push(node);
+    }
+
+    for (const dependentId of outgoing.get(unitId) ?? []) {
+      const nextDegree = (indegree.get(dependentId) ?? 0) - 1;
+      indegree.set(dependentId, nextDegree);
+      if (nextDegree === 0) {
+        ready.push(dependentId);
+        ready.sort((left, right) => left.localeCompare(right));
+      }
+    }
+  }
+
+  if (ordered.length !== dag.nodes.length) {
+    throw new Error("Topological sort failed: unresolved units remain after ordering");
+  }
+
+  return ordered;
+}
+
+export function groupIntoStages(sortedUnits: GlobalUnit[]): Stage[] {
+  const unitById = new Map(sortedUnits.map((unit) => [unit.id, unit] as const));
+  const levelByUnit = new Map<string, number>();
+  const stageIdsByLevel = new Map<number, string[]>();
+
+  for (const unit of sortedUnits) {
+    const dependencyLevels = unit.dependencies.map((dependencyId) => {
+      if (!levelByUnit.has(dependencyId)) {
+        throw new Error(`Stage grouping failed: dependency ${dependencyId} for ${unit.id} was not topologically resolved`);
+      }
+
+      return levelByUnit.get(dependencyId) as number;
+    });
+
+    const level = dependencyLevels.length === 0
+      ? 0
+      : (Math.max(...dependencyLevels) + 1);
+    levelByUnit.set(unit.id, level);
+    const ids = stageIdsByLevel.get(level) ?? [];
+    ids.push(unit.id);
+    stageIdsByLevel.set(level, ids.sort((left, right) => left.localeCompare(right)));
+  }
+
+  const orderedLevels = [...stageIdsByLevel.keys()].sort((left, right) => left - right);
+  return orderedLevels.map((level, index) => {
+    const unitIds = stageIdsByLevel.get(level) ?? [];
+    const units = unitIds
+      .map((unitId) => unitById.get(unitId))
+      .filter((unit): unit is GlobalUnit => Boolean(unit));
+
+    return {
+      id: `stage-${String(index + 1).padStart(2, "0")}`,
+      order: index + 1,
+      unitIds: [...unitIds],
+      units,
+    };
+  });
+}
+
+export async function executeStage(
+  stage: Stage,
+  executeUnit?: (unit: GlobalUnit) => Promise<void>
+): Promise<{ executionOrder: string[]; failures: string[] }> {
+  const orderedUnits = [...stage.units].sort((left, right) => left.id.localeCompare(right.id));
+  const results = await Promise.all(orderedUnits.map(async (unit) => {
+    try {
+      await executeUnit?.(unit);
+      return {
+        unitId: unit.id,
+        ok: true,
+        error: "",
+      };
+    } catch (error) {
+      return {
+        unitId: unit.id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }));
+
+  const failures = results
+    .filter((entry) => !entry.ok)
+    .sort((left, right) => left.unitId.localeCompare(right.unitId))
+    .map((entry) => `${entry.unitId}: ${entry.error}`);
+
+  return {
+    executionOrder: orderedUnits.map((unit) => unit.id),
+    failures,
+  };
+}
+
+export function isolateFailure(unitId: string, dag: DAG): string[] {
+  const affected = new Set<string>([unitId]);
+  const queue: string[] = [unitId];
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    for (const dependentId of dag.dependentsByNode[current] ?? []) {
+      if (affected.has(dependentId)) {
+        continue;
+      }
+
+      affected.add(dependentId);
+      queue.push(dependentId);
+      queue.sort((left, right) => left.localeCompare(right));
+    }
+  }
+
+  return sortedUnique([...affected]);
+}
+
+export function rollbackScope(units: string[]): string[] {
+  return sortedUnique(units);
+}
+
+export function partitionUnitsAcrossNodes(units: GlobalUnit[], nodeIds: string[]): NodeExecution[] {
+  const orderedNodes = sortedUnique(nodeIds.map((entry) => entry.trim()).filter((entry) => entry.length > 0));
+  if (orderedNodes.length === 0) {
+    throw new Error("Distributed partitioning failed: at least one node is required");
+  }
+
+  const partitions = new Map<string, string[]>(orderedNodes.map((nodeId) => [nodeId, []] as const));
+  const orderedUnits = [...units].sort((left, right) => left.id.localeCompare(right.id));
+
+  orderedUnits.forEach((unit, index) => {
+    const nodeId = orderedNodes[index % orderedNodes.length] as string;
+    const assigned = partitions.get(nodeId) ?? [];
+    assigned.push(unit.id);
+    partitions.set(nodeId, assigned);
+  });
+
+  return orderedNodes.map((nodeId) => ({
+    nodeId,
+    assignedUnits: sortedUnique(partitions.get(nodeId) ?? []),
+  }));
+}
+
+export function tick(clock: LogicalClock): LogicalClock {
+  const next = clock;
+  next.time += 1;
+  return next;
+}
+
+export function mergeStates(left: GlobalState, right: GlobalState): GlobalState {
+  const merged: GlobalState = {};
+  const unitIds = sortedUnique([...Object.keys(left), ...Object.keys(right)]);
+
+  for (const unitId of unitIds) {
+    const hasLeft = Object.prototype.hasOwnProperty.call(left, unitId);
+    const hasRight = Object.prototype.hasOwnProperty.call(right, unitId);
+
+    if (hasLeft && !hasRight) {
+      merged[unitId] = cloneUnknown(left[unitId]);
+      continue;
+    }
+
+    if (hasRight && !hasLeft) {
+      merged[unitId] = cloneUnknown(right[unitId]);
+      continue;
+    }
+
+    const leftState = left[unitId];
+    const rightState = right[unitId];
+    if (stableStringify(leftState) !== stableStringify(rightState)) {
+      throw new Error(`Distributed merge conflict at unit ${unitId}`);
+    }
+
+    merged[unitId] = cloneUnknown(leftState);
+  }
+
+  return merged;
+}
+
+export function validateGlobalState(
+  state: GlobalState,
+  dag: DAG,
+  expectedHashes?: Record<string, string>
+): GlobalConsistencyResult {
+  const errors: string[] = [];
+  const stateUnits = new Set(Object.keys(state));
+  const dagUnits = new Set(dag.nodes.map((node) => node.id));
+
+  for (const node of [...dag.nodes].sort((left, right) => left.id.localeCompare(right.id))) {
+    if (!stateUnits.has(node.id)) {
+      errors.push(`Global state missing unit ${node.id}`);
+    }
+
+    for (const dependencyId of dag.dependenciesByNode[node.id] ?? []) {
+      if (!dagUnits.has(dependencyId)) {
+        errors.push(`Dangling dependency reference: ${node.id} depends on unknown unit ${dependencyId}`);
+      }
+    }
+  }
+
+  for (const unitId of [...stateUnits].sort((left, right) => left.localeCompare(right))) {
+    if (!dagUnits.has(unitId)) {
+      errors.push(`Global state contains dangling unit ${unitId} not present in DAG`);
+    }
+
+    const expected = expectedHashes?.[unitId];
+    if (expected && hashState({ [unitId]: state[unitId] }) !== expected) {
+      errors.push(`State hash mismatch for ${unitId}`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
 function uniqueInOrder(values: string[]): string[] {
   const seen = new Set<string>();
   const ordered: string[] = [];
@@ -1017,9 +1406,28 @@ function releaseLocks(ownerToken: symbol): void {
 }
 
 export function buildRollbackDependencyGraph(plan: GlobalPlan): DependencyGraph {
-  const dependencies = buildUnitDependencies(plan);
-  const edges = [...dependencies.entries()]
-    .flatMap(([unit, unitDeps]) => [...unitDeps].map((dependency) => ({ from: dependency, to: unit })))
+  const dag = buildGlobalDAG(planUnits(plan));
+  const taskToRepo = new Map(plan.tasks.map((task) => [task.id, task.repoId] as const));
+  const repoEdgeSet = new Set<string>();
+
+  for (const edge of dag.edges) {
+    const fromRepo = taskToRepo.get(edge.from);
+    const toRepo = taskToRepo.get(edge.to);
+    if (!fromRepo || !toRepo || fromRepo === toRepo) {
+      continue;
+    }
+
+    repoEdgeSet.add(`${fromRepo}->${toRepo}`);
+  }
+
+  const edges = [...repoEdgeSet]
+    .map((entry) => {
+      const [from, to] = entry.split("->");
+      return {
+        from: from as string,
+        to: to as string,
+      };
+    })
     .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
 
   return {
@@ -1046,29 +1454,30 @@ export function computeRollbackSet(
   graph: DependencyGraph,
   state: ExecutionState
 ): string[] {
-  const adjacency = graphAdjacencyBySource(graph);
-  const rollbackSet = new Set<string>([failedUnit]);
-  const queue: string[] = [failedUnit];
+  const dag: DAG = {
+    nodes: sortedUnique(Object.keys(state.units)).map((unitId) => ({
+      id: unitId,
+      repo: unitId,
+      path: unitId,
+      dependencies: [],
+      hash: hashId("rollback-unit", unitId),
+    })),
+    edges: [...graph.edges].sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to)),
+    dependenciesByNode: {},
+    dependentsByNode: {},
+  };
 
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
-    const dependents = adjacency.get(current) ?? [];
-    for (const dependent of dependents) {
-      if (rollbackSet.has(dependent)) {
-        continue;
-      }
-
-      if (state.units[dependent] !== "executed") {
-        continue;
-      }
-
-      rollbackSet.add(dependent);
-      queue.push(dependent);
-      queue.sort((left, right) => left.localeCompare(right));
-    }
+  for (const node of dag.nodes) {
+    dag.dependenciesByNode[node.id] = [];
+    dag.dependentsByNode[node.id] = [];
   }
 
-  return sortedUnique([...rollbackSet]);
+  for (const edge of dag.edges) {
+    dag.dependenciesByNode[edge.to] = sortedUnique([...(dag.dependenciesByNode[edge.to] ?? []), edge.from]);
+    dag.dependentsByNode[edge.from] = sortedUnique([...(dag.dependentsByNode[edge.from] ?? []), edge.to]);
+  }
+
+  return isolateFailure(failedUnit, dag).filter((unitId) => state.units[unitId] === "executed" || unitId === failedUnit);
 }
 
 export function orderRollback(units: string[], graph: DependencyGraph): string[] {
@@ -1722,7 +2131,9 @@ export async function executeTransaction(
       const stagePrepared = preparePhase(stageTx);
       if (!stagePrepared.valid) {
         abortTransaction(stageTx);
-        abortTransaction(tx);
+        if (committedStages.length === 0) {
+          abortTransaction(tx);
+        }
         const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
         return {
           success: false,
@@ -1788,7 +2199,9 @@ export async function executeTransaction(
         const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
         setUnitExecutionState(executionState, failedUnit, "failed");
         abortTransaction(stageTx);
-        abortTransaction(tx);
+        if (committedStages.length === 0) {
+          abortTransaction(tx);
+        }
         const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
         return {
           success: false,
@@ -1820,7 +2233,9 @@ export async function executeTransaction(
       if (!stageValidation.valid) {
         const failedUnit = stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
         setUnitExecutionState(executionState, failedUnit, "failed");
-        abortTransaction(tx);
+        if (committedStages.length === 0) {
+          abortTransaction(tx);
+        }
         const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
         return {
           success: false,
@@ -2835,50 +3250,10 @@ export function validateGlobalPlan(plan: GlobalPlan): PlanValidationResult {
 }
 
 function topologicalLayers(plan: GlobalPlan): string[][] {
-  const taskById = new Map(plan.tasks.map((task) => [task.id, task] as const));
-  const indegree = new Map<string, number>(plan.tasks.map((task) => [task.id, task.dependsOn.length]));
-  const outgoing = new Map<string, string[]>(plan.tasks.map((task) => [task.id, []]));
-
-  for (const task of plan.tasks) {
-    for (const dep of task.dependsOn) {
-      const existing = outgoing.get(dep) ?? [];
-      existing.push(task.id);
-      outgoing.set(dep, existing);
-    }
-  }
-
-  for (const [taskId, edges] of outgoing.entries()) {
-    outgoing.set(taskId, edges.sort((left, right) => left.localeCompare(right)));
-  }
-
-  const remaining = new Set(plan.tasks.map((task) => task.id));
-  const layers: string[][] = [];
-
-  while (remaining.size > 0) {
-    const layer = [...remaining]
-      .filter((taskId) => (indegree.get(taskId) ?? 0) === 0)
-      .sort((left, right) => left.localeCompare(right));
-
-    if (layer.length === 0) {
-      throw new Error("Cycle detected in global plan");
-    }
-
-    for (const taskId of layer) {
-      remaining.delete(taskId);
-      const next = outgoing.get(taskId) ?? [];
-      for (const target of next) {
-        indegree.set(target, (indegree.get(target) ?? 0) - 1);
-      }
-    }
-
-    layers.push(layer);
-  }
-
-  if (layers.flat().length !== taskById.size) {
-    throw new Error("Topological ordering failed to include all tasks");
-  }
-
-  return layers;
+  const dag = buildGlobalDAG(planUnits(plan));
+  const sorted = topologicalSort(dag);
+  const staged = groupIntoStages(sorted);
+  return staged.map((stage) => [...stage.unitIds]);
 }
 
 export function orderPlan(plan: GlobalPlan): ExecutionOrder {
@@ -3391,6 +3766,13 @@ export async function executeGlobalPlan(
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
   const baseStates = stateForRepos(normalizedRepos);
   const dependencyGraph = buildRollbackDependencyGraph(plan);
+  const planStages = (() => {
+    try {
+      return groupIntoStages(topologicalSort(buildGlobalDAG(planUnits(plan))));
+    } catch {
+      return [];
+    }
+  })();
   const simulation = await simulatePlan(plan, options);
   const simulationPolicy = simulation.policyDecisions[0];
 
@@ -3414,7 +3796,12 @@ export async function executeGlobalPlan(
       },
       trace: {
         plan,
+        stages: cloneUnknown(planStages),
         executionOrder: simulation.trace.stepsExecuted,
+        failures: sortedUnique([
+          ...simulation.violations,
+          "Execution blocked: simulation gate failed",
+        ]),
         policyDecisions: simulationPolicy?.policyDecisions ?? [],
         convergence: false,
         deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
@@ -3454,7 +3841,12 @@ export async function executeGlobalPlan(
         },
         trace: {
           plan,
+          stages: cloneUnknown(planStages),
           executionOrder: simulation.trace.stepsExecuted,
+          failures: sortedUnique([
+            ...simulationPolicy.violations,
+            `Execution requires approval and was denied (previewHash=${previewHash})`,
+          ]),
           policyDecisions: simulationPolicy.policyDecisions,
           convergence: false,
           deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
@@ -3482,16 +3874,12 @@ export async function executeGlobalPlan(
       execution.deterministicTrace.context
     );
 
-    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
-    const finalStates = requiresFullRollback
-      ? rollbackAllRepos(execution.baseStates)
-      : cloneState(isolatedRollback.finalState);
+    const finalStates = cloneState(isolatedRollback.finalState);
     const violations = sortedUnique([
       ...execution.policyResult.violations,
       ...execution.violations,
       ...isolatedRollback.isolation.errors,
       ...isolatedRollback.validation.errors,
-      ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
     ]);
 
     return {
@@ -3506,7 +3894,9 @@ export async function executeGlobalPlan(
       },
       trace: {
         plan,
+        stages: cloneUnknown(planStages),
         executionOrder: execution.orderedTaskIds,
+        failures: violations,
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
         transactionTrace: cloneUnknown(execution.transactionTrace),
@@ -3541,10 +3931,7 @@ export async function executeGlobalPlan(
       execution.deterministicTrace.context,
       divergentUnits
     );
-    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
-    const rolledBackStates = requiresFullRollback
-      ? rollbackAllRepos(execution.baseStates)
-      : cloneState(isolatedRollback.finalState);
+    const rolledBackStates = cloneState(isolatedRollback.finalState);
     return {
       success: false,
       rolledBack: true,
@@ -3560,12 +3947,20 @@ export async function executeGlobalPlan(
           "Simulation and execution diverged",
           ...(hashEquivalent ? [] : ["Simulation and execution state hashes diverged"]),
           ...(deterministicTraceValid ? [] : ["Deterministic trace validation failed"]),
-          ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
         ]),
       },
       trace: {
         plan,
+        stages: cloneUnknown(planStages),
         executionOrder: execution.orderedTaskIds,
+        failures: sortedUnique([
+          ...execution.policyResult.violations,
+          ...isolatedRollback.isolation.errors,
+          ...isolatedRollback.validation.errors,
+          "Simulation and execution diverged",
+          ...(hashEquivalent ? [] : ["Simulation and execution state hashes diverged"]),
+          ...(deterministicTraceValid ? [] : ["Deterministic trace validation failed"]),
+        ]),
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
         transactionTrace: cloneUnknown(execution.transactionTrace),
@@ -3587,7 +3982,9 @@ export async function executeGlobalPlan(
     },
     trace: {
       plan: cloneUnknown(execution.plan),
+      stages: cloneUnknown(planStages),
       executionOrder: execution.orderedTaskIds,
+      failures: [],
       policyDecisions: execution.policyResult.policyDecisions,
       convergence: execution.success,
       transactionTrace: cloneUnknown(execution.transactionTrace),
@@ -3859,7 +4256,7 @@ function stageMetricsFromRun(run: InternalRunResult): StageMetrics {
   };
 }
 
-export async function executeStage(
+export async function executeRolloutStage(
   stage: ExecutionStage,
   plan: GlobalPlan,
   options: ExecuteGlobalPlanOptions,
@@ -4051,7 +4448,7 @@ export async function executeRolloutPlan(
       }
     }
 
-    const stageResult = await executeStage(stage, plan, {
+    const stageResult = await executeRolloutStage(stage, plan, {
       ...options,
       repos: normalizedRepos,
     }, currentState);
@@ -4161,22 +4558,16 @@ export async function executeRolloutPlan(
       divergentUnits
     );
     trace.rollbackTraces.push(isolatedRollback.rollbackTrace);
-
-    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
-    const rollbackState = requiresFullRollback
-      ? cloneState(baseState)
-      : cloneState(isolatedRollback.finalState);
     return {
       success: false,
       stopped: true,
       rolledBack: true,
-      finalStates: rollbackState,
+      finalStates: cloneState(isolatedRollback.finalState),
       trace,
       failures: sortedUnique([
         "Rollout failed: simulation and staged execution diverged",
         ...isolatedRollback.isolation.errors,
         ...isolatedRollback.validation.errors,
-        ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
       ]),
     };
   }

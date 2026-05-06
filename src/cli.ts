@@ -10,6 +10,7 @@ import { formatDeterminismVerificationReport, runDeterminismVerification } from 
 import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
+import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./core/propertyChaosHarness.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
@@ -27,6 +28,7 @@ function usage(): string {
     "  choir verify --transactions",
     "  choir verify --state",
     "  choir verify --policy",
+    "  choir verify --orchestration",
     "  choir verify --compiler",
     "  choir verify --property [--seed <n>]",
     "  choir verify --chaos [none|light|moderate|extreme] [--seed <n>]",
@@ -135,6 +137,13 @@ async function main(): Promise<void> {
       if (remaining.length === 1 && remaining[0] === "--policy") {
         const report = await runPolicyVerification();
         console.log(formatPolicyVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--orchestration") {
+        const report = await runOrchestrationVerification();
+        console.log(formatOrchestrationVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }
