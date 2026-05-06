@@ -172,6 +172,7 @@ export type GlobalExecutionResult = {
   finalStates: Record<string, SystemState>;
   audit: GlobalAudit;
   trace: GlobalTrace;
+  rollbackTrace?: RollbackTrace;
 };
 
 export type GlobalState = Record<string, SystemState>;
@@ -272,6 +273,48 @@ export type RolloutStrategy =
   | { type: "phased"; phases: number[] }
   | { type: "batched"; batchSize: number };
 
+export type ExecutionFailure = {
+  stageId: string;
+  unitId: string;
+  error: string;
+  timestamp: number;
+};
+
+export type UnitExecutionState =
+  | "pending"
+  | "executed"
+  | "failed"
+  | "rolled-back";
+
+export type ExecutionState = {
+  units: Record<string, UnitExecutionState>;
+};
+
+export type DependencyGraph = {
+  edges: {
+    from: string;
+    to: string;
+  }[];
+};
+
+export type Snapshot = {
+  unitId: string;
+  state: SystemState;
+  timestamp: number;
+};
+
+export type Compensation = {
+  unitId: string;
+  apply(): void;
+};
+
+export type RollbackTrace = {
+  failedUnit: string;
+  rollbackSet: string[];
+  rollbackOrder: string[];
+  duration: number;
+};
+
 export type ExecutionStage = {
   id: string;
   units: string[];
@@ -300,6 +343,8 @@ export type RolloutTrace = {
   completedStages: string[];
   failedStage?: string;
   metrics: Record<string, StageMetrics>;
+  rollbackTraces: RollbackTrace[];
+  canResume?: boolean;
 };
 
 export type RolloutValidationResult = {
@@ -314,6 +359,8 @@ export type StageExecutionResult = {
   metrics: StageMetrics;
   unitsAffected: string[];
   finalStates: GlobalState;
+  executionState: ExecutionState;
+  failure?: ExecutionFailure;
 };
 
 export type RolloutExecutionResult = {
@@ -357,6 +404,8 @@ type InternalRunResult = {
   violations: string[];
   stepsExecuted: string[];
   unitsAffected: string[];
+  executionState: ExecutionState;
+  failure?: ExecutionFailure;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -409,6 +458,344 @@ function stateForRepos(repos: Repo[]): GlobalState {
 
 function statesEqual(left: GlobalState, right: GlobalState): boolean {
   return stableStringify(left) === stableStringify(right);
+}
+
+function stateDiffUnits(left: GlobalState, right: GlobalState): string[] {
+  const units = sortedUnique([...Object.keys(left), ...Object.keys(right)]);
+  return units.filter((unit) => stableStringify(left[unit]) !== stableStringify(right[unit]));
+}
+
+function createExecutionState(units: string[]): ExecutionState {
+  return {
+    units: Object.fromEntries(
+      sortedUnique(units).map((unit) => [unit, "pending" satisfies UnitExecutionState] as const)
+    ),
+  };
+}
+
+function cloneExecutionState(state: ExecutionState): ExecutionState {
+  return {
+    units: {
+      ...state.units,
+    },
+  };
+}
+
+function setUnitExecutionState(state: ExecutionState, unitId: string, value: UnitExecutionState): void {
+  state.units[unitId] = value;
+}
+
+export function buildRollbackDependencyGraph(plan: GlobalPlan): DependencyGraph {
+  const dependencies = buildUnitDependencies(plan);
+  const edges = [...dependencies.entries()]
+    .flatMap(([unit, unitDeps]) => [...unitDeps].map((dependency) => ({ from: dependency, to: unit })))
+    .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
+
+  return {
+    edges,
+  };
+}
+
+function graphAdjacencyBySource(graph: DependencyGraph): Map<string, string[]> {
+  const map = new Map<string, string[]>();
+  for (const edge of graph.edges) {
+    const current = map.get(edge.from) ?? [];
+    current.push(edge.to);
+    map.set(edge.from, sortedUnique(current));
+    if (!map.has(edge.to)) {
+      map.set(edge.to, []);
+    }
+  }
+
+  return map;
+}
+
+export function computeRollbackSet(
+  failedUnit: string,
+  graph: DependencyGraph,
+  state: ExecutionState
+): string[] {
+  const adjacency = graphAdjacencyBySource(graph);
+  const rollbackSet = new Set<string>([failedUnit]);
+  const queue: string[] = [failedUnit];
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    const dependents = adjacency.get(current) ?? [];
+    for (const dependent of dependents) {
+      if (rollbackSet.has(dependent)) {
+        continue;
+      }
+
+      if (state.units[dependent] !== "executed") {
+        continue;
+      }
+
+      rollbackSet.add(dependent);
+      queue.push(dependent);
+      queue.sort((left, right) => left.localeCompare(right));
+    }
+  }
+
+  return sortedUnique([...rollbackSet]);
+}
+
+export function orderRollback(units: string[], graph: DependencyGraph): string[] {
+  const selected = new Set(sortedUnique(units));
+  const indegree = new Map<string, number>([...selected].map((unit) => [unit, 0] as const));
+  const outgoing = new Map<string, string[]>([...selected].map((unit) => [unit, []] as const));
+
+  for (const edge of graph.edges) {
+    if (!selected.has(edge.from) || !selected.has(edge.to)) {
+      continue;
+    }
+
+    indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
+    const current = outgoing.get(edge.from) ?? [];
+    current.push(edge.to);
+    outgoing.set(edge.from, sortedUnique(current));
+  }
+
+  const ready = [...selected].filter((unit) => (indegree.get(unit) ?? 0) === 0).sort((left, right) => left.localeCompare(right));
+  const topological: string[] = [];
+
+  while (ready.length > 0) {
+    const unit = ready.shift() as string;
+    topological.push(unit);
+
+    const nextUnits = outgoing.get(unit) ?? [];
+    for (const nextUnit of nextUnits) {
+      const nextInDegree = (indegree.get(nextUnit) ?? 0) - 1;
+      indegree.set(nextUnit, nextInDegree);
+      if (nextInDegree === 0) {
+        ready.push(nextUnit);
+        ready.sort((left, right) => left.localeCompare(right));
+      }
+    }
+  }
+
+  if (topological.length !== selected.size) {
+    throw new Error("Rollback ordering failed: dependency cycle detected");
+  }
+
+  return [...topological].reverse();
+}
+
+export function validateIsolation(
+  rollbackSet: string[],
+  graph: DependencyGraph,
+  failedUnit?: string
+): RolloutValidationResult {
+  const errors: string[] = [];
+  const unique = sortedUnique(rollbackSet);
+
+  if (unique.length !== rollbackSet.length) {
+    errors.push("Rollback set contains duplicate units");
+  }
+
+  if (!failedUnit) {
+    return {
+      valid: errors.length === 0,
+      errors: sortedUnique(errors),
+    };
+  }
+
+  const adjacency = graphAdjacencyBySource(graph);
+  const reachable = new Set<string>([failedUnit]);
+  const queue: string[] = [failedUnit];
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    const dependents = adjacency.get(current) ?? [];
+    for (const dependent of dependents) {
+      if (reachable.has(dependent)) {
+        continue;
+      }
+
+      reachable.add(dependent);
+      queue.push(dependent);
+      queue.sort((left, right) => left.localeCompare(right));
+    }
+  }
+
+  for (const unit of unique) {
+    if (!reachable.has(unit)) {
+      errors.push(`Isolation violation: rollback set contains unrelated unit ${unit}`);
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
+function snapshotUnits(state: GlobalState, units: string[]): Snapshot[] {
+  const timestamp = Date.now();
+  return sortedUnique(units).map((unitId) => ({
+    unitId,
+    state: cloneUnknown(state[unitId] ?? {}),
+    timestamp,
+  }));
+}
+
+function toSnapshotMap(snapshots: Snapshot[]): Map<string, Snapshot> {
+  return new Map(snapshots.map((snapshot) => [snapshot.unitId, snapshot] as const));
+}
+
+export function rollbackToSnapshot(
+  unitId: string,
+  snapshots: Map<string, Snapshot>,
+  currentState: GlobalState
+): boolean {
+  const snapshot = snapshots.get(unitId);
+  if (!snapshot) {
+    return false;
+  }
+
+  currentState[unitId] = cloneUnknown(snapshot.state);
+  return true;
+}
+
+function buildCompensations(
+  units: string[],
+  stableState: GlobalState,
+  stateRef: { current: GlobalState }
+): Compensation[] {
+  return sortedUnique(units).map((unitId) => ({
+    unitId,
+    apply: () => {
+      stateRef.current[unitId] = cloneUnknown(stableState[unitId] ?? {});
+    },
+  }));
+}
+
+export async function rollbackUnits(
+  units: string[],
+  graph: DependencyGraph,
+  currentState: GlobalState,
+  snapshots: Snapshot[],
+  compensations: Compensation[] = []
+): Promise<{ state: GlobalState; rollbackOrder: string[] }> {
+  const ordered = orderRollback(units, graph);
+  const stateRef = { current: currentState };
+  const snapshotMap = toSnapshotMap(snapshots);
+  const compensationMap = new Map(compensations.map((entry) => [entry.unitId, entry] as const));
+
+  for (const unit of ordered) {
+    const restored = rollbackToSnapshot(unit, snapshotMap, stateRef.current);
+    if (restored) {
+      continue;
+    }
+
+    const compensation = compensationMap.get(unit);
+    compensation?.apply();
+  }
+
+  return {
+    state: cloneState(stateRef.current),
+    rollbackOrder: ordered,
+  };
+}
+
+function mergeRollbackSets(primaryFailedUnit: string, graph: DependencyGraph, state: ExecutionState, additionalUnits?: string[]): string[] {
+  const rollback = new Set(computeRollbackSet(primaryFailedUnit, graph, state));
+  for (const unit of additionalUnits ?? []) {
+    rollback.add(unit);
+  }
+
+  return sortedUnique([...rollback]);
+}
+
+function markUnitsRolledBack(executionState: ExecutionState, units: string[]): ExecutionState {
+  const next = cloneExecutionState(executionState);
+  for (const unit of units) {
+    next.units[unit] = "rolled-back";
+  }
+
+  return next;
+}
+
+function hasPath(from: string, to: string, graph: DependencyGraph): boolean {
+  if (from === to) {
+    return true;
+  }
+
+  const adjacency = graphAdjacencyBySource(graph);
+  const visited = new Set<string>();
+  const queue: string[] = [from];
+
+  while (queue.length > 0) {
+    const current = queue.shift() as string;
+    if (visited.has(current)) {
+      continue;
+    }
+
+    visited.add(current);
+    const dependents = adjacency.get(current) ?? [];
+    for (const dependent of dependents) {
+      if (dependent === to) {
+        return true;
+      }
+
+      if (!visited.has(dependent)) {
+        queue.push(dependent);
+      }
+    }
+  }
+
+  return false;
+}
+
+function canResumeAfterRollback(rollbackSet: string[], remainingUnits: string[], graph: DependencyGraph): boolean {
+  if (remainingUnits.length === 0) {
+    return false;
+  }
+
+  for (const unit of remainingUnits) {
+    for (const rolledBack of rollbackSet) {
+      if (hasPath(rolledBack, unit, graph)) {
+        return false;
+      }
+    }
+  }
+
+  return true;
+}
+
+export function validatePostRollback(
+  state: GlobalState,
+  graph: DependencyGraph,
+  executionState: ExecutionState,
+  repos?: Repo[]
+): RolloutValidationResult {
+  const errors: string[] = [];
+
+  for (const unit of Object.keys(executionState.units).sort((left, right) => left.localeCompare(right))) {
+    if (!Object.prototype.hasOwnProperty.call(state, unit)) {
+      errors.push(`Post-rollback state missing unit ${unit}`);
+    }
+  }
+
+  for (const edge of graph.edges) {
+    const dependentState = executionState.units[edge.to];
+    const dependencyState = executionState.units[edge.from];
+    if (dependentState !== "executed") {
+      continue;
+    }
+
+    if (dependencyState !== "executed") {
+      errors.push(`Post-rollback dependency violation: ${edge.to} executed while ${edge.from} is ${dependencyState ?? "pending"}`);
+    }
+  }
+
+  const consistency = validateGlobalConsistency(state, repos);
+  errors.push(...consistency.errors);
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
 }
 
 function collectUndefinedPaths(value: unknown, prefix: string): string[] {
@@ -543,6 +930,7 @@ async function runGlobalPlanInternal(
   if (!validation.valid) {
     const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
     const baseStates = stateForRepos(normalizedRepos);
+    const executionState = createExecutionState(Object.keys(baseStates));
     return {
       success: false,
       rolledBack: false,
@@ -560,6 +948,7 @@ async function runGlobalPlanInternal(
       violations: validation.errors,
       stepsExecuted: [],
       unitsAffected: [],
+      executionState,
     };
   }
 
@@ -575,6 +964,8 @@ async function runGlobalPlanInternal(
   const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
   const stepsExecuted: string[] = [];
   const unitsAffected = new Set<string>();
+  const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
+  const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
 
   if (!policyResult.allowed) {
     return {
@@ -588,18 +979,25 @@ async function runGlobalPlanInternal(
       violations: policyResult.violations,
       stepsExecuted,
       unitsAffected: [],
+      executionState,
     };
   }
 
+  let activeTask: GlobalPlanTask | null = null;
+  let activeStageId = "stage:0";
+
   try {
     for (const batch of batches) {
+      activeStageId = batch.id;
       const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
       for (const task of sortedTasks) {
+        activeTask = task;
         const currentState = cloneUnknown(states[task.repoId] ?? {});
         const nextState = await executeTask(task, currentState, task.repoId, cloneState(states), mode);
         states[task.repoId] = cloneUnknown(nextState);
         stepsExecuted.push(task.id);
         unitsAffected.add(task.repoId);
+        setUnitExecutionState(executionState, task.repoId, "executed");
 
         if (!validateState(states[task.repoId], task.repoId)) {
           throw new Error(`State validation failed after task ${task.id}`);
@@ -609,10 +1007,13 @@ async function runGlobalPlanInternal(
 
     const consistency = validateGlobalConsistency(states, normalizedRepos);
     if (!consistency.valid) {
+      const fallbackTask = taskById.get(stepsExecuted[stepsExecuted.length - 1] ?? "") ?? null;
+      const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
+      setUnitExecutionState(executionState, failedUnit, "failed");
       return {
         success: false,
-        rolledBack: true,
-        finalStates: cloneState(snapshot),
+        rolledBack: false,
+        finalStates: cloneState(states),
         baseStates: snapshot,
         policyResult,
         orderedTaskIds: ordered.orderedTaskIds,
@@ -620,6 +1021,13 @@ async function runGlobalPlanInternal(
         violations: consistency.errors,
         stepsExecuted,
         unitsAffected: sortedUnique([...unitsAffected]),
+        executionState,
+        failure: {
+          stageId: `${activeStageId}:validation`,
+          unitId: failedUnit,
+          error: consistency.errors.join("; "),
+          timestamp: Date.now(),
+        },
       };
     }
 
@@ -634,13 +1042,16 @@ async function runGlobalPlanInternal(
       violations: [],
       stepsExecuted,
       unitsAffected: sortedUnique([...unitsAffected]),
+      executionState,
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
+    const failedUnit = activeTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
+    setUnitExecutionState(executionState, failedUnit, "failed");
     return {
       success: false,
-      rolledBack: true,
-      finalStates: cloneState(snapshot),
+      rolledBack: false,
+      finalStates: cloneState(states),
       baseStates: snapshot,
       policyResult,
       orderedTaskIds: ordered.orderedTaskIds,
@@ -648,6 +1059,13 @@ async function runGlobalPlanInternal(
       violations: sortedUnique([...policyResult.violations, reason]),
       stepsExecuted,
       unitsAffected: sortedUnique([...unitsAffected]),
+      executionState,
+      failure: {
+        stageId: activeStageId,
+        unitId: failedUnit,
+        error: reason,
+        timestamp: Date.now(),
+      },
     };
   }
 }
@@ -1719,11 +2137,55 @@ function rollbackAllRepos(snapshot: Record<string, SystemState>): Record<string,
   return cloneUnknown(snapshot);
 }
 
+async function executeIsolatedRollback(
+  failedUnit: string,
+  graph: DependencyGraph,
+  executionState: ExecutionState,
+  stableState: GlobalState,
+  currentState: GlobalState,
+  repos: Repo[],
+  additionalUnits?: string[]
+): Promise<{
+  finalState: GlobalState;
+  rollbackTrace: RollbackTrace;
+  executionState: ExecutionState;
+  validation: RolloutValidationResult;
+  isolation: RolloutValidationResult;
+}> {
+  const rollbackSet = mergeRollbackSets(failedUnit, graph, executionState, additionalUnits);
+  const isolation = validateIsolation(rollbackSet, graph, failedUnit);
+  const workingState = cloneState(currentState);
+  const snapshots = snapshotUnits(stableState, rollbackSet);
+  const stateRef = { current: workingState };
+  const compensations = buildCompensations(rollbackSet, stableState, stateRef);
+  const rollbackStart = Date.now();
+  const rolledBack = await rollbackUnits(rollbackSet, graph, stateRef.current, snapshots, compensations);
+  const rollbackDuration = Date.now() - rollbackStart;
+  const rollbackTrace: RollbackTrace = {
+    failedUnit,
+    rollbackSet,
+    rollbackOrder: rolledBack.rollbackOrder,
+    duration: rollbackDuration,
+  };
+
+  const postRollbackState = markUnitsRolledBack(executionState, rollbackSet);
+  const validation = validatePostRollback(rolledBack.state, graph, postRollbackState, repos);
+
+  return {
+    finalState: rolledBack.state,
+    rollbackTrace,
+    executionState: postRollbackState,
+    validation,
+    isolation,
+  };
+}
+
 export async function executeGlobalPlan(
   plan: GlobalPlan,
   options: ExecuteGlobalPlanOptions
 ): Promise<GlobalExecutionResult> {
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
+  const dependencyGraph = buildRollbackDependencyGraph(plan);
   const simulation = await simulatePlan(plan, options);
   const simulationPolicy = simulation.policyDecisions[0];
 
@@ -1735,8 +2197,8 @@ export async function executeGlobalPlan(
     const baseStates = stateForRepos(normalizedRepos);
     return {
       success: false,
-      rolledBack: true,
-      finalStates: rollbackAllRepos(baseStates),
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
       audit: {
         planId: plan.id,
         reposInvolved: normalizedRepos.map((repo) => repo.id),
@@ -1756,12 +2218,70 @@ export async function executeGlobalPlan(
   }
 
   const execution = await runGlobalPlanInternal(plan, options, "execution");
+
+  if (!execution.success) {
+    const failedUnit = execution.failure?.unitId ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+    const isolatedRollback = await executeIsolatedRollback(
+      failedUnit,
+      dependencyGraph,
+      execution.executionState,
+      execution.baseStates,
+      execution.finalStates,
+      normalizedRepos
+    );
+
+    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
+    const finalStates = requiresFullRollback
+      ? rollbackAllRepos(execution.baseStates)
+      : cloneState(isolatedRollback.finalState);
+    const violations = sortedUnique([
+      ...execution.policyResult.violations,
+      ...execution.violations,
+      ...isolatedRollback.isolation.errors,
+      ...isolatedRollback.validation.errors,
+      ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
+    ]);
+
+    return {
+      success: false,
+      rolledBack: true,
+      finalStates,
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: execution.policyResult.appliedPolicyIds,
+        violations,
+      },
+      trace: {
+        plan,
+        executionOrder: execution.orderedTaskIds,
+        policyDecisions: execution.policyResult.policyDecisions,
+        convergence: false,
+      },
+      rollbackTrace: isolatedRollback.rollbackTrace,
+    };
+  }
+
   const expectedState = simulation.finalState;
   const actualState = execution.finalStates;
   const equivalent = statesEqual(expectedState, actualState);
 
   if (!equivalent) {
-    const rolledBackStates = rollbackAllRepos(execution.baseStates);
+    const divergentUnits = stateDiffUnits(expectedState, actualState);
+    const failedUnit = divergentUnits[0] ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+    const isolatedRollback = await executeIsolatedRollback(
+      failedUnit,
+      dependencyGraph,
+      execution.executionState,
+      execution.baseStates,
+      execution.finalStates,
+      normalizedRepos,
+      divergentUnits
+    );
+    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
+    const rolledBackStates = requiresFullRollback
+      ? rollbackAllRepos(execution.baseStates)
+      : cloneState(isolatedRollback.finalState);
     return {
       success: false,
       rolledBack: true,
@@ -1772,7 +2292,10 @@ export async function executeGlobalPlan(
         policiesApplied: execution.policyResult.appliedPolicyIds,
         violations: sortedUnique([
           ...execution.policyResult.violations,
+          ...isolatedRollback.isolation.errors,
+          ...isolatedRollback.validation.errors,
           "Simulation and execution diverged",
+          ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
         ]),
       },
       trace: {
@@ -1781,6 +2304,7 @@ export async function executeGlobalPlan(
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
       },
+      rollbackTrace: isolatedRollback.rollbackTrace,
     };
   }
 
@@ -2095,6 +2619,8 @@ export async function executeStage(
     metrics,
     unitsAffected: [...run.unitsAffected],
     finalStates: cloneState(run.finalStates),
+    executionState: cloneExecutionState(run.executionState),
+    ...(run.failure ? { failure: run.failure } : {}),
   };
 }
 
@@ -2161,10 +2687,12 @@ export async function executeRolloutPlan(
   const effectiveConfig = mergeRolloutConfig(config);
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
   const baseState = stateForRepos(normalizedRepos);
+  const dependencyGraph = buildRollbackDependencyGraph(plan);
   const trace: RolloutTrace = {
     stages: buildStages(plan, strategy),
     completedStages: [],
     metrics: {},
+    rollbackTraces: [],
   };
 
   if (trace.stages.length === 0) {
@@ -2217,6 +2745,7 @@ export async function executeRolloutPlan(
   }
 
   let currentState = cloneState(baseState);
+  let executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
   const completedUnits = new Set<string>();
 
   for (const stage of trace.stages) {
@@ -2246,6 +2775,14 @@ export async function executeRolloutPlan(
       ...options,
       repos: normalizedRepos,
     }, currentState);
+
+    const mergedExecutionState = cloneExecutionState(executionState);
+    for (const [unit, status] of Object.entries(stageResult.executionState.units)) {
+      if (status === "executed" || status === "failed") {
+        setUnitExecutionState(mergedExecutionState, unit, status);
+      }
+    }
+
     trace.metrics[stage.id] = {
       ...stageResult.metrics,
     };
@@ -2253,35 +2790,106 @@ export async function executeRolloutPlan(
     const stageValidation = validateStage(stageResult, plan, [...completedUnits], effectiveConfig);
     if (!stageValidation.valid) {
       trace.failedStage = stage.id;
-      const rolledBackState = effectiveConfig.autoRollback
-        ? rollbackStage(stage, stageSnapshot, stageResult.finalStates)
-        : stageResult.finalStates;
+      if (!effectiveConfig.autoRollback) {
+        trace.canResume = false;
+        return {
+          success: false,
+          stopped: true,
+          rolledBack: false,
+          finalStates: cloneState(stageResult.finalStates),
+          trace,
+          failures: stageValidation.errors,
+        };
+      }
+
+      const failedUnit = stageResult.failure?.unitId ?? stage.units[0] ?? "workspace:root";
+      const isolatedRollback = await executeIsolatedRollback(
+        failedUnit,
+        dependencyGraph,
+        mergedExecutionState,
+        stageSnapshot,
+        stageResult.finalStates,
+        normalizedRepos
+      );
+      trace.rollbackTraces.push(isolatedRollback.rollbackTrace);
+
+      const remainingUnits = trace.stages
+        .filter((candidate) => candidate.order > stage.order)
+        .flatMap((candidate) => candidate.units);
+      const canResume = canResumeAfterRollback(
+        isolatedRollback.rollbackTrace.rollbackSet,
+        sortedUnique(remainingUnits),
+        dependencyGraph
+      );
+      trace.canResume = canResume;
+
+      const rollbackFailures = sortedUnique([
+        ...stageValidation.errors,
+        ...isolatedRollback.isolation.errors,
+        ...isolatedRollback.validation.errors,
+      ]);
+
+      executionState = cloneExecutionState(isolatedRollback.executionState);
+      currentState = cloneState(isolatedRollback.finalState);
+
+      if (canResume) {
+        completedUnits.clear();
+        for (const [unit, unitState] of Object.entries(executionState.units)) {
+          if (unitState === "executed") {
+            completedUnits.add(unit);
+          }
+        }
+
+        continue;
+      }
 
       return {
         success: false,
         stopped: true,
-        rolledBack: effectiveConfig.autoRollback,
-        finalStates: cloneState(rolledBackState),
+        rolledBack: true,
+        finalStates: cloneState(currentState),
         trace,
-        failures: stageValidation.errors,
+        failures: rollbackFailures,
       };
     }
 
     currentState = cloneState(stageResult.finalStates);
+    executionState = mergedExecutionState;
     trace.completedStages.push(stage.id);
     stage.units.forEach((unit) => completedUnits.add(unit));
   }
 
   const equivalent = statesEqual(currentState, simulation.finalState);
   if (!equivalent) {
-    const rollbackAll = cloneState(baseState);
+    const divergentUnits = stateDiffUnits(currentState, simulation.finalState);
+    const failedUnit = divergentUnits[0] ?? trace.stages[0]?.units[0] ?? "workspace:root";
+    const isolatedRollback = await executeIsolatedRollback(
+      failedUnit,
+      dependencyGraph,
+      executionState,
+      baseState,
+      currentState,
+      normalizedRepos,
+      divergentUnits
+    );
+    trace.rollbackTraces.push(isolatedRollback.rollbackTrace);
+
+    const requiresFullRollback = !isolatedRollback.isolation.valid || !isolatedRollback.validation.valid;
+    const rollbackState = requiresFullRollback
+      ? cloneState(baseState)
+      : cloneState(isolatedRollback.finalState);
     return {
       success: false,
       stopped: true,
       rolledBack: true,
-      finalStates: rollbackAll,
+      finalStates: rollbackState,
       trace,
-      failures: ["Rollout failed: simulation and staged execution diverged"],
+      failures: sortedUnique([
+        "Rollout failed: simulation and staged execution diverged",
+        ...isolatedRollback.isolation.errors,
+        ...isolatedRollback.validation.errors,
+        ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
+      ]),
     };
   }
 

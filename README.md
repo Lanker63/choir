@@ -59,6 +59,7 @@ Core flow:
 - define, analyze, plan, simulate, preview, execute, status
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
+- failure isolation rollback: choir rollback [<unitId>] | choir rollback --stage <stageId>
 - approve/reject policy-gated diffs
 - export deterministic DSL projections
 
@@ -97,7 +98,7 @@ Additional commands:
 
 <action> ::= <define> | <analyze> | <plan> | <simulate> | <preview> | <execute> | <status>
            | <refactor> | <export> | <approve> | <reject> | <policy-status>
-           | <graph> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
+           | <rollback> | <graph> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
@@ -111,6 +112,7 @@ Additional commands:
              | "refactor" "inline" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
 <execute> ::= "execute" ["plan" <identifier>] ["--strategy" <execute-strategy>] ["--steps" <int-list>] ["--phases" <int-list>] ["--batch-size" <integer>]
+<rollback> ::= "rollback" | "rollback" <identifier> | "rollback" "--stage" <identifier>
 <status> ::= "status"
 <export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
 <approve> ::= "approve" <identifier>
@@ -140,11 +142,12 @@ Additional commands:
 - Ranking order is deterministic: violations -> risk -> changes -> executionCost (lexical id tie-break)
 - Violating strategies are excluded by default unless explicitly allowed
 - Rollout execution is staged and dependency-aware; each stage must validate before progression
-- Rollout supports deterministic canary/phased/batched expansion with threshold gates and stage rollback
+- Rollout supports deterministic canary/phased/batched expansion with threshold gates and failure isolation rollback
 - Preview is simulation-derived and hash-bound to execution
 - Transactional execution: simulate -> validate -> commit/rollback
 - Global orchestration validates full cross-repo graph and policy before execution
-- Any global execution failure triggers rollback-all
+- Global failure handling is isolation-first: rollback affects failed units and already-executed dependents only
+- Full rollback is fail-safe fallback only when isolated rollback cannot restore consistency
 
 Preview hash gate:
 
@@ -164,6 +167,7 @@ Org-wide simulation notes:
 - `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
 - `choir plan --optimize` simulates all candidate strategies and returns explainable ranking and selected strategy.
 - `choir execute --strategy ...` runs progressive staged rollout (canary/phased/batched/all-at-once) with per-stage validation.
+- `choir rollback`, `choir rollback <unit>`, and `choir rollback --stage <id>` compute deterministic rollback scope/order and record rollback timeline transitions.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
 

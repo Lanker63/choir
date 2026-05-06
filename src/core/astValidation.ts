@@ -145,6 +145,7 @@ function actionNodeTypes(): ASTNode["type"][] {
     "plan-approve",
     "preview",
     "execute",
+    "rollback",
     "status",
     "export",
     "approve",
@@ -411,6 +412,22 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
     case "execute": {
       if (action.planRef && (!action.planRef.identifier || typeof action.planRef.identifier !== "string")) {
         issues.push(issue("plan-ref-invalid", "error", "Invalid plan reference identifier", `${path}.planRef.identifier`));
+      }
+
+      return;
+    }
+
+    case "rollback": {
+      if (action.unitId !== undefined && (typeof action.unitId !== "string" || action.unitId.trim().length === 0)) {
+        issues.push(issue("rollback-unit-invalid", "error", "Rollback unit id must be a non-empty string", `${path}.unitId`));
+      }
+
+      if (action.stageId !== undefined && (typeof action.stageId !== "string" || action.stageId.trim().length === 0)) {
+        issues.push(issue("rollback-stage-invalid", "error", "Rollback stage id must be a non-empty string", `${path}.stageId`));
+      }
+
+      if (action.unitId !== undefined && action.stageId !== undefined) {
+        issues.push(issue("rollback-scope-conflict", "error", "Rollback command cannot set both unitId and stageId", path));
       }
 
       return;

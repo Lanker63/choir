@@ -114,6 +114,10 @@ function capabilitiesForAction(action: ActionNode): PolicyAction[] {
     return ["execute"];
   }
 
+  if (action.type === "rollback") {
+    return ["execute"];
+  }
+
   return ["read-only"];
 }
 
@@ -126,6 +130,8 @@ function inferRoleFromAST(ast: AST): Role {
       } else if (action.type === "plan" || action.type === "plan-approve" || action.type === "preview" || action.type === "ci-run" || action.type === "abstraction-run") {
         roles.add("conductor");
       } else if (action.type === "execute") {
+        roles.add("enforcer");
+      } else if (action.type === "rollback") {
         roles.add("enforcer");
       } else {
         roles.add("analyst");
@@ -148,6 +154,10 @@ function inferRoleFromAST(ast: AST): Role {
   }
 
   if (ast.type === "execute") {
+    return "enforcer";
+  }
+
+  if (ast.type === "rollback") {
     return "enforcer";
   }
 

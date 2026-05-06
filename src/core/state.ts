@@ -163,6 +163,7 @@ export type StateTransition = {
 
 export type TimelineEvent = {
   id: string;
+  type: "transition" | "rollback";
   timestamp: number;
   unitId: string;
   action: string;
@@ -1686,8 +1687,10 @@ export function listStateTransitions(root: string): StateTransition[] {
 }
 
 function toTimelineEvent(transition: StateTransition, index: number): TimelineEvent {
+  const eventType: TimelineEvent["type"] = transition.action.startsWith("rollback") ? "rollback" : "transition";
   return {
     id: transition.id,
+    type: eventType,
     timestamp: transition.logicalTime > 0 ? transition.logicalTime : index + 1,
     unitId: normalizeUnitId(transition.unitId),
     action: transition.action,

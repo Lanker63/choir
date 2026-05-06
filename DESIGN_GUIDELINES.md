@@ -206,15 +206,16 @@ Strategy evaluation:
 - validate full graph and policy before execution
 - inter-repo cycle -> fail
 - cross-repo deny/approval-required -> block entire execution
-- any execution failure -> rollback all repos
+- any execution failure -> isolate failed unit and rollback only impacted units
 - progressive rollout supports deterministic staged execution:
    - all-at-once
    - canary (percent expansion)
    - phased (explicit percent phases)
    - batched (dependency-safe unit groups)
 - each rollout stage must pass dependency checks, policy/validation gates, and metric thresholds before proceeding
-- stage failure stops rollout immediately; rollback scope is stage-local unless rollout/execution divergence triggers rollback-all
-- rollout is simulation-gated and fails closed on simulation/execution divergence
+- stage failure triggers deterministic isolation rollback (failed unit + executed dependents)
+- rollout can continue only when remaining stages are unaffected and post-rollback consistency holds
+- rollout is simulation-gated and fails closed on simulation/execution divergence; fallback rollback-all is last resort only
 
 Workspace detection contract:
 
@@ -261,6 +262,10 @@ Workspace detection contract:
    - choir execute --strategy canary --steps <p1>,<p2>,...,100
    - choir execute --strategy phased --phases <p1>,<p2>,...,100
    - choir execute --strategy batched --batch-size <n>
+- rollback surface:
+   - choir rollback
+   - choir rollback <unitId>
+   - choir rollback --stage <stageId>
 - panel chat shortcuts:
    - @choir control
    - @choir timeline
@@ -289,7 +294,7 @@ Workspace detection contract:
 5. State writes are atomic and rollback-safe.
 6. Replay and distributed sync must be integrity-checked and deterministic.
 7. Global execution is blocked until full graph and policy validation succeeds.
-8. Any global failure performs rollback-all.
+8. Global failures use isolation-first rollback; rollback-all is permitted only as deterministic fail-safe fallback.
 9. Audit evidence is immutable, append-only, and hash-chained.
 10. Macro/abstraction flows must not bypass DSL, policy, execution, or audit layers.
 

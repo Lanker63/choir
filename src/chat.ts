@@ -34,10 +34,17 @@ import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import {
+    buildRollbackDependencyGraph,
+    buildStages,
+    computeRollbackSet,
     executeRolloutPlan,
     GlobalPlan,
+    orderRollback,
     Repo,
+    RollbackTrace,
+    RolloutStrategy,
     compareStrategies,
+    validateIsolation,
     selectBestStrategy,
     simulatePlan as simulateGlobalPlan,
     simulateUnits as simulateGlobalUnits,
@@ -71,6 +78,11 @@ import {
     saveInitSession,
 } from "./core/initWizard.js";
 import { Plan, Task } from "./schema.js";
+import {
+    createEmptyStatePlane,
+    persistStatePlane,
+    readStatePlane,
+} from "./core/state.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
 
@@ -228,6 +240,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir execute --strategy canary --steps 1,10,25,100",
         "- choir execute --strategy phased",
         "- choir execute --strategy batched --batch-size 2",
+        "- choir rollback",
+        "- choir rollback <unitId>",
+        "- choir rollback --stage <stageId>",
         "- choir refactor rename <symbol> <newName>",
         "- choir refactor move <symbol> <targetUnit>",
         "- choir refactor extract <symbol> <targetUnit>",
@@ -764,11 +779,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "refactor-extract"
                     || action.type === "refactor-inline"
                     || action.type === "graph"
+                    || action.type === "rollback"
                     || (action.type === "plan" && action.optimize === true)
                     || (action.type === "execute" && action.rolloutStrategy !== undefined)
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|plan --optimize|execute --strategy` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|rollback|plan --optimize|execute --strategy` cannot be chained with `then`.");
                 return;
             }
 
@@ -1096,6 +1112,103 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         ...stageLines,
                         ...(rollout.failures.length > 0 ? ["", "Failures:", ...rollout.failures.map((entry) => `- ${entry}`)] : []),
                     ].filter((line) => line.length > 0).join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "rollback") {
+                    const rollbackNode = parsed.ast;
+                    const configuredPlans = [...control.execution.plans]
+                        .sort((left, right) => left.id.localeCompare(right.id));
+
+                    if (configuredPlans.length === 0) {
+                        stream.markdown("Rollback unavailable: no execution plans defined in control plane.");
+                        return;
+                    }
+
+                    const targetPlan = configuredPlans.find((plan) => plan.status === "approved") ?? configuredPlans[0];
+                    if (!targetPlan) {
+                        stream.markdown("Rollback unavailable: unable to resolve a deterministic target plan.");
+                        return;
+                    }
+
+                    const globalPlan = toGlobalPlanFromPlan(targetPlan);
+                    const dependencyGraph = buildRollbackDependencyGraph(globalPlan);
+                    const allUnits = sortedUnique(globalPlan.tasks.map((task) => task.repoId));
+                    if (allUnits.length === 0) {
+                        stream.markdown("Rollback unavailable: selected plan has no workspace units.");
+                        return;
+                    }
+
+                    const executionState = {
+                        units: Object.fromEntries(allUnits.map((unit) => [unit, "executed" as const])),
+                    };
+
+                    let failedUnit = rollbackNode.unitId ?? allUnits[allUnits.length - 1] as string;
+                    let rollbackSet: string[];
+
+                    if (rollbackNode.stageId) {
+                        const stageStrategy: RolloutStrategy = { type: "batched", batchSize: 1 };
+                        const stages = buildStages(globalPlan, stageStrategy);
+                        const selectedStage = stages.find((stage) => stage.id === rollbackNode.stageId);
+                        if (!selectedStage) {
+                            const available = stages.slice(0, 5).map((stage) => `- ${stage.id}`).join("\n");
+                            stream.markdown([
+                                `Rollback stage not found: ${rollbackNode.stageId}`,
+                                "",
+                                "Available deterministic stage ids (batched=1):",
+                                ...(available.length > 0 ? [available] : ["- none"]),
+                            ].join("\n"));
+                            return;
+                        }
+
+                        failedUnit = selectedStage.units[0] ?? failedUnit;
+                        rollbackSet = sortedUnique(selectedStage.units);
+                    } else {
+                        if (rollbackNode.unitId && !allUnits.includes(rollbackNode.unitId)) {
+                            stream.markdown(`Rollback unit not found in selected plan: ${rollbackNode.unitId}`);
+                            return;
+                        }
+
+                        rollbackSet = computeRollbackSet(failedUnit, dependencyGraph, executionState);
+                    }
+
+                    if (rollbackSet.length === 0) {
+                        rollbackSet = [failedUnit];
+                    }
+
+                    const isolation = validateIsolation(rollbackSet, dependencyGraph, failedUnit);
+                    const rollbackStart = Date.now();
+                    const rollbackOrder = orderRollback(rollbackSet, dependencyGraph);
+                    const rollbackTrace: RollbackTrace = {
+                        failedUnit,
+                        rollbackSet,
+                        rollbackOrder,
+                        duration: Date.now() - rollbackStart,
+                    };
+
+                    const currentState = readStatePlane(workspaceRoot) ?? createEmptyStatePlane();
+                    persistStatePlane(workspaceRoot, currentState, {
+                        action: rollbackNode.stageId ? "rollback:stage" : rollbackNode.unitId ? "rollback:unit" : "rollback",
+                        metadata: {
+                            unitId: failedUnit,
+                            command: raw,
+                            policyDecision: isolation.valid ? "allow" : "deny",
+                            auditId: `rollback-${targetPlan.id}-${failedUnit}-${Date.now()}`,
+                            dependencyChain: rollbackOrder,
+                        },
+                    });
+
+                    stream.markdown([
+                        "Rollback isolation trace generated.",
+                        `- plan: ${targetPlan.id}`,
+                        `- selector: ${rollbackNode.stageId ? `stage=${rollbackNode.stageId}` : rollbackNode.unitId ? `unit=${rollbackNode.unitId}` : "auto"}`,
+                        `- failedUnit: ${rollbackTrace.failedUnit}`,
+                        `- rollbackSet: [${rollbackTrace.rollbackSet.join(", ")}]`,
+                        `- rollbackOrder: [${rollbackTrace.rollbackOrder.join(", ")}]`,
+                        `- durationMs: ${rollbackTrace.duration}`,
+                        `- isolationValid: ${isolation.valid}`,
+                        ...(isolation.errors.length > 0 ? ["", "Isolation Errors:", ...isolation.errors.map((entry) => `- ${entry}`)] : []),
+                    ].join("\n"));
                     return;
                 }
 

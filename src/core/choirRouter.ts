@@ -8,6 +8,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <simulate>
   | <preview>
   | <execute>
+  | <rollback>
   | <status>
   | <export>
   | <approve>
@@ -44,6 +45,10 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 <preview> ::= "preview" [<plan-ref>]
 
 <execute> ::= "execute" [<plan-ref>] [<execute-options>]
+
+<rollback> ::= "rollback"
+             | "rollback" <identifier>
+             | "rollback" "--stage" <identifier>
 
 <execute-options> ::= "--strategy" <execute-strategy>
                     ["--steps" <int-list>]
@@ -128,6 +133,7 @@ export const CHOIR_ACTION_KEYWORDS = [
   "simulate",
   "preview",
   "execute",
+  "rollback",
   "status",
   "export",
   "approve",
@@ -158,6 +164,7 @@ export const CHOIR_EXECUTE_STRATEGY_FLAG = "--strategy" as const;
 export const CHOIR_EXECUTE_STEPS_FLAG = "--steps" as const;
 export const CHOIR_EXECUTE_PHASES_FLAG = "--phases" as const;
 export const CHOIR_EXECUTE_BATCH_SIZE_FLAG = "--batch-size" as const;
+export const CHOIR_ROLLBACK_STAGE_FLAG = "--stage" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
@@ -176,6 +183,7 @@ const KEYWORDS = new Set<string>([
   CHOIR_EXECUTE_STEPS_FLAG,
   CHOIR_EXECUTE_PHASES_FLAG,
   CHOIR_EXECUTE_BATCH_SIZE_FLAG,
+  CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_SEQUENCE_KEYWORD,
@@ -257,6 +265,12 @@ export type ExecuteNode = {
   type: "execute";
   planRef?: PlanRef;
   rolloutStrategy?: ExecuteRolloutStrategy;
+};
+
+export type RollbackNode = {
+  type: "rollback";
+  unitId?: string;
+  stageId?: string;
 };
 
 export type StatusNode = {
@@ -374,6 +388,7 @@ export type ActionNode =
   | PlanApproveNode
   | PreviewNode
   | ExecuteNode
+  | RollbackNode
   | StatusNode
   | ExportNode
   | ApproveNode
@@ -655,6 +670,8 @@ class Parser {
         return this.parsePreview();
       case "execute":
         return this.parseExecute();
+      case "rollback":
+        return this.parseRollback();
       case "status":
         return this.parseStatus();
       case "export":
@@ -1052,6 +1069,29 @@ class Parser {
       type: "execute",
       ...(planRef ? { planRef } : {}),
       rolloutStrategy,
+    };
+  }
+
+  private parseRollback(): RollbackNode {
+    this.expectKeyword("rollback");
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return {
+        type: "rollback",
+      };
+    }
+
+    const selector = this.expectIdentifierLike();
+    if (selector.toLowerCase() === CHOIR_ROLLBACK_STAGE_FLAG) {
+      return {
+        type: "rollback",
+        stageId: this.expectIdentifierLike(),
+      };
+    }
+
+    return {
+      type: "rollback",
+      unitId: selector,
     };
   }
 
@@ -1498,6 +1538,24 @@ function validateActionNode(node: ActionNode): boolean {
     return planRefValid && Number.isFinite(strategy.batchSize) && strategy.batchSize > 0;
   }
 
+  if (node.type === "rollback") {
+    const hasUnit = typeof node.unitId === "string";
+    const hasStage = typeof node.stageId === "string";
+    if (hasUnit && hasStage) {
+      return false;
+    }
+
+    if (hasUnit) {
+      return CHOIR_IDENTIFIER_PATTERN.test(node.unitId as string);
+    }
+
+    if (hasStage) {
+      return CHOIR_IDENTIFIER_PATTERN.test(node.stageId as string);
+    }
+
+    return true;
+  }
+
   if (node.type === "export") {
     return node.format === "dsl"
       && (node.section === "all" || node.section === "intent" || node.section === "policy" || node.section === "plans");
@@ -1623,6 +1681,8 @@ export function routeActionToRole(action: ActionNode): RoutedRole {
       return "system";
     case "execute":
       return "enforcer";
+    case "rollback":
+      return "enforcer";
     default:
       return "system";
   }
@@ -1722,6 +1782,11 @@ async function compileAction<TContext>(
       trace.rolesInvoked.push("enforcer");
       trace.steps.push("enforcer.execute");
       trace.compiledActions.push("enforcer.execute");
+      return;
+
+    case "rollback":
+      trace.steps.push("system.rollback");
+      trace.compiledActions.push("system.rollback");
       return;
 
     case "status":

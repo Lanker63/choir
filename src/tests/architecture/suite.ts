@@ -204,11 +204,13 @@ import {
 import {
   blockGlobalExecution,
   batchTasks as batchGlobalTasks,
+  buildRollbackDependencyGraph,
   buildGlobalContext,
   buildGlobalDependencyGraph,
   buildStages,
   compareStrategies,
   compareStrategyMetricsLex,
+  computeRollbackSet,
   computeStrategyScore,
   createGlobalPlanningCache,
   detectPolicyDrift,
@@ -216,6 +218,7 @@ import {
   evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
   executeGlobalPlan,
+  orderRollback,
   orderPlan as orderGlobalPlan,
   OrgPolicy,
   propagatePolicies,
@@ -227,6 +230,8 @@ import {
   simulatePlan,
   simulateUnits,
   synthesizeGlobalPlan,
+  validateIsolation,
+  validatePostRollback,
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
 import {
@@ -718,6 +723,23 @@ const pass2: TestPass = {
           },
         });
 
+        const rollbackAll = parseCommand("choir rollback");
+        assert.deepStrictEqual(rollbackAll.ast, {
+          type: "rollback",
+        });
+
+        const rollbackUnit = parseCommand("choir rollback packages.api");
+        assert.deepStrictEqual(rollbackUnit.ast, {
+          type: "rollback",
+          unitId: "packages.api",
+        });
+
+        const rollbackStage = parseCommand("choir rollback --stage rollout-stage-1");
+        assert.deepStrictEqual(rollbackStage.ast, {
+          type: "rollback",
+          stageId: "rollout-stage-1",
+        });
+
         assert.strictEqual(routeAST(rename.ast), "conductor");
       },
     },
@@ -732,6 +754,7 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir plan --optimize --optimize"), /Duplicate plan optimize flag/);
         assert.throws(() => parseCommand("choir execute --steps 1,10"), /require --strategy/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected execute options/);
+        assert.throws(() => parseCommand("choir rollback --stage"), /Expected identifier/);
         assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
         assert.throws(() => parseCommand("choir simulate units"), /Expected identifier/);
       },
@@ -1565,6 +1588,7 @@ const pass2: TestPass = {
           "simulate",
           "preview",
           "execute",
+          "rollback",
           "status",
           "export",
           "approve",
@@ -1592,6 +1616,9 @@ const pass2: TestPass = {
 
         const executeTail = getDeterministicCompletions("choir execute ").map((item) => item.label);
         assert.deepStrictEqual(executeTail, ["plan", "--strategy", "then"]);
+
+        const rollbackTail = getDeterministicCompletions("choir rollback ").map((item) => item.label);
+        assert.deepStrictEqual(rollbackTail, ["--stage", "identifier", "then"]);
 
         const policyTail = getDeterministicCompletions("choir policy ").map((item) => item.label);
         assert.deepStrictEqual(policyTail, ["status"]);
@@ -3437,18 +3464,27 @@ const pass3: TestPass = {
             metadata: { unitId: "packages/api" },
           });
 
+          persistStatePlane(root, updated, {
+            action: "rollback:unit",
+            metadata: { unitId: "packages/api" },
+          });
+
           const global = buildGlobalTimeline(root);
-          assert.strictEqual(global.events.length, 2);
+          assert.strictEqual(global.events.length, 3);
           assert.strictEqual(global.events[0]?.timestamp, 1);
           assert.strictEqual(global.events[1]?.timestamp, 2);
+          assert.strictEqual(global.events[2]?.timestamp, 3);
           assert.strictEqual(global.events[0]?.unitId, "packages/auth");
           assert.strictEqual(global.events[1]?.unitId, "packages/api");
+          assert.strictEqual(global.events[0]?.type, "transition");
+          assert.strictEqual(global.events[2]?.type, "rollback");
           assert.ok((global.events[0]?.stateHashBefore ?? "").length > 0);
           assert.ok((global.events[1]?.stateHashAfter ?? "").length > 0);
 
           const apiUnit = buildUnitTimeline(root, "packages/api");
-          assert.strictEqual(apiUnit.events.length, 1);
+          assert.strictEqual(apiUnit.events.length, 2);
           assert.strictEqual(apiUnit.events[0]?.id, global.events[1]?.id);
+          assert.strictEqual(apiUnit.events[1]?.id, global.events[2]?.id);
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
@@ -4867,7 +4903,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.8",
-      name: "global execution is transactional and rolls back all repos on failure",
+      name: "global execution isolates failure and rolls back only impacted units",
       run: async () => {
         const repos: Repo[] = [
           {
@@ -4889,8 +4925,8 @@ const pass6: TestPass = {
         const result = await executeGlobalPlan(plan, {
           repos,
           policies: [],
-          executeTask: async (task, state) => {
-            if (task.id === "repo-b:fail") {
+          executeTask: async (task, state, _repoId, _allStates, mode) => {
+            if (mode === "execution" && task.id === "repo-b:fail") {
               throw new Error("simulated failure");
             }
 
@@ -4903,8 +4939,10 @@ const pass6: TestPass = {
 
         assert.strictEqual(result.success, false);
         assert.strictEqual(result.rolledBack, true);
-        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a" });
+        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a", appliedBy: "repo-a:ok" });
         assert.deepStrictEqual(result.finalStates["repo-b"], { value: "initial-b" });
+        assert.strictEqual(result.rollbackTrace?.failedUnit, "repo-b");
+        assert.deepStrictEqual(result.rollbackTrace?.rollbackSet, ["repo-b"]);
       },
     },
     {
@@ -5099,7 +5137,7 @@ const pass6: TestPass = {
         });
 
         assert.strictEqual(result.success, false);
-        assert.strictEqual(result.rolledBack, true);
+        assert.strictEqual(result.rolledBack, false);
         assert.ok(result.audit.violations.some((entry) => entry.includes("simulation gate")));
       },
     },
@@ -5530,6 +5568,81 @@ const pass6: TestPass = {
         assert.strictEqual(result.rolledBack, true);
         assert.ok(result.failures.some((entry) => entry.includes("diverged")));
         assert.strictEqual((result.finalStates["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
+      },
+    },
+    {
+      id: "6.10p",
+      name: "rollback set includes failed unit and executed dependents only",
+      run: async () => {
+        const plan = {
+          id: "rollback-set",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+            { id: "repo-c:t1", repoId: "repo-c", action: "set:meta.c=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const graph = buildRollbackDependencyGraph(plan);
+        const rollbackSet = computeRollbackSet("repo-a", graph, {
+          units: {
+            "repo-a": "failed",
+            "repo-b": "executed",
+            "repo-c": "pending",
+          },
+        });
+
+        assert.deepStrictEqual(rollbackSet, ["repo-a", "repo-b"]);
+      },
+    },
+    {
+      id: "6.10q",
+      name: "rollback order is reverse dependency order and deterministic",
+      run: async () => {
+        const plan = {
+          id: "rollback-order",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+            { id: "repo-c:t1", repoId: "repo-c", action: "set:meta.c=1", dependsOn: ["repo-b:t1"] },
+          ],
+        };
+
+        const graph = buildRollbackDependencyGraph(plan);
+        const ordered = orderRollback(["repo-a", "repo-b", "repo-c"], graph);
+        assert.deepStrictEqual(ordered, ["repo-c", "repo-b", "repo-a"]);
+      },
+    },
+    {
+      id: "6.10r",
+      name: "rollback isolation and post-rollback consistency checks fail closed",
+      run: async () => {
+        const plan = {
+          id: "rollback-validate",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const graph = buildRollbackDependencyGraph(plan);
+        const isolation = validateIsolation(["repo-a", "repo-z"], graph, "repo-a");
+        assert.strictEqual(isolation.valid, false);
+
+        const post = validatePostRollback({
+          "repo-a": {},
+          "repo-b": {},
+        }, graph, {
+          units: {
+            "repo-a": "rolled-back",
+            "repo-b": "executed",
+          },
+        }, [
+          { id: "repo-a", dependencies: [], state: {} },
+          { id: "repo-b", dependencies: ["repo-a"], state: {} },
+        ]);
+        assert.strictEqual(post.valid, false);
+        assert.ok(post.errors.some((entry) => entry.includes("dependency violation")));
       },
     },
     {

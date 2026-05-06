@@ -11,6 +11,7 @@ import {
   CHOIR_LIBRARY_META_KEYWORDS,
   CHOIR_MACRO_META_KEYWORDS,
   CHOIR_LIBRARY_AT_SYMBOL,
+  CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
@@ -57,6 +58,8 @@ type ParserState =
   | "execute-tail"
   | "execute-strategy"
   | "execute-id"
+  | "rollback-tail"
+  | "rollback-stage-id"
   | "export-format"
   | "export-section-or-end"
   | "approve-id"
@@ -114,6 +117,7 @@ const DSL_KEYWORDS = new Set<string>([
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
+  CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
@@ -139,6 +143,8 @@ const KEYWORD_HOVER: Record<string, string> = {
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
   "--strategy": "Choose progressive rollout strategy for staged execution.",
+  rollback: "Rollback state for all units, a specific unit, or a rollout stage.",
+  "--stage": "Scope rollback to a specific rollout stage id.",
   status: "Show runtime or policy status.",
   export: "Export DSL projection from YAML state.",
   dsl: "Export format selector.",
@@ -323,6 +329,7 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
       || state === "simulate-tail"
       || state === "preview-tail"
       || state === "execute-tail"
+      || state === "rollback-tail"
       || state === "export-section-or-end"
       || state === "audit-query-key"
       || state === "audit-query-after-filter"
@@ -381,6 +388,7 @@ function transition(state: ParserState, token: Token): ParserState[] {
       state === "preview-id"
       || state === "execute-id"
       || state === "execute-strategy"
+      || state === "rollback-stage-id"
       || state === "approve-id"
       || state === "reject-id"
       || state === "macro-show-id"
@@ -451,6 +459,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return token.value.toLowerCase() === CHOIR_PLAN_OPTIMIZE_FLAG
         ? ["expect-then-or-end"]
         : [];
+    }
+
+    if (state === "rollback-tail") {
+      return ["expect-then-or-end"];
     }
 
     return [];
@@ -564,6 +576,9 @@ function transition(state: ParserState, token: Token): ParserState[] {
     }
     if (token.value === "execute") {
       return ["execute-tail"];
+    }
+    if (token.value === "rollback") {
+      return ["rollback-tail"];
     }
     if (token.value === "status") {
       return ["expect-then-or-end"];
@@ -699,6 +714,14 @@ function transition(state: ParserState, token: Token): ParserState[] {
     return [];
   }
 
+  if (state === "rollback-tail") {
+    if (token.value === CHOIR_ROLLBACK_STAGE_FLAG) {
+      return ["rollback-stage-id"];
+    }
+
+    return ["expect-then-or-end"];
+  }
+
   if (state === "export-format") {
     return token.value === CHOIR_EXPORT_FORMAT_KEYWORD ? ["export-section-or-end"] : [];
   }
@@ -778,7 +801,21 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
     ];
   }
 
-  if (state === "preview-id" || state === "execute-id" || state === "execute-strategy" || state === "approve-id" || state === "reject-id") {
+  if (state === "rollback-tail") {
+    return [
+      { type: "keyword", value: CHOIR_ROLLBACK_STAGE_FLAG },
+      { type: "identifier" },
+    ];
+  }
+
+  if (
+    state === "preview-id"
+    || state === "execute-id"
+    || state === "execute-strategy"
+    || state === "rollback-stage-id"
+    || state === "approve-id"
+    || state === "reject-id"
+  ) {
     return [{ type: "identifier" }];
   }
 
