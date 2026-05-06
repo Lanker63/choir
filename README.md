@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension for deterministic, policy-driven workspace governance. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning and execution through `@choir` (routing to internal roles: Architect, Enforcer, Analyst, Conductor), records immutable audit evidence, supports versioned macro libraries, includes a time-travel replay debugger, distributed sync core, and global orchestration core.
+**Choir** is a VS Code extension for deterministic, policy-driven workspace governance. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning and execution through `@choir` (routing to internal roles: Architect, Enforcer, Analyst, Conductor), records immutable audit evidence, supports versioned macro libraries, includes a time-travel replay debugger, distributed sync core, global orchestration core, and monorepo/workspace-aware multi-package orchestration.
 
 ---
 
@@ -189,7 +189,17 @@ Key types: `Repo`, `GlobalContext`, `GlobalDependencyGraph`, `GlobalPlan`, `Exec
 
 **Execution:** `executeGlobalPlan` runs dependency-ordered, validates each step, rolls back all repos on failure. `createGlobalPlanningCache` provides deterministic incremental planning keyed by input hash.
 
-Pass 6 of the architecture harness covers: determinism, inter-repo edges, cycle rejection, ordering, batching, policy propagation, cross-repo gating, rollback-all, drift detection, cache reuse. Current scope: core engine + tests; UI integration is a separate layer.
+**Workspace detection (`detectWorkspace`):** Before building the global DAG, Choir automatically discovers the workspace topology. Supported workspace tools: `pnpm`, `yarn`, `npm`, `nx`, `turbo`. Detection precedence: `nx.json` → `turbo.json` → `pnpm-workspace.yaml` → `package.json#workspaces` → root fallback. Each discovered package path resolves to a `Repo` instance in the global orchestration engine. Detection is deterministic: identical root path → identical sorted, de-duplicated `WorkspaceConfig.packages` list. Type:
+
+```ts
+type WorkspaceConfig = {
+  type: "pnpm" | "yarn" | "npm" | "nx" | "turbo";
+  root: string;
+  packages: string[]; // sorted, unique, node_modules/.git/dist/out excluded
+};
+```
+
+Pass 6 of the architecture harness covers: determinism, inter-repo edges, cycle rejection, ordering, batching, policy propagation, cross-repo gating, rollback-all, drift detection, cache reuse. Passes 6.11–6.14 cover workspace detection: pnpm workspace parsing, turbo/nx precedence, determinism across multiple calls, and de-duplication of overlapping glob patterns. Current scope: core engine + tests; UI integration is a separate layer.
 
 ### Distributed State Synchronization (Alpha Core)
 

@@ -213,6 +213,7 @@ import {
   synthesizeGlobalPlan,
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
+import { detectWorkspace } from "../../core/workspaceDetection.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -4672,6 +4673,119 @@ const pass6: TestPass = {
         const changedPlan = synthesizeGlobalPlan(changedContext, { cache });
 
         assert.notStrictEqual(changedPlan.id, planA.id);
+      },
+    },
+    {
+      id: "6.11",
+      name: "workspace detection reads pnpm workspace config with deterministic package ordering",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-pnpm-"));
+
+        try {
+          fs.writeFileSync(
+            path.join(root, "pnpm-workspace.yaml"),
+            [
+              "packages:",
+              "  - \"packages/*\"",
+              "  - \"apps/*\"",
+            ].join("\n"),
+            "utf-8"
+          );
+
+          for (const packageDir of ["packages/api", "packages/zeta", "apps/web"]) {
+            fs.mkdirSync(path.join(root, packageDir), { recursive: true });
+            fs.writeFileSync(path.join(root, packageDir, "package.json"), "{}", "utf-8");
+          }
+
+          const detected = detectWorkspace(root);
+          assert.strictEqual(detected.type, "pnpm");
+          assert.deepStrictEqual(detected.packages, ["apps/web", "packages/api", "packages/zeta"]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "6.12",
+      name: "workspace detection prioritizes turbo marker over package manager hints",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-turbo-"));
+
+        try {
+          fs.writeFileSync(path.join(root, "turbo.json"), "{}", "utf-8");
+          fs.writeFileSync(path.join(root, "yarn.lock"), "", "utf-8");
+          fs.writeFileSync(
+            path.join(root, "package.json"),
+            JSON.stringify({ workspaces: ["packages/*"], packageManager: "yarn@4.1.1" }),
+            "utf-8"
+          );
+
+          for (const packageDir of ["packages/b", "packages/a"]) {
+            fs.mkdirSync(path.join(root, packageDir), { recursive: true });
+            fs.writeFileSync(path.join(root, packageDir, "package.json"), "{}", "utf-8");
+          }
+
+          const detected = detectWorkspace(root);
+          assert.strictEqual(detected.type, "turbo");
+          assert.deepStrictEqual(detected.packages, ["packages/a", "packages/b"]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "6.13",
+      name: "workspace detection supports nx defaults and remains deterministic",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-nx-"));
+
+        try {
+          fs.writeFileSync(path.join(root, "nx.json"), "{}", "utf-8");
+
+          for (const packageDir of ["libs/core", "apps/site", "packages/tooling"]) {
+            fs.mkdirSync(path.join(root, packageDir), { recursive: true });
+            fs.writeFileSync(path.join(root, packageDir, "package.json"), "{}", "utf-8");
+          }
+
+          const first = detectWorkspace(root);
+          const second = detectWorkspace(root);
+
+          assert.strictEqual(first.type, "nx");
+          assert.deepStrictEqual(first.packages, ["apps/site", "libs/core", "packages/tooling"]);
+          assert.deepStrictEqual(first, second);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "6.14",
+      name: "workspace detection reads package.json workspaces and deduplicates overlaps",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-npm-"));
+
+        try {
+          fs.writeFileSync(
+            path.join(root, "package.json"),
+            JSON.stringify({
+              workspaces: {
+                packages: ["packages/*", "packages/a"],
+              },
+            }),
+            "utf-8"
+          );
+
+          for (const packageDir of ["packages/b", "packages/a"]) {
+            fs.mkdirSync(path.join(root, packageDir), { recursive: true });
+            fs.writeFileSync(path.join(root, packageDir, "package.json"), "{}", "utf-8");
+          }
+
+          const detected = detectWorkspace(root);
+          assert.strictEqual(detected.type, "npm");
+          assert.deepStrictEqual(detected.packages, ["packages/a", "packages/b"]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       },
     },
   ],

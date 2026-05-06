@@ -113,7 +113,8 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "npm run build:extension && npm run build:webview",
+    "build": "npm run clean:tmp && npm run build:extension && npm run build:webview",
+    "clean:tmp": "find . -name '.tmp-*' -exec rm -rf {} +",
     "build:extension": "tsc -p ./",
     "build:webview": "vite build",
     "watch": "npm run watch:extension",

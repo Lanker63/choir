@@ -1,6 +1,6 @@
 # Choir Design Guidelines
 
-Choir is a VS Code extension for deterministic, policy-driven workspace governance: compiles intent → rules, synthesizes plans from state, optimizes and executes plans transactionally, records immutable audit evidence, supports versioned macro libraries, distributed state sync, and global orchestration with org-wide policy propagation.
+Choir is a VS Code extension for deterministic, policy-driven workspace governance: compiles intent → rules, synthesizes plans from state, optimizes and executes plans transactionally, records immutable audit evidence, supports versioned macro libraries, distributed state sync, global orchestration with org-wide policy propagation, and monorepo/workspace-aware multi-package orchestration.
 
 ---
 
@@ -77,6 +77,7 @@ State correctness layer contract:
   - `.choir/state.audit.jsonl`
 - Distributed sync contract: delta-based `ChangeSet` sync (`add`/`update`/`remove`); clock increment `+= 1`, merge `= max + 1`; no silent conflict resolution; last-write-wins default with tie-break; `push`/`pull`/`bidirectional` modes with convergence requirement; tamper → explicit manual-resolution conflict. (Full spec: Distributed Synchronization Contract.)
 - Global orchestration contract: cross-repo DAG with inter-repo edges; cycle → fail; one global plan (no per-repo isolation); validation: no missing/circular deps, no conflicting actions; org policies propagate to all repos, no opt-out; cross-repo violations block entire plan; any batch failure → rollback-all; cache reuse deterministic and input-hash bound. (Full spec: Global Orchestration Contract.)
+  - Workspace detection feeds `Repo` instances into the global DAG; each discovered package becomes a `Repo`; detection result is deterministic for identical root path. (Full spec: Workspace Detection Contract.)
 
 ---
 
@@ -133,6 +134,36 @@ Enforcement: cross-repo deny/required-approval blocks entire execution; no parti
 Drift: detected per repo; surfaced as violation, not silently corrected.
 
 Scope: core engine + architecture harness only; UI wiring is a separate layer.
+
+### Workspace Detection Contract
+
+Types: `WorkspaceConfig`
+
+```ts
+type WorkspaceConfig = {
+  type: "pnpm" | "yarn" | "npm" | "nx" | "turbo";
+  root: string;
+  packages: string[];
+};
+```
+
+Operation: `detectWorkspace(rootPath: string): WorkspaceConfig`
+
+Detection precedence (first match wins, checked in order):
+1. `nx.json` present → type `nx`, default patterns `["packages/*", "apps/*", "libs/*"]`
+2. `turbo.json` present → type `turbo`, reads `pipeline`/`tasks` workspace patterns or defaults
+3. `pnpm-workspace.yaml` present → type `pnpm`, reads `packages` array from YAML
+4. `package.json` `workspaces` field present → type `yarn` or `npm`; accepts string array or `{ packages }` object form
+5. Fallback → type `npm`, single-element `packages` list containing `root`
+
+Hard constraints:
+- Deterministic: same `rootPath` → identical `WorkspaceConfig`; no heuristic ranking or random tiebreak
+- Package list is `sortedUnique`: sorted lexicographically, duplicates removed (overlapping glob patterns yield stable single entry)
+- Ignores `node_modules`, `.git`, `dist`, `out` during glob expansion
+- No side effects; does not write files or mutate workspace state
+- Config parse failures are surfaced as thrown errors, not silent fallbacks
+
+Scope: read-only workspace scanning; feeds `Repo` entries into the Global Orchestration engine.
 
 ### Interactive Init Wizard Contract (`@choir init`)
 
