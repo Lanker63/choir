@@ -438,7 +438,7 @@ function compileActionToYAML(
   }
 
   if (action.type === "plan") {
-    if (action.optimize) {
+    if (action.optimize || action.adaptive) {
       return next;
     }
 

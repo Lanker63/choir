@@ -35,6 +35,7 @@ import {
   canReuse,
   findMatchingStrategies,
   readStrategyMemory,
+  recordStrategies,
   recordStrategy,
   selectFromMemory,
   validatePlanStillApplies,
@@ -83,6 +84,14 @@ export type PreviewSelectionResult = {
   selectedPlan: Plan;
   basePlanId: string;
   strategyTrace: StrategyTrace;
+};
+
+export type AdaptivePlanSelectionResult = {
+  basePlan: Plan;
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  strategyTrace: StrategyTrace;
+  memoryTrace: StrategyMemoryTrace;
 };
 
 export type MultiStrategyPreview = {
@@ -233,6 +242,41 @@ async function selectStrategyForPlan(
     controlPlane: options.controlPlane,
     root: options.root,
   });
+
+  const lineageByChild = new Map<string, { parentId: string; mutation: NonNullable<NonNullable<typeof adaptiveSelection.adaptiveTrace.evolution>[number]>["mutation"] }>();
+  for (const entry of [...adaptiveSelection.adaptiveTrace.evolution]
+    .sort((left, right) => left.childId.localeCompare(right.childId))) {
+    if (!lineageByChild.has(entry.childId)) {
+      lineageByChild.set(entry.childId, {
+        parentId: entry.parentId,
+        mutation: entry.mutation,
+      });
+    }
+  }
+
+  const feedback = adaptiveSelection.iterations
+    .sort((left, right) => left.iteration - right.iteration)
+    .flatMap((iteration) =>
+      [...iteration.outcomes]
+        .sort((left, right) => left.strategyId.localeCompare(right.strategyId))
+        .map((outcome) => {
+          const lineage = lineageByChild.get(outcome.strategyId);
+          return {
+            outcome,
+            adaptive: {
+              iteration: iteration.iteration,
+              ...(lineage ? { parentId: lineage.parentId, mutation: lineage.mutation } : {}),
+              ...(outcome.strategyId === iteration.selectedStrategyId ? { selected: true } : {}),
+              ...(outcome.strategyId === adaptiveSelection.selected.strategyId ? { finalSelected: true } : {}),
+            },
+          };
+        })
+    );
+
+  if (feedback.length > 0) {
+    recordStrategies(options.root, signature, feedback);
+  }
+
   const trace = buildStrategyTrace(
     adaptiveSelection.outcomes,
     adaptiveSelection.selected,
@@ -832,6 +876,52 @@ export async function generateSelectedPlanPreview(
     selectedPlan: selectedOutcome.plan,
     basePlanId: basePlan.id,
     strategyTrace: selection.trace,
+  };
+}
+
+export async function evaluateAdaptivePlanSelection(
+  control: ControlPlane,
+  options: {
+    root: string;
+    requestedPlanId?: string;
+    targetGoal?: string;
+  }
+): Promise<AdaptivePlanSelectionResult> {
+  const state = readStatePlane(options.root) ?? createEmptyStatePlane();
+  const allPlans = sortedPlans(control.execution.plans);
+
+  let candidates = allPlans;
+  if (options.requestedPlanId) {
+    const requested = allPlans.find((plan) => plan.id === options.requestedPlanId);
+    if (!requested) {
+      throw new Error(`Plan not found: ${options.requestedPlanId}`);
+    }
+    candidates = [requested];
+  } else if (options.targetGoal) {
+    candidates = allPlans.filter((plan) => (plan.goalRefs ?? []).includes(options.targetGoal as string));
+  }
+
+  const basePlan = sortedPlans(candidates)[0];
+  if (!basePlan) {
+    throw new Error("Adaptive planning unavailable: no matching execution plans found.");
+  }
+
+  const selection = await selectStrategyForPlan(basePlan, state, {
+    controlPlane: control,
+    root: options.root,
+    mode: "preview",
+  });
+
+  if (selection.history.length > 0) {
+    appendStrategyHistory(options.root, selection.history);
+  }
+
+  return {
+    basePlan,
+    selected: selection.selected,
+    outcomes: selection.outcomes,
+    strategyTrace: selection.trace,
+    memoryTrace: selection.memoryTrace,
   };
 }
 

@@ -93,6 +93,12 @@ export type AdaptiveTrace = {
   decisions: string[];
 };
 
+export type AdaptiveIterationResult = {
+  iteration: number;
+  selectedStrategyId: string;
+  outcomes: StrategyOutcome[];
+};
+
 export type StrategySelectionTrace = {
   evaluated: {
     strategyId: string;
@@ -151,6 +157,7 @@ export type AdaptiveStrategySelection = {
   outcomes: StrategyOutcome[];
   adaptiveTrace: AdaptiveTrace;
   history: StrategyHistory[];
+  iterations: AdaptiveIterationResult[];
 };
 
 function sortedUnique(values: string[]): string[] {
@@ -906,6 +913,23 @@ function dedupeStrategies(strategies: Strategy[]): Strategy[] {
   return [...byId.values()].sort((left, right) => left.id.localeCompare(right.id));
 }
 
+function dedupeOutcomes(outcomes: StrategyOutcome[]): StrategyOutcome[] {
+  const byStrategy = new Map<string, StrategyOutcome>();
+
+  for (const outcome of outcomes) {
+    const existing = byStrategy.get(outcome.strategyId);
+    if (!existing) {
+      byStrategy.set(outcome.strategyId, outcome);
+      continue;
+    }
+
+    const preferred = selectBestOutcome([existing, outcome]);
+    byStrategy.set(outcome.strategyId, preferred);
+  }
+
+  return [...byStrategy.values()].sort((left, right) => left.strategyId.localeCompare(right.strategyId));
+}
+
 function mergeStrategies(base: Strategy[], refined: Strategy[]): Strategy[] {
   const merged = dedupeStrategies([...base, ...refined]);
   return merged.slice(0, MAX_STRATEGY_POOL);
@@ -1323,6 +1347,61 @@ export async function adaptiveCycle(
   };
 }
 
+function adaptiveCycleFingerprint(result: {
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  patterns: FailurePattern[];
+  mutations: StrategyMutation[];
+  variants: Strategy[];
+  evolution: StrategyEvolution[];
+}): string {
+  return JSON.stringify({
+    selected: result.selected.strategyId,
+    outcomes: dedupeOutcomes(result.outcomes).map((outcome) => ({
+      strategyId: outcome.strategyId,
+      metrics: outcome.metrics,
+      success: outcome.success,
+      previewHash: outcome.previewHash,
+    })),
+    patterns: dedupePatterns(result.patterns).map((pattern) => patternKey(pattern)),
+    mutations: dedupeMutations(result.mutations).map((mutation) => mutationKey(mutation)),
+    variants: dedupeStrategies(result.variants).map((variant) => variant.id),
+    evolution: [...result.evolution]
+      .sort((left, right) => left.childId.localeCompare(right.childId))
+      .map((entry) => ({
+        parentId: entry.parentId,
+        childId: entry.childId,
+        mutation: mutationKey(entry.mutation),
+      })),
+  });
+}
+
+export async function assertDeterministicAdaptiveCycle(
+  strategy: Strategy,
+  basePlan: Plan,
+  state: StatePlane,
+  options: EvaluateStrategyOptions
+): Promise<{
+  selected: StrategyOutcome;
+  outcomes: StrategyOutcome[];
+  patterns: FailurePattern[];
+  mutations: StrategyMutation[];
+  variants: Strategy[];
+  evolution: StrategyEvolution[];
+}> {
+  const first = await adaptiveCycle(strategy, clonePlan(basePlan), cloneState(state), options);
+  const second = await adaptiveCycle(strategy, clonePlan(basePlan), cloneState(state), options);
+
+  const firstFingerprint = adaptiveCycleFingerprint(first);
+  const secondFingerprint = adaptiveCycleFingerprint(second);
+
+  if (firstFingerprint !== secondFingerprint) {
+    throw new Error("Determinism violation: adaptiveCycle produced divergent results for identical inputs");
+  }
+
+  return first;
+}
+
 export async function iterateStrategy(
   strategy: Strategy,
   maxIterations: number,
@@ -1414,6 +1493,8 @@ export async function adaptiveStrategySelection(
   const mutationDetails: StrategyMutation[] = [];
   const evolution: StrategyEvolution[] = [];
   const strategiesTested = new Set<string>();
+  const allOutcomes: StrategyOutcome[] = [];
+  const iterationsTrace: AdaptiveIterationResult[] = [];
   let latestOutcomes: StrategyOutcome[] = [];
   let previousBest: StrategyOutcome | undefined;
 
@@ -1426,10 +1507,16 @@ export async function adaptiveStrategySelection(
     });
 
     latestOutcomes = outcomes;
+    allOutcomes.push(...outcomes);
     strategiesEvaluated += outcomes.length;
     outcomes.forEach((outcome) => strategiesTested.add(outcome.strategyId));
 
     const best = selectBestOutcome(outcomes);
+    iterationsTrace.push({
+      iteration: iterations,
+      selectedStrategyId: best.strategyId,
+      outcomes: [...outcomes].sort((left, right) => left.strategyId.localeCompare(right.strategyId)),
+    });
     decisions.push(`Iteration ${iterations}: best=${best.strategyId} remaining=${best.metrics.remainingViolations} introduced=${best.metrics.introducedErrors}`);
 
     if (previousBest && !isImproved(best.metrics, previousBest.metrics)) {
@@ -1453,9 +1540,10 @@ export async function adaptiveStrategySelection(
 
       return {
         selected: best,
-        outcomes,
+        outcomes: dedupeOutcomes(allOutcomes),
         adaptiveTrace,
-        history: buildStrategyHistory(basePlan.id, outcomes),
+        history: buildStrategyHistory(basePlan.id, dedupeOutcomes(allOutcomes)),
+        iterations: iterationsTrace,
       };
     }
 
@@ -1502,9 +1590,10 @@ export async function adaptiveStrategySelection(
 
   return {
     selected: finalBest,
-    outcomes: latestOutcomes,
+    outcomes: dedupeOutcomes(allOutcomes.length > 0 ? allOutcomes : latestOutcomes),
     adaptiveTrace,
-    history: buildStrategyHistory(basePlan.id, latestOutcomes),
+    history: buildStrategyHistory(basePlan.id, dedupeOutcomes(allOutcomes.length > 0 ? allOutcomes : latestOutcomes)),
+    iterations: iterationsTrace,
   };
 }
 

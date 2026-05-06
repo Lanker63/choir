@@ -1,5 +1,5 @@
 export type ConductorCommand =
-  | { kind: "plan"; goal?: string }
+  | { kind: "plan"; goal?: string; adaptive?: boolean }
   | { kind: "approve"; planId?: string }
   | { kind: "preview"; planId?: string }
   | { kind: "execute"; planId?: string; previewId?: string }
@@ -18,12 +18,25 @@ function isPreviewHash(value: string): boolean {
 export function parseConductorCommand(input: string): ConductorCommand {
   const prompt = input.trim();
 
+  const adaptivePlanWithGoalMatch = prompt.match(/^plan\s+--adaptive\s+for\s+goal\s*:\s*(.+)$/i);
+  if (adaptivePlanWithGoalMatch) {
+    return {
+      kind: "plan",
+      goal: clean(adaptivePlanWithGoalMatch[1]),
+      adaptive: true,
+    };
+  }
+
   const planWithGoalMatch = prompt.match(/^plan\s+for\s+goal\s*:\s*(.+)$/i);
   if (planWithGoalMatch) {
     return {
       kind: "plan",
       goal: clean(planWithGoalMatch[1]),
     };
+  }
+
+  if (/^plan\s+--adaptive$/i.test(prompt)) {
+    return { kind: "plan", adaptive: true };
   }
 
   if (/^plan$/i.test(prompt)) {

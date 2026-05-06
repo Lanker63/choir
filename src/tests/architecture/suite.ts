@@ -27,6 +27,8 @@ import {
   STRATEGIES,
   StrategyOutcome,
   adaptiveStrategySelection,
+  assertDeterministicAdaptiveCycle,
+  analyzeFailure,
   analyzeOutcome,
   buildStrategyTrace,
   evaluateStrategies,
@@ -50,6 +52,7 @@ import {
   findMatchingStrategies,
   matchSignature,
   readStrategyMemory,
+  recordStrategies,
   recordStrategy,
   selectFromMemory,
   validatePlanStillApplies,
@@ -685,11 +688,24 @@ const pass2: TestPass = {
           optimize: true,
         });
 
+        const adaptivePlan = parseCommand("choir plan --adaptive");
+        assert.deepStrictEqual(adaptivePlan.ast, {
+          type: "plan",
+          adaptive: true,
+        });
+
         const optimizePlanForTarget = parseCommand("choir plan --optimize for \"service boundaries\"");
         assert.deepStrictEqual(optimizePlanForTarget.ast, {
           type: "plan",
           target: "service boundaries",
           optimize: true,
+        });
+
+        const adaptivePlanForTarget = parseCommand("choir plan --adaptive for \"service boundaries\"");
+        assert.deepStrictEqual(adaptivePlanForTarget.ast, {
+          type: "plan",
+          target: "service boundaries",
+          adaptive: true,
         });
 
         const simulate = parseCommand("choir simulate");
@@ -760,6 +776,7 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir define goal"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir plan --optimize --optimize"), /Duplicate plan optimize flag/);
+        assert.throws(() => parseCommand("choir plan --adaptive --adaptive"), /Duplicate plan adaptive flag/);
         assert.throws(() => parseCommand("choir execute --steps 1,10"), /require --strategy/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected execute options/);
         assert.throws(() => parseCommand("choir rollback --stage"), /Expected identifier/);
@@ -1617,7 +1634,7 @@ const pass2: TestPass = {
         assert.deepStrictEqual(analyzeTypes, ["workspace", "hotspots", "summary"]);
 
         const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
-        assert.deepStrictEqual(planTail, ["for", "--optimize", "then"]);
+        assert.deepStrictEqual(planTail, ["for", "--optimize", "--adaptive", "then"]);
 
         const simulateTail = getDeterministicCompletions("choir simulate ").map((item) => item.label);
         assert.deepStrictEqual(simulateTail, ["plan", "units", "then"]);
@@ -4203,6 +4220,177 @@ const pass4: TestPass = {
           const deduped = dedupeMemory([entry, duplicate]);
           assert.strictEqual(deduped.length, 1);
         });
+      },
+    },
+    {
+      id: "4.25",
+      name: "adaptive failure analysis is deterministic and classifies extended patterns",
+      run: async () => {
+        const outcome: StrategyOutcome = {
+          strategyId: "s-adaptive-seed",
+          strategyType: "adaptive",
+          plan: makePlan("plan-adaptive-failure", [
+            makeTask("t-analysis", "analysis"),
+            makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/adaptive.ts"] }),
+            makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor"] }),
+          ]),
+          patches: [],
+          diagnostics: [],
+          validation: {
+            passed: false,
+            diagnostics: [],
+            conflicts: [],
+            invariantChecks: [],
+            errors: ["policy denied"],
+          },
+          metrics: {
+            filesChanged: 2,
+            patchesCount: 5,
+            remainingViolations: 1,
+            introducedErrors: 1,
+          },
+          success: false,
+          fileChanges: [],
+          previewHash: "",
+          failures: [
+            { type: "dependency-ordering", unitId: "t-refactor" },
+            { type: "policy-approval", unitId: "t-enforce" },
+          ],
+        };
+
+        const first = analyzeFailure(outcome);
+        const second = analyzeFailure(outcome);
+
+        assert.deepStrictEqual(first, second);
+        assert.ok(first.some((pattern) => pattern.type === "dependency-ordering"));
+        assert.ok(first.some((pattern) => pattern.type === "policy-violation"));
+        assert.ok(first.some((pattern) => pattern.type === "high-risk"));
+      },
+    },
+    {
+      id: "4.26",
+      name: "adaptive cycle determinism assertion passes for identical inputs",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        state.violations = [
+          {
+            id: "diag-cycle-1",
+            ruleId: "rule-cycle",
+            message: "cycle violation",
+            severity: "warning",
+            category: "AST",
+            location: testLocation("src/cycle.ts", 1, 0, 1, 1),
+            traceId: "trace-cycle-1",
+          },
+        ];
+
+        const basePlan = makePlan("plan-adaptive-cycle", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/cycle.ts"] }),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor"] }),
+        ]);
+
+        const seed = STRATEGIES.find((strategy) => strategy.id === "s-minimal") ?? STRATEGIES[0];
+        assert.ok(seed);
+
+        const result = await assertDeterministicAdaptiveCycle(seed!, basePlan, state, {
+          controlPlane: makeControlPlane(),
+          root: repoRoot,
+        });
+
+        assert.ok(result.outcomes.length >= 1);
+        assert.ok(result.selected.strategyId.length > 0);
+      },
+    },
+    {
+      id: "4.27",
+      name: "plan --adaptive integrates memory fallback and records iteration feedback",
+      run: async () => {
+        await withFixture("simple-project", async ({ root }) => {
+          const parsed = parseCommand("choir plan --adaptive for \"goal-adaptive\"");
+          assert.deepStrictEqual(parsed.ast, {
+            type: "plan",
+            target: "goal-adaptive",
+            adaptive: true,
+          });
+
+          const control = makeControlPlane();
+          const state = readStatePlane(root) ?? createEmptyStatePlane();
+          const basePlan = {
+            ...makePlan("plan-adaptive-memory", [
+              makeTask("t-analysis", "analysis"),
+              makeTask("t-refactor", "refactor", { dependsOn: ["t-analysis"], files: ["src/index.ts"] }),
+              makeTask("t-enforce", "enforce", { dependsOn: ["t-refactor"] }),
+            ]),
+            goalRefs: ["goal-adaptive"],
+          };
+
+          const first = await adaptiveStrategySelection(basePlan, state, {
+            controlPlane: control,
+            root,
+          });
+
+          const signature = buildSignature(control, state);
+          const feedback = first.iterations.flatMap((iteration) =>
+            iteration.outcomes.map((outcome) => ({
+              outcome,
+              adaptive: {
+                iteration: iteration.iteration,
+                selected: outcome.strategyId === iteration.selectedStrategyId,
+                finalSelected: outcome.strategyId === first.selected.strategyId,
+              },
+            }))
+          );
+
+          recordStrategies(root, signature, feedback);
+
+          const memory = readStrategyMemory(root);
+          const matches = findMatchingStrategies(signature, memory)
+            .filter((entry) => entry.plan.id === "plan-adaptive-memory");
+
+          assert.ok(matches.length >= first.outcomes.length);
+          assert.ok(matches.some((entry) => entry.adaptive?.iteration !== undefined));
+
+          const reusable = matches.filter((entry) => canReuse(entry));
+          const selectedFromMemory = selectFromMemory(reusable);
+
+          assert.ok(selectedFromMemory);
+          assert.ok((selectedFromMemory?.strategyId ?? "").length > 0);
+        });
+      },
+    },
+    {
+      id: "4.28",
+      name: "adaptive acceptance criteria converges to valid deterministic selection",
+      run: async () => {
+        const state = createEmptyStatePlane();
+        const basePlan = makePlan("plan-adaptive-acceptance", [
+          makeTask("t-analysis", "analysis"),
+          makeTask("t-enforce", "enforce", { dependsOn: ["t-analysis"] }),
+        ]);
+
+        const first = await adaptiveStrategySelection(basePlan, state, {
+          controlPlane: makeControlPlane(),
+          root: repoRoot,
+        });
+        const second = await adaptiveStrategySelection(basePlan, state, {
+          controlPlane: makeControlPlane(),
+          root: repoRoot,
+        });
+
+        assert.ok(first.adaptiveTrace.iterations >= 1);
+        assert.ok(first.adaptiveTrace.iterations <= MAX_ADAPTIVE_ITERATIONS);
+        assert.ok(first.adaptiveTrace.decisions.length > 0);
+
+        assert.strictEqual(first.selected.strategyId, second.selected.strategyId);
+        assert.deepStrictEqual(
+          first.outcomes.map((outcome) => outcome.strategyId),
+          second.outcomes.map((outcome) => outcome.strategyId)
+        );
+        assert.deepStrictEqual(
+          first.adaptiveTrace.strategiesTested,
+          second.adaptiveTrace.strategiesTested
+        );
       },
     },
     {

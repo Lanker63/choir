@@ -348,6 +348,10 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
         issues.push(issue("plan-target-invalid", "error", "Plan target must be a string when present", `${path}.target`));
       }
 
+      if (action.adaptive !== undefined && action.adaptive !== true) {
+        issues.push(issue("plan-adaptive-invalid", "error", "Plan adaptive flag must be true when present", `${path}.adaptive`));
+      }
+
       return;
     }
 

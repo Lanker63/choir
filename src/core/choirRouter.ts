@@ -30,8 +30,9 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <analyze-target> ::= "workspace" | "hotspots" | "summary"
 
-<plan> ::= "plan" ["for" <string>] ["--optimize"]
-         | "plan" "--optimize" ["for" <string>]
+<plan> ::= "plan" ["for" <string>] ["--optimize"] ["--adaptive"]
+         | "plan" "--optimize" ["for" <string>] ["--adaptive"]
+         | "plan" "--adaptive" ["for" <string>] ["--optimize"]
          | "plan" "approve" <identifier>
 
 <refactor> ::= "refactor" "rename" <identifier> <identifier>
@@ -160,6 +161,7 @@ export const CHOIR_SEQUENCE_KEYWORD = "then" as const;
 export const CHOIR_PLAN_REF_KEYWORD = "plan" as const;
 export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
 export const CHOIR_PLAN_OPTIMIZE_FLAG = "--optimize" as const;
+export const CHOIR_PLAN_ADAPTIVE_FLAG = "--adaptive" as const;
 export const CHOIR_EXECUTE_STRATEGY_FLAG = "--strategy" as const;
 export const CHOIR_EXECUTE_STEPS_FLAG = "--steps" as const;
 export const CHOIR_EXECUTE_PHASES_FLAG = "--phases" as const;
@@ -179,6 +181,7 @@ const KEYWORDS = new Set<string>([
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_OPTIMIZE_FLAG,
+  CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_EXECUTE_STEPS_FLAG,
   CHOIR_EXECUTE_PHASES_FLAG,
@@ -220,6 +223,7 @@ export type PlanNode = {
   type: "plan";
   target?: string;
   optimize?: boolean;
+  adaptive?: boolean;
 };
 
 export type RefactorRenameNode = {
@@ -866,35 +870,47 @@ class Parser {
 
     let target: string | undefined;
     let optimize = false;
+    let adaptive = false;
 
-    if (this.consumePlanOptimizeFlag()) {
-      optimize = true;
-    }
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
 
-    if (this.consumeKeyword("for")) {
-      target = this.expectString();
-    }
+      if (this.consumePlanOptimizeFlag()) {
+        if (optimize) {
+          throw new Error("Duplicate plan optimize flag: --optimize");
+        }
 
-    if (this.consumePlanOptimizeFlag()) {
-      if (optimize) {
-        throw new Error("Duplicate plan optimize flag: --optimize");
+        optimize = true;
+        progressed = true;
+        continue;
       }
 
-      optimize = true;
-    }
+      if (this.consumePlanAdaptiveFlag()) {
+        if (adaptive) {
+          throw new Error("Duplicate plan adaptive flag: --adaptive");
+        }
 
-    if (this.consumeKeyword("for")) {
-      if (target !== undefined) {
-        throw new Error("Duplicate plan target: for <string>");
+        adaptive = true;
+        progressed = true;
+        continue;
       }
 
-      target = this.expectString();
+      if (this.consumeKeyword("for")) {
+        if (target !== undefined) {
+          throw new Error("Duplicate plan target: for <string>");
+        }
+
+        target = this.expectString();
+        progressed = true;
+      }
     }
 
     return {
       type: "plan",
       ...(target !== undefined ? { target } : {}),
       ...(optimize ? { optimize: true } : {}),
+      ...(adaptive ? { adaptive: true } : {}),
     };
   }
 
@@ -1430,6 +1446,20 @@ class Parser {
     return true;
   }
 
+  private consumePlanAdaptiveFlag(): boolean {
+    const token = this.peek();
+    if (!token || (token.type !== "keyword" && token.type !== "identifier")) {
+      return false;
+    }
+
+    if (token.value.toLowerCase() !== CHOIR_PLAN_ADAPTIVE_FLAG) {
+      return false;
+    }
+
+    this.index += 1;
+    return true;
+  }
+
   private consumeSymbol(value: "=" | "," | "@"): boolean {
     const token = this.peek();
     if (!token || token.type !== "symbol" || token.value !== value) {
@@ -1484,7 +1514,8 @@ function validateActionNode(node: ActionNode): boolean {
   if (node.type === "plan") {
     const targetValid = node.target === undefined || (typeof node.target === "string" && node.target.length > 0);
     const optimizeValid = node.optimize === undefined || node.optimize === true;
-    return targetValid && optimizeValid;
+    const adaptiveValid = node.adaptive === undefined || node.adaptive === true;
+    return targetValid && optimizeValid && adaptiveValid;
   }
 
   if (node.type === "refactor-rename") {

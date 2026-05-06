@@ -3,7 +3,7 @@ import fs from "fs";
 import path from "path";
 import { ControlPlane, Plan, Task } from "../schema.js";
 import { StatePlane } from "./state.js";
-import type { StrategyMetrics, StrategyOutcome, StrategyType } from "./strategyPlanner.js";
+import type { StrategyMetrics, StrategyMutation, StrategyOutcome, StrategyType } from "./strategyPlanner.js";
 
 export type ContextSignature = {
   goals: string[];
@@ -25,6 +25,13 @@ export type StrategyMemoryEntry = {
     metrics: StrategyMetrics;
     success: boolean;
     deterministic?: boolean;
+  };
+  adaptive?: {
+    iteration?: number;
+    parentId?: string;
+    mutation?: StrategyMutation;
+    selected?: boolean;
+    finalSelected?: boolean;
   };
   createdAt: string;
 };
@@ -68,6 +75,59 @@ function normalizeTask(task: Task): Task {
         },
       }
       : {}),
+  };
+}
+
+function normalizeMutationForMemory(mutation: StrategyMutation): StrategyMutation {
+  if (mutation.type === "reorder") {
+    return {
+      type: "reorder",
+      units: sortedUnique(mutation.units ?? []),
+    };
+  }
+
+  if (mutation.type === "split-stage") {
+    return {
+      type: "split-stage",
+      stageId: mutation.stageId,
+    };
+  }
+
+  if (mutation.type === "reduce-scope") {
+    return {
+      type: "reduce-scope",
+      units: sortedUnique(mutation.units ?? []),
+    };
+  }
+
+  if (mutation.type === "add-validation") {
+    return {
+      type: "add-validation",
+      stageId: mutation.stageId,
+    };
+  }
+
+  return {
+    type: "adjust-batching",
+    size: Math.max(1, Math.floor(mutation.size)),
+  };
+}
+
+function normalizeAdaptiveFeedback(feedback: StrategyMemoryEntry["adaptive"] | undefined): StrategyMemoryEntry["adaptive"] | undefined {
+  if (!feedback) {
+    return undefined;
+  }
+
+  return {
+    ...(typeof feedback.iteration === "number" && Number.isFinite(feedback.iteration)
+      ? { iteration: Math.max(1, Math.floor(feedback.iteration)) }
+      : {}),
+    ...(typeof feedback.parentId === "string" && feedback.parentId.length > 0
+      ? { parentId: feedback.parentId }
+      : {}),
+    ...(feedback.mutation ? { mutation: normalizeMutationForMemory(feedback.mutation) } : {}),
+    ...(feedback.selected === true ? { selected: true } : {}),
+    ...(feedback.finalSelected === true ? { finalSelected: true } : {}),
   };
 }
 
@@ -193,6 +253,7 @@ function normalizeMemoryEntry(entry: StrategyMemoryEntry): StrategyMemoryEntry {
     ...entry,
     signature: normalizeSignature(entry.signature),
     plan: normalizePlan(entry.plan),
+    ...(normalizeAdaptiveFeedback(entry.adaptive) ? { adaptive: normalizeAdaptiveFeedback(entry.adaptive) } : {}),
   };
 }
 
@@ -230,6 +291,9 @@ function parseMemory(raw: unknown): StrategyMemoryEntry[] {
       signature: signature as ContextSignature,
       plan: plan as Plan,
       outcome: outcome as StrategyMemoryEntry["outcome"],
+      adaptive: (entry.adaptive && typeof entry.adaptive === "object")
+        ? entry.adaptive as StrategyMemoryEntry["adaptive"]
+        : undefined,
     } satisfies StrategyMemoryEntry;
 
     return [normalizeMemoryEntry(parsed)];
@@ -264,6 +328,7 @@ function memoryEntryHash(entry: StrategyMemoryEntry): string {
       strategyType: entry.strategyType,
       plan: normalizePlan(entry.plan),
       outcome: entry.outcome,
+      adaptive: normalizeAdaptiveFeedback(entry.adaptive),
     }))
     .digest("hex");
 }
@@ -309,7 +374,8 @@ export function generateMemoryEntryId(
   signature: ContextSignature,
   strategyId: string,
   plan: Plan,
-  outcome: StrategyMemoryEntry["outcome"]
+  outcome: StrategyMemoryEntry["outcome"],
+  adaptive?: StrategyMemoryEntry["adaptive"]
 ): string {
   const digest = createHash("sha256")
     .update(JSON.stringify({
@@ -317,6 +383,7 @@ export function generateMemoryEntryId(
       strategyId,
       plan: normalizePlan(plan),
       outcome,
+      adaptive: normalizeAdaptiveFeedback(adaptive),
     }))
     .digest("hex")
     .slice(0, 20);
@@ -327,15 +394,20 @@ export function generateMemoryEntryId(
 export function recordStrategy(
   root: string,
   signature: ContextSignature,
-  outcome: StrategyOutcome
+  outcome: StrategyOutcome,
+  options?: {
+    deterministic?: boolean;
+    adaptive?: StrategyMemoryEntry["adaptive"];
+  }
 ): StrategyMemoryEntry {
   const existing = readStrategyMemory(root);
+  const adaptive = normalizeAdaptiveFeedback(options?.adaptive);
   const entryOutcome: StrategyMemoryEntry["outcome"] = {
     metrics: outcome.metrics,
     success: outcome.success,
-    deterministic: true,
+    deterministic: options?.deterministic ?? true,
   };
-  const id = generateMemoryEntryId(signature, outcome.strategyId, outcome.plan, entryOutcome);
+  const id = generateMemoryEntryId(signature, outcome.strategyId, outcome.plan, entryOutcome, adaptive);
   const existingEntry = existing.find((entry) => entry.id === id);
 
   const entry: StrategyMemoryEntry = normalizeMemoryEntry({
@@ -345,11 +417,56 @@ export function recordStrategy(
     strategyType: outcome.strategyType ?? inferredStrategyType(outcome.strategyId),
     plan: outcome.plan,
     outcome: entryOutcome,
+    ...(adaptive ? { adaptive } : {}),
     createdAt: existingEntry?.createdAt ?? new Date().toISOString(),
   });
 
   persistStrategyMemory(root, [...existing, entry]);
   return entry;
+}
+
+export function recordStrategies(
+  root: string,
+  signature: ContextSignature,
+  outcomes: Array<{
+    outcome: StrategyOutcome;
+    deterministic?: boolean;
+    adaptive?: StrategyMemoryEntry["adaptive"];
+  }>
+): StrategyMemoryEntry[] {
+  const existing = readStrategyMemory(root);
+  const created: StrategyMemoryEntry[] = [];
+  const pending = [...existing];
+
+  for (const item of outcomes
+    .sort((left, right) => left.outcome.strategyId.localeCompare(right.outcome.strategyId))) {
+    const adaptive = normalizeAdaptiveFeedback(item.adaptive);
+    const entryOutcome: StrategyMemoryEntry["outcome"] = {
+      metrics: item.outcome.metrics,
+      success: item.outcome.success,
+      deterministic: item.deterministic ?? true,
+    };
+
+    const id = generateMemoryEntryId(signature, item.outcome.strategyId, item.outcome.plan, entryOutcome, adaptive);
+    const existingEntry = pending.find((entry) => entry.id === id);
+
+    const entry = normalizeMemoryEntry({
+      id,
+      signature,
+      strategyId: item.outcome.strategyId,
+      strategyType: item.outcome.strategyType ?? inferredStrategyType(item.outcome.strategyId),
+      plan: item.outcome.plan,
+      outcome: entryOutcome,
+      ...(adaptive ? { adaptive } : {}),
+      createdAt: existingEntry?.createdAt ?? new Date().toISOString(),
+    });
+
+    pending.push(entry);
+    created.push(entry);
+  }
+
+  persistStrategyMemory(root, pending);
+  return created;
 }
 
 export function validatePlanStillApplies(

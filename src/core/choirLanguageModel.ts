@@ -14,6 +14,7 @@ import {
   CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_POLICY_STATUS_KEYWORD,
@@ -115,6 +116,7 @@ const DSL_KEYWORDS = new Set<string>([
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
   CHOIR_PLAN_FOR_KEYWORD,
+  CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
   CHOIR_ROLLBACK_STAGE_FLAG,
@@ -140,6 +142,7 @@ const KEYWORD_HOVER: Record<string, string> = {
   units: "Scope simulation to selected units plus dependencies.",
   for: "Attach a quoted target to plan creation.",
   "--optimize": "Run deterministic strategy simulation and selection before applying a plan.",
+  "--adaptive": "Force adaptive strategy generation workflow with deterministic memory fallback.",
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
   "--strategy": "Choose progressive rollout strategy for staged execution.",
@@ -456,8 +459,9 @@ function transition(state: ParserState, token: Token): ParserState[] {
     }
 
     if (state === "plan-tail" || state === "plan-after-target") {
-      return token.value.toLowerCase() === CHOIR_PLAN_OPTIMIZE_FLAG
-        ? ["expect-then-or-end"]
+      const lower = token.value.toLowerCase();
+      return lower === CHOIR_PLAN_OPTIMIZE_FLAG || lower === CHOIR_PLAN_ADAPTIVE_FLAG
+        ? [state]
         : [];
     }
 
@@ -538,15 +542,17 @@ function transition(state: ParserState, token: Token): ParserState[] {
         return ["plan-target-string"];
       }
 
-      if (token.value === CHOIR_PLAN_OPTIMIZE_FLAG) {
-        return ["expect-then-or-end"];
+      if (token.value === CHOIR_PLAN_OPTIMIZE_FLAG || token.value === CHOIR_PLAN_ADAPTIVE_FLAG) {
+        return ["plan-tail"];
       }
 
       return [];
     }
 
     if (state === "plan-after-target") {
-      return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
+      return token.value === CHOIR_PLAN_OPTIMIZE_FLAG || token.value === CHOIR_PLAN_ADAPTIVE_FLAG
+        ? ["plan-after-target"]
+        : [];
     }
   }
 
@@ -679,11 +685,15 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["plan-target-string"];
     }
 
-    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
+    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG || token.value === CHOIR_PLAN_ADAPTIVE_FLAG
+      ? ["plan-tail"]
+      : [];
   }
 
   if (state === "plan-after-target") {
-    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG ? ["expect-then-or-end"] : [];
+    return token.value === CHOIR_PLAN_OPTIMIZE_FLAG || token.value === CHOIR_PLAN_ADAPTIVE_FLAG
+      ? ["plan-after-target"]
+      : [];
   }
 
   if (state === "simulate-tail") {
@@ -768,11 +778,15 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
     return [
       { type: "keyword", value: CHOIR_PLAN_FOR_KEYWORD },
       { type: "keyword", value: CHOIR_PLAN_OPTIMIZE_FLAG },
+      { type: "keyword", value: CHOIR_PLAN_ADAPTIVE_FLAG },
     ];
   }
 
   if (state === "plan-after-target") {
-    return [{ type: "keyword", value: CHOIR_PLAN_OPTIMIZE_FLAG }];
+    return [
+      { type: "keyword", value: CHOIR_PLAN_OPTIMIZE_FLAG },
+      { type: "keyword", value: CHOIR_PLAN_ADAPTIVE_FLAG },
+    ];
   }
 
   if (state === "simulate-tail") {

@@ -16,6 +16,9 @@ import {
     updateLibrary,
 } from "./core/macroLibraries.js";
 import {
+    evaluateAdaptivePlanSelection,
+} from "./conductor.js";
+import {
     approveDiff,
     CompilationTrace,
     compileDSLAndWrite,
@@ -233,6 +236,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
         "- choir plan --optimize",
+        "- choir plan --adaptive",
         "- choir plan approve <planId>",
         "- choir simulate",
         "- choir simulate plan <planId>",
@@ -781,10 +785,11 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "graph"
                     || action.type === "rollback"
                     || (action.type === "plan" && action.optimize === true)
+                    || (action.type === "plan" && action.adaptive === true)
                     || (action.type === "execute" && action.rolloutStrategy !== undefined)
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|rollback|plan --optimize|execute --strategy` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor|rollback|plan --optimize|plan --adaptive|execute --strategy` cannot be chained with `then`.");
                 return;
             }
 
@@ -1056,6 +1061,39 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         "",
                         "Ranking:",
                         ...rankingLines,
+                    ].join("\n"));
+                    return;
+                }
+
+                if (parsed.ast.type === "plan" && parsed.ast.adaptive) {
+                    const planNode = parsed.ast;
+                    const adaptive = await evaluateAdaptivePlanSelection(control, {
+                        root: workspaceRoot,
+                        ...(planNode.target ? { targetGoal: planNode.target } : {}),
+                    });
+
+                    const adaptiveTrace = adaptive.strategyTrace.adaptive;
+                    const evaluatedCount = adaptive.outcomes.length;
+                    const iterations = adaptiveTrace?.iterations ?? 1;
+                    const evaluatedTotal = adaptiveTrace?.strategiesEvaluated ?? evaluatedCount;
+                    const mutationCount = adaptiveTrace?.mutationsApplied ?? 0;
+                    const memoryMode = adaptive.memoryTrace.reused ? "memory" : "adaptive-generation";
+                    const decisionLines = (adaptiveTrace?.decisions ?? [adaptive.strategyTrace.decision])
+                        .slice(-8)
+                        .map((decision) => `- ${decision}`);
+
+                    stream.markdown([
+                        "Adaptive strategy planning complete.",
+                        `- plan: ${adaptive.basePlan.id}`,
+                        `- selectedStrategy: ${adaptive.selected.strategyId}`,
+                        `- source: ${memoryMode}`,
+                        `- iterations: ${iterations}`,
+                        `- evaluatedStrategies: ${evaluatedTotal}`,
+                        `- uniqueOutcomes: ${evaluatedCount}`,
+                        `- mutationsApplied: ${mutationCount}`,
+                        "",
+                        "Decision trace:",
+                        ...decisionLines,
                     ].join("\n"));
                     return;
                 }
