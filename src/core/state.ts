@@ -146,16 +146,38 @@ export type StateMetadata = {
   auditId: string;
   ruleTriggers?: string[];
   dependencyChain?: string[];
+  unitId?: string;
 };
 
 export type StateTransition = {
   id: string;
+  logicalTime: number;
+  unitId: string;
   fromHash: string;
   toHash: string;
   action: string;
   timestamp: string;
   diff: StateTransitionDiff;
   metadata?: StateMetadata;
+};
+
+export type TimelineEvent = {
+  id: string;
+  timestamp: number;
+  unitId: string;
+  action: string;
+  stateHashBefore: string;
+  stateHashAfter: string;
+  diff: StateTransitionDiff;
+};
+
+export type GlobalTimeline = {
+  events: TimelineEvent[];
+};
+
+export type UnitTimeline = {
+  unitId: string;
+  events: TimelineEvent[];
 };
 
 export type StateTimeline = {
@@ -229,6 +251,7 @@ export type StatePlane = {
 const MAX_STRATEGY_HISTORY = 256;
 const STATE_VERSION = "2.0.0-alpha";
 const SNAPSHOT_INTERVAL = 5;
+const DEFAULT_WORKSPACE_UNIT_ID = "workspace:root";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -266,6 +289,15 @@ function cloneUnknown<T>(value: T): T {
 
 function splitPath(pathValue: string): string[] {
   return pathValue.split(".").filter((segment) => segment.length > 0);
+}
+
+function normalizeUnitId(value: unknown): string {
+  if (typeof value !== "string") {
+    return DEFAULT_WORKSPACE_UNIT_ID;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : DEFAULT_WORKSPACE_UNIT_ID;
 }
 
 function setAtPath(target: UnknownRecord, pathValue: string, value: unknown): void {
@@ -1503,6 +1535,7 @@ function normalizeStateMetadata(value: unknown): StateMetadata | undefined {
   const dependencyChain = Array.isArray(value.dependencyChain)
     ? value.dependencyChain.filter((entry): entry is string => typeof entry === "string")
     : [];
+  const unitId = normalizeUnitId(value.unitId);
 
   return {
     command,
@@ -1510,6 +1543,7 @@ function normalizeStateMetadata(value: unknown): StateMetadata | undefined {
     auditId,
     ...(ruleTriggers.length > 0 ? { ruleTriggers } : {}),
     ...(dependencyChain.length > 0 ? { dependencyChain } : {}),
+    unitId,
   };
 }
 
@@ -1541,9 +1575,19 @@ function normalizeStateTransition(value: unknown): StateTransition | null {
     ? value.id
     : `transition-${createHash("sha256").update(`${fromHash}:${toHash}:${action}:${timestamp}`).digest("hex").slice(0, 12)}`;
   const metadata = normalizeStateMetadata(value.metadata);
+  const logicalTime = typeof value.logicalTime === "number" && Number.isFinite(value.logicalTime) && value.logicalTime > 0
+    ? Math.floor(value.logicalTime)
+    : 0;
+  const unitId = normalizeUnitId(
+    typeof value.unitId === "string"
+      ? value.unitId
+      : metadata?.unitId
+  );
 
   return {
     id,
+    logicalTime,
+    unitId,
     fromHash,
     toHash,
     action,
@@ -1639,6 +1683,34 @@ export function listStateTransitions(root: string): StateTransition[] {
       left.timestamp.localeCompare(right.timestamp)
       || left.id.localeCompare(right.id)
     );
+}
+
+function toTimelineEvent(transition: StateTransition, index: number): TimelineEvent {
+  return {
+    id: transition.id,
+    timestamp: transition.logicalTime > 0 ? transition.logicalTime : index + 1,
+    unitId: normalizeUnitId(transition.unitId),
+    action: transition.action,
+    stateHashBefore: transition.fromHash,
+    stateHashAfter: transition.toHash,
+    diff: transition.diff,
+  };
+}
+
+export function buildGlobalTimeline(root: string): GlobalTimeline {
+  const transitions = listStateTransitions(root);
+  return {
+    events: transitions.map((transition, index) => toTimelineEvent(transition, index)),
+  };
+}
+
+export function buildUnitTimeline(root: string, unitId: string): UnitTimeline {
+  const normalizedUnitId = normalizeUnitId(unitId);
+  const global = buildGlobalTimeline(root);
+  return {
+    unitId: normalizedUnitId,
+    events: global.events.filter((event) => event.unitId === normalizedUnitId),
+  };
 }
 
 export function buildStateTimeline(root: string): StateTimeline {
@@ -1942,8 +2014,10 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
 
     const previousHash = previousState?.stateHash ?? "GENESIS";
     const timestamp = new Date().toISOString();
+    const transitionNumber = transitionCountBeforeWrite + 1;
     const transitionId = `transition-${formatTimestampForId(timestamp)}-${reloaded.stateHash.slice(0, 8)}`;
     const transitionDiff = computeStateDiff(previousState, reloaded);
+    const unitId = normalizeUnitId(options?.metadata?.unitId);
     const metadata: StateMetadata = {
       command: options?.metadata?.command ?? options?.action ?? "persist-state",
       policyDecision: options?.metadata?.policyDecision ?? "allow",
@@ -1955,9 +2029,12 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
         ? { dependencyChain: [...options.metadata.dependencyChain] }
         : { dependencyChain: transitionDiff.patches.map((patch) => patch.path) }
       ),
+      unitId,
     };
     const transition: StateTransition = {
       id: transitionId,
+      logicalTime: transitionNumber,
+      unitId,
       fromHash: previousHash,
       toHash: reloaded.stateHash,
       action: options?.action ?? "persist-state",
@@ -1968,7 +2045,6 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
     recordStateTransition(root, transition);
 
     if (!options?.skipSnapshot) {
-      const transitionNumber = transitionCountBeforeWrite + 1;
       const shouldSaveSnapshot = transitionCountBeforeWrite === 0 || transitionNumber % SNAPSHOT_INTERVAL === 0;
       if (shouldSaveSnapshot) {
         saveSnapshot(root, reloaded);

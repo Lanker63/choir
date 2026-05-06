@@ -170,10 +170,13 @@ import {
   runExecutionPlanTransactionally,
 } from "../../core/scheduler.js";
 import {
+  buildGlobalTimeline,
   buildState,
+  buildUnitTimeline,
   createEmptyStatePlane,
   hashState,
   listSnapshots,
+  persistStatePlane,
   readStatePlane,
   replaySnapshots,
   rollbackState,
@@ -3181,6 +3184,49 @@ const pass3: TestPass = {
 
           const replayed = replaySnapshots(root, snapshots.slice(0, 1).map((snapshot) => snapshot.id));
           assert.strictEqual(replayed.length, 1);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "3.15",
+      name: "workspace timeline model records global and per-unit events",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-timeline-"));
+
+        try {
+          const baseline = createEmptyStatePlane();
+          persistStatePlane(root, baseline, {
+            action: "seed-state",
+            metadata: { unitId: "packages/auth" },
+          });
+
+          const updated = {
+            ...baseline,
+            intent: {
+              ...baseline.intent,
+              goals: ["workspace-aware replay"],
+            },
+          };
+
+          persistStatePlane(root, updated, {
+            action: "update-intent",
+            metadata: { unitId: "packages/api" },
+          });
+
+          const global = buildGlobalTimeline(root);
+          assert.strictEqual(global.events.length, 2);
+          assert.strictEqual(global.events[0]?.timestamp, 1);
+          assert.strictEqual(global.events[1]?.timestamp, 2);
+          assert.strictEqual(global.events[0]?.unitId, "packages/auth");
+          assert.strictEqual(global.events[1]?.unitId, "packages/api");
+          assert.ok((global.events[0]?.stateHashBefore ?? "").length > 0);
+          assert.ok((global.events[1]?.stateHashAfter ?? "").length > 0);
+
+          const apiUnit = buildUnitTimeline(root, "packages/api");
+          assert.strictEqual(apiUnit.events.length, 1);
+          assert.strictEqual(apiUnit.events[0]?.id, global.events[1]?.id);
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }

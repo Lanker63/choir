@@ -178,6 +178,16 @@ Artifacts:
 - Dependency Graph panel (full editor webview)
 - Timeline panel (full editor webview)
 
+## Workspace-Aware Timeline (PASS 1)
+
+- Timeline transitions are now workspace-unit aware.
+- Each transition records a deterministic logical clock and unit id.
+- Timeline events project into:
+  - one global timeline
+  - one per-unit timeline
+- If no unit is provided, the transition is scoped to workspace:root.
+- Determinism guarantee: same ordered transitions -> same global and unit replay ordering.
+
 Webview synchronization contract:
 
 - Extension host is the single state owner

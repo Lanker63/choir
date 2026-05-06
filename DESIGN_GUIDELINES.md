@@ -83,9 +83,16 @@ Write:
 
 Transition record requirements:
 
-- id, fromHash, toHash, action, timestamp
+- id, logicalTime, unitId, fromHash, toHash, action, timestamp
 - deterministic diff metadata (ordered patches)
 - append-only logs
+
+Workspace timeline model requirements:
+
+- every transition must project to a global timeline event
+- every transition must also project to its unit timeline event
+- global and per-unit timelines must remain index-aligned and deterministic
+- missing unit scope defaults to workspace:root
 
 Required files:
 
@@ -98,6 +105,7 @@ Replay contract:
 - jumpTo, replayTo, stepForward, stepBackward
 - hash continuity verification
 - deterministic snapshot fallback on mismatch
+- workspace-aware replay must preserve per-unit transition ordering under the global logical clock
 
 ## Policy Contract
 
