@@ -141,6 +141,7 @@ export type GlobalTrace = {
   policyDecisions: string[];
   convergence: boolean;
   transactionTrace?: TransactionTrace;
+  deterministicTrace?: DeterministicTrace;
 };
 
 export type GlobalContext = {
@@ -178,6 +179,52 @@ export type GlobalExecutionResult = {
 
 export type GlobalState = Record<string, SystemState>;
 
+export type PolicyState = CompiledPolicy[];
+
+export type ExecutionInput = {
+  plan: GlobalPlan;
+  state: GlobalState;
+  policies: PolicyState;
+  dependencyGraph: DependencyGraph;
+};
+
+export type ExecutionContext = {
+  fixedTimestamp: number;
+  seed: number;
+};
+
+export type DeterministicOperation = {
+  opId: string;
+  type: string;
+  target: string;
+  action: string;
+  stateAfter: SystemState;
+  stateHashAfter: string;
+};
+
+export type DeterministicStageTrace = {
+  stageId: string;
+  unitOrder: string[];
+  stateHashBefore: string;
+  stateHashAfter: string;
+  operations: DeterministicOperation[];
+};
+
+export type DeterministicTrace = {
+  traceId: string;
+  inputHash: string;
+  context: ExecutionContext;
+  initialState: GlobalState;
+  stages: DeterministicStageTrace[];
+  finalStateHash: string;
+  deterministic: boolean;
+};
+
+export type TraceStore = {
+  version: number;
+  traces: ReadonlyMap<string, DeterministicTrace>;
+};
+
 export type SimulationContext = {
   baseState: GlobalState;
   simulatedState: GlobalState;
@@ -200,6 +247,7 @@ export type SimulationTrace = {
   stepsExecuted: string[];
   unitsAffected: string[];
   replayable: boolean;
+  deterministicTrace?: DeterministicTrace;
 };
 
 export type SimulationResult = {
@@ -390,6 +438,7 @@ export type RolloutTrace = {
   metrics: Record<string, StageMetrics>;
   rollbackTraces: RollbackTrace[];
   transactionTraces: TransactionTrace[];
+  deterministicTraces: DeterministicTrace[];
   canResume?: boolean;
 };
 
@@ -407,6 +456,7 @@ export type StageExecutionResult = {
   finalStates: GlobalState;
   executionState: ExecutionState;
   transactionTrace?: TransactionTrace;
+  deterministicTrace?: DeterministicTrace;
   failure?: ExecutionFailure;
 };
 
@@ -424,6 +474,7 @@ export type TransactionExecutionResult = {
   failure?: ExecutionFailure;
   transaction: Transaction;
   trace: TransactionTrace;
+  deterministicTrace: DeterministicTrace;
 };
 
 export type RolloutExecutionResult = {
@@ -470,6 +521,7 @@ type InternalRunResult = {
   executionState: ExecutionState;
   transaction: Transaction;
   transactionTrace: TransactionTrace;
+  deterministicTrace: DeterministicTrace;
   failure?: ExecutionFailure;
 };
 
@@ -526,6 +578,105 @@ function uniqueInOrder(values: string[]): string[] {
   }
 
   return ordered;
+}
+
+export function deterministicSort(items: string[]): string[] {
+  return [...items].sort((left, right) => left.localeCompare(right));
+}
+
+function normalizePlan(plan: GlobalPlan): GlobalPlan {
+  return {
+    id: plan.id,
+    tasks: [...plan.tasks]
+      .map((task) => ({
+        ...task,
+        dependsOn: deterministicSort(task.dependsOn),
+      }))
+      .sort((left, right) => left.id.localeCompare(right.id)),
+  };
+}
+
+function normalizeDependencyGraph(graph: DependencyGraph): DependencyGraph {
+  return {
+    edges: [...graph.edges]
+      .map((edge) => ({ from: edge.from, to: edge.to }))
+      .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to)),
+  };
+}
+
+function normalizePolicies(policies: PolicyState): PolicyState {
+  return [...policies]
+    .map((policy) => ({
+      id: policy.id,
+      source: policy.source,
+      rules: [...cloneUnknown(policy.rules)].sort((left, right) => left.id.localeCompare(right.id)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id) || left.source.localeCompare(right.source));
+}
+
+function normalizeExecutionInput(input: ExecutionInput): ExecutionInput {
+  return {
+    plan: normalizePlan(input.plan),
+    state: stableSortUnknown(cloneState(input.state)) as GlobalState,
+    policies: normalizePolicies(input.policies),
+    dependencyGraph: normalizeDependencyGraph(input.dependencyGraph),
+  };
+}
+
+export function hashState(state: GlobalState): string {
+  return createHash("sha256")
+    .update(stableStringify(stableSortUnknown(state)))
+    .digest("hex");
+}
+
+export function hashInput(input: ExecutionInput): string {
+  const normalized = normalizeExecutionInput(input);
+  return createHash("sha256")
+    .update(stableStringify(normalized))
+    .digest("hex");
+}
+
+function executionContextFromInputHash(inputHash: string): ExecutionContext {
+  const fixedTimestamp = Number.parseInt(inputHash.slice(0, 12), 16);
+  const seed = Number.parseInt(inputHash.slice(12, 20), 16);
+  return {
+    fixedTimestamp: Number.isFinite(fixedTimestamp) ? fixedTimestamp : 0,
+    seed: Number.isFinite(seed) ? seed : 0,
+  };
+}
+
+let traceStore: TraceStore = {
+  version: 1,
+  traces: new Map<string, DeterministicTrace>(),
+};
+
+export function getTraceStore(): TraceStore {
+  return {
+    version: traceStore.version,
+    traces: new Map(traceStore.traces),
+  };
+}
+
+export function appendTrace(store: TraceStore, trace: DeterministicTrace): TraceStore {
+  const existing = store.traces.get(trace.traceId);
+  if (existing) {
+    if (stableStringify(existing) === stableStringify(trace)) {
+      return store;
+    }
+
+    throw new Error(`Trace append rejected: trace ${trace.traceId} already exists with different content`);
+  }
+
+  const nextTraces = new Map(store.traces);
+  nextTraces.set(trace.traceId, cloneUnknown(trace));
+  return {
+    version: store.version + 1,
+    traces: nextTraces,
+  };
+}
+
+function recordDeterministicTrace(trace: DeterministicTrace): void {
+  traceStore = appendTrace(traceStore, trace);
 }
 
 function stateForRepos(repos: Repo[]): GlobalState {
@@ -1204,6 +1355,25 @@ export async function executeTransaction(
     const executionState = createExecutionState(Object.keys(baseState));
     const tx = beginTransaction(baseState, []);
     abortTransaction(tx);
+    const input: ExecutionInput = {
+      plan: normalizePlan(plan),
+      state: cloneState(baseState),
+      policies: normalizePolicies(options.policies),
+      dependencyGraph: buildRollbackDependencyGraph(plan),
+    };
+    const inputHash = hashInput(input);
+    const context = executionContextFromInputHash(inputHash);
+    const deterministicTrace: DeterministicTrace = {
+      traceId: deterministicTraceId(inputHash, [], hashState(baseState)),
+      inputHash,
+      context,
+      initialState: cloneState(baseState),
+      stages: [],
+      finalStateHash: hashState(baseState),
+      deterministic: true,
+    };
+    deterministicTrace.deterministic = validateTrace(deterministicTrace) && verifyReplay(deterministicTrace);
+    recordDeterministicTrace(deterministicTrace);
     const policyResult = {
       allowed: false,
       requiresApproval: false,
@@ -1225,6 +1395,7 @@ export async function executeTransaction(
       executionState,
       transaction: cloneUnknown(tx.transaction),
       trace: buildTransactionTrace(tx, []),
+      deterministicTrace,
     };
   }
 
@@ -1248,11 +1419,41 @@ export async function executeTransaction(
   const unitsAffected = new Set<string>();
   const committedStages: string[] = [];
   const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
+  const deterministicInput: ExecutionInput = {
+    plan: normalizePlan(effectivePlan),
+    state: cloneState(baseState),
+    policies: normalizePolicies(options.policies),
+    dependencyGraph: buildRollbackDependencyGraph(effectivePlan),
+  };
+  const deterministicInputHash = hashInput(deterministicInput);
+  const deterministicContext = executionContextFromInputHash(deterministicInputHash);
+  const deterministicStages: DeterministicStageTrace[] = [];
+  let expectedStageBeforeHash = hashState(baseState);
+
+  const finalizeDeterministicTrace = (currentState: GlobalState, deterministicHint: boolean): DeterministicTrace => {
+    const finalStateHash = hashState(currentState);
+    const trace: DeterministicTrace = {
+      traceId: deterministicTraceId(deterministicInputHash, deterministicStages, finalStateHash),
+      inputHash: deterministicInputHash,
+      context: deterministicContext,
+      initialState: cloneState(baseState),
+      stages: cloneUnknown(deterministicStages),
+      finalStateHash,
+      deterministic: false,
+    };
+
+    const valid = validateTrace(trace);
+    const replayVerified = valid ? verifyReplay(trace) : false;
+    trace.deterministic = deterministicHint && valid && replayVerified;
+    recordDeterministicTrace(trace);
+    return trace;
+  };
 
   if (shouldLock && lockOwnerToken) {
     const lockResult = acquireLocks(lockOwnerToken, tx.transactionId, lockUnits);
     if (!lockResult.valid) {
       abortTransaction(tx);
+      const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
       return {
         success: false,
         finalState: cloneState(tx.workingState),
@@ -1266,6 +1467,7 @@ export async function executeTransaction(
         executionState,
         transaction: cloneUnknown(tx.transaction),
         trace: buildTransactionTrace(tx, committedStages),
+        deterministicTrace,
         failure: {
           stageId: "transaction:lock",
           unitId: lockUnits[0] ?? "workspace:root",
@@ -1281,6 +1483,7 @@ export async function executeTransaction(
     if (lockOwnerToken) {
       releaseLocks(lockOwnerToken);
     }
+    const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
     return {
       success: false,
       finalState: cloneState(tx.workingState),
@@ -1294,6 +1497,7 @@ export async function executeTransaction(
       executionState,
       transaction: cloneUnknown(tx.transaction),
       trace: buildTransactionTrace(tx, committedStages),
+      deterministicTrace,
     };
   }
 
@@ -1306,6 +1510,12 @@ export async function executeTransaction(
 
       const stageTx = beginTransaction(tx.workingState, [stage]);
       let activeTask: GlobalPlanTask | null = null;
+      const stageBeforeHash = hashState(tx.workingState);
+      assertDeterministic(
+        stageBeforeHash === expectedStageBeforeHash,
+        `stage ${stage.id} expected state hash ${expectedStageBeforeHash}, got ${stageBeforeHash}`
+      );
+      const stageOperations: DeterministicOperation[] = [];
 
       try {
         const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
@@ -1325,6 +1535,15 @@ export async function executeTransaction(
               setTransactionUnitState(stageTx, task.repoId, previousState);
             },
           });
+          const stateAfter = cloneUnknown(stageTx.workingState[task.repoId] ?? {});
+          stageOperations.push({
+            opId: task.id,
+            type: operationTypeFromAction(task.action),
+            target: task.repoId,
+            action: task.action,
+            stateAfter,
+            stateHashAfter: hashState({ [task.repoId]: stateAfter }),
+          });
           stepsExecuted.push(task.id);
           unitsAffected.add(task.repoId);
           setUnitExecutionState(executionState, task.repoId, "executed");
@@ -1339,6 +1558,7 @@ export async function executeTransaction(
         setUnitExecutionState(executionState, failedUnit, "failed");
         abortTransaction(stageTx);
         abortTransaction(tx);
+        const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
         return {
           success: false,
           finalState: cloneState(tx.workingState),
@@ -1352,6 +1572,7 @@ export async function executeTransaction(
           executionState,
           transaction: cloneUnknown(tx.transaction),
           trace: buildTransactionTrace(tx, committedStages),
+          deterministicTrace,
           failure: {
             stageId: stage.id,
             unitId: failedUnit,
@@ -1370,6 +1591,7 @@ export async function executeTransaction(
         setUnitExecutionState(executionState, failedUnit, "failed");
         abortTransaction(stageTx);
         abortTransaction(tx);
+        const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
         return {
           success: false,
           finalState: cloneState(tx.workingState),
@@ -1383,6 +1605,7 @@ export async function executeTransaction(
           executionState,
           transaction: cloneUnknown(tx.transaction),
           trace: buildTransactionTrace(tx, committedStages),
+          deterministicTrace,
           failure: {
             stageId: `${stage.id}:prepare`,
             unitId: failedUnit,
@@ -1393,6 +1616,15 @@ export async function executeTransaction(
       }
 
       commitPhase(stageTx);
+      const stageAfterHash = hashState(stageTx.workingState);
+      deterministicStages.push({
+        stageId: stage.id,
+        unitOrder: deterministicSort(sortedUnique(stage.units)),
+        stateHashBefore: stageBeforeHash,
+        stateHashAfter: stageAfterHash,
+        operations: stageOperations,
+      });
+      expectedStageBeforeHash = stageAfterHash;
       tx.workingState = cloneState(stageTx.workingState);
       tx.baseState = cloneState(stageTx.workingState);
       committedStages.push(stage.id);
@@ -1409,6 +1641,7 @@ export async function executeTransaction(
       const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
       setUnitExecutionState(executionState, failedUnit, "failed");
       abortTransaction(tx);
+      const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
       return {
         success: false,
         finalState: cloneState(tx.workingState),
@@ -1422,6 +1655,7 @@ export async function executeTransaction(
         executionState,
         transaction: cloneUnknown(tx.transaction),
         trace: buildTransactionTrace(tx, committedStages),
+        deterministicTrace,
         failure: {
           stageId: "transaction:prepare",
           unitId: failedUnit,
@@ -1432,6 +1666,7 @@ export async function executeTransaction(
     }
 
     commitPhase(tx);
+    const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
     return {
       success: true,
       finalState: cloneState(tx.workingState),
@@ -1445,6 +1680,7 @@ export async function executeTransaction(
       executionState,
       transaction: cloneUnknown(tx.transaction),
       trace: buildTransactionTrace(tx, committedStages),
+      deterministicTrace,
     };
   } finally {
     if (lockOwnerToken) {
@@ -1496,6 +1732,7 @@ async function runGlobalPlanInternal(
     executionState: cloneExecutionState(transactionResult.executionState),
     transaction: cloneUnknown(transactionResult.transaction),
     transactionTrace: cloneUnknown(transactionResult.trace),
+    deterministicTrace: cloneUnknown(transactionResult.deterministicTrace),
     failure: transactionResult.failure ? cloneUnknown(transactionResult.failure) : undefined,
   };
 }
@@ -1518,6 +1755,7 @@ export async function simulatePlan(
       stepsExecuted: [...internal.stepsExecuted],
       unitsAffected: [...internal.unitsAffected],
       replayable: true,
+      deterministicTrace: cloneUnknown(internal.deterministicTrace),
     },
     context: {
       baseState,
@@ -1547,6 +1785,7 @@ export async function simulateUnits(
       stepsExecuted: [...internal.stepsExecuted],
       unitsAffected: [...internal.unitsAffected],
       replayable: true,
+      deterministicTrace: cloneUnknown(internal.deterministicTrace),
     },
     context: {
       baseState,
@@ -1843,6 +2082,184 @@ function getAtPath(state: SystemState, path: string): { exists: boolean; value: 
 function hashId(prefix: string, payload: unknown): string {
   const digest = createHash("sha256").update(stableStringify(payload), "utf-8").digest("hex").slice(0, 12);
   return `${prefix}-${digest}`;
+}
+
+function operationTypeFromAction(action: string): string {
+  const separator = action.indexOf(":");
+  if (separator <= 0) {
+    return "task";
+  }
+
+  return action.slice(0, separator);
+}
+
+function assertDeterministic(condition: boolean, message: string): void {
+  if (!condition) {
+    throw new Error(`Deterministic execution assertion failed: ${message}`);
+  }
+}
+
+function deterministicTraceId(inputHash: string, stages: DeterministicStageTrace[], finalStateHash: string): string {
+  return hashId("det-trace", {
+    inputHash,
+    finalStateHash,
+    stages: stages.map((stage) => ({
+      stageId: stage.stageId,
+      stateHashBefore: stage.stateHashBefore,
+      stateHashAfter: stage.stateHashAfter,
+      opIds: stage.operations.map((operation) => operation.opId),
+    })),
+  });
+}
+
+function validateTraceDetailed(trace: DeterministicTrace): string[] {
+  const errors: string[] = [];
+
+  if (trace.stages.length === 0) {
+    if (hashState(trace.initialState) !== trace.finalStateHash) {
+      errors.push("Final state hash must equal initial state hash when trace has no stages");
+    }
+    return errors;
+  }
+
+  let expectedBefore = hashState(trace.initialState);
+  const seenStageIds = new Set<string>();
+
+  for (const stage of trace.stages) {
+    if (seenStageIds.has(stage.stageId)) {
+      errors.push(`Duplicate stage id ${stage.stageId}`);
+    }
+    seenStageIds.add(stage.stageId);
+
+    if (stableStringify(stage.unitOrder) !== stableStringify(deterministicSort(stage.unitOrder))) {
+      errors.push(`Stage ${stage.stageId} has non-deterministic unit ordering`);
+    }
+
+    const opIds = stage.operations.map((operation) => operation.opId);
+    if (stableStringify(opIds) !== stableStringify(deterministicSort(opIds))) {
+      errors.push(`Stage ${stage.stageId} has non-deterministic operation ordering`);
+    }
+
+    if (stage.stateHashBefore !== expectedBefore) {
+      errors.push(`Stage ${stage.stageId} stateHashBefore does not match prior stage hash`);
+    }
+
+    for (const operation of stage.operations) {
+      const expectedOperationHash = hashState({ [operation.target]: operation.stateAfter });
+      if (operation.stateHashAfter !== expectedOperationHash) {
+        errors.push(`Operation ${operation.opId} state hash mismatch`);
+      }
+    }
+
+    expectedBefore = stage.stateHashAfter;
+  }
+
+  if (expectedBefore !== trace.finalStateHash) {
+    errors.push("Final state hash does not match last stage stateHashAfter");
+  }
+
+  return errors;
+}
+
+export function validateTrace(trace: DeterministicTrace): boolean {
+  return validateTraceDetailed(trace).length === 0;
+}
+
+export function replay(trace: DeterministicTrace): GlobalState {
+  const errors = validateTraceDetailed(trace);
+  if (errors.length > 0) {
+    throw new Error(`Replay rejected: invalid deterministic trace (${errors.join("; ")})`);
+  }
+
+  const state = cloneState(trace.initialState);
+  for (const stage of trace.stages) {
+    const beforeHash = hashState(state);
+    assertDeterministic(
+      beforeHash === stage.stateHashBefore,
+      `stage ${stage.stageId} expected ${stage.stateHashBefore}, got ${beforeHash}`
+    );
+
+    for (const operation of stage.operations) {
+      state[operation.target] = cloneUnknown(operation.stateAfter);
+      const opHash = hashState({ [operation.target]: state[operation.target] });
+      assertDeterministic(
+        opHash === operation.stateHashAfter,
+        `operation ${operation.opId} expected ${operation.stateHashAfter}, got ${opHash}`
+      );
+    }
+
+    const afterHash = hashState(state);
+    assertDeterministic(
+      afterHash === stage.stateHashAfter,
+      `stage ${stage.stageId} expected ${stage.stateHashAfter}, got ${afterHash}`
+    );
+  }
+
+  return state;
+}
+
+export function verifyReplay(trace: DeterministicTrace): boolean {
+  const replayed = replay(trace);
+  const replayHash = hashState(replayed);
+  assertDeterministic(
+    replayHash === trace.finalStateHash,
+    `replay hash ${replayHash} does not match execution hash ${trace.finalStateHash}`
+  );
+  return true;
+}
+
+export async function executeDeterministic(input: ExecutionInput): Promise<DeterministicTrace> {
+  const normalizedInput = normalizeExecutionInput(input);
+  const inputHash = hashInput(normalizedInput);
+  const context = executionContextFromInputHash(inputHash);
+  const orderedPlan = normalizePlan(normalizedInput.plan);
+  const batches = batchTasks(orderedPlan);
+  const workingState = cloneState(normalizedInput.state);
+  const stages: DeterministicStageTrace[] = [];
+
+  for (const batch of batches) {
+    const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
+    const stageBeforeHash = hashState(workingState);
+    const operations: DeterministicOperation[] = [];
+
+    for (const task of sortedTasks) {
+      const currentState = cloneUnknown(workingState[task.repoId] ?? {});
+      const nextState = await defaultTaskExecutor(task, currentState);
+      workingState[task.repoId] = cloneUnknown(nextState);
+      operations.push({
+        opId: task.id,
+        type: operationTypeFromAction(task.action),
+        target: task.repoId,
+        action: task.action,
+        stateAfter: cloneUnknown(workingState[task.repoId] ?? {}),
+        stateHashAfter: hashState({ [task.repoId]: workingState[task.repoId] ?? {} }),
+      });
+    }
+
+    const stageAfterHash = hashState(workingState);
+    stages.push({
+      stageId: batch.id,
+      unitOrder: deterministicSort(sortedTasks.map((task) => task.repoId)),
+      stateHashBefore: stageBeforeHash,
+      stateHashAfter: stageAfterHash,
+      operations,
+    });
+  }
+
+  const finalStateHash = hashState(workingState);
+  const trace: DeterministicTrace = {
+    traceId: deterministicTraceId(inputHash, stages, finalStateHash),
+    inputHash,
+    context,
+    initialState: cloneState(normalizedInput.state),
+    stages,
+    finalStateHash,
+    deterministic: true,
+  };
+
+  trace.deterministic = validateTrace(trace) && verifyReplay(trace);
+  recordDeterministicTrace(trace);
+  return trace;
 }
 
 function ensureNoRepoCycles(repos: Repo[]): void {
@@ -2643,6 +3060,7 @@ export async function executeGlobalPlan(
         executionOrder: simulation.trace.stepsExecuted,
         policyDecisions: simulationPolicy?.policyDecisions ?? [],
         convergence: false,
+        deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
       },
     };
   }
@@ -2688,6 +3106,7 @@ export async function executeGlobalPlan(
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
         transactionTrace: cloneUnknown(execution.transactionTrace),
+        deterministicTrace: cloneUnknown(execution.deterministicTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
     };
@@ -2695,7 +3114,15 @@ export async function executeGlobalPlan(
 
   const expectedState = simulation.finalState;
   const actualState = execution.finalStates;
-  const equivalent = statesEqual(expectedState, actualState);
+  const simulationDeterministicTrace = simulation.trace.deterministicTrace;
+  const executionDeterministicTrace = execution.deterministicTrace;
+  const stateEquivalent = statesEqual(expectedState, actualState);
+  const hashEquivalent = simulationDeterministicTrace
+    ? simulationDeterministicTrace.finalStateHash === executionDeterministicTrace.finalStateHash
+    : true;
+  const deterministicTraceValid = (simulationDeterministicTrace?.deterministic ?? true)
+    && executionDeterministicTrace.deterministic;
+  const equivalent = stateEquivalent && hashEquivalent && deterministicTraceValid;
 
   if (!equivalent) {
     const divergentUnits = stateDiffUnits(expectedState, actualState);
@@ -2726,6 +3153,8 @@ export async function executeGlobalPlan(
           ...isolatedRollback.isolation.errors,
           ...isolatedRollback.validation.errors,
           "Simulation and execution diverged",
+          ...(hashEquivalent ? [] : ["Simulation and execution state hashes diverged"]),
+          ...(deterministicTraceValid ? [] : ["Deterministic trace validation failed"]),
           ...(requiresFullRollback ? ["Fallback to rollback-all: isolated rollback could not restore consistency"] : []),
         ]),
       },
@@ -2735,6 +3164,7 @@ export async function executeGlobalPlan(
         policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
         transactionTrace: cloneUnknown(execution.transactionTrace),
+        deterministicTrace: cloneUnknown(execution.deterministicTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
     };
@@ -2756,6 +3186,7 @@ export async function executeGlobalPlan(
       policyDecisions: execution.policyResult.policyDecisions,
       convergence: execution.success,
       transactionTrace: cloneUnknown(execution.transactionTrace),
+      deterministicTrace: cloneUnknown(execution.deterministicTrace),
     },
   };
 }
@@ -3054,6 +3485,7 @@ export async function executeStage(
     finalStates: cloneState(run.finalStates),
     executionState: cloneExecutionState(run.executionState),
     transactionTrace: cloneUnknown(run.transactionTrace),
+    deterministicTrace: cloneUnknown(run.deterministicTrace),
     ...(run.failure ? { failure: run.failure } : {}),
   };
 }
@@ -3128,6 +3560,7 @@ export async function executeRolloutPlan(
     metrics: {},
     rollbackTraces: [],
     transactionTraces: [],
+    deterministicTraces: [],
   };
 
   if (trace.stages.length === 0) {
@@ -3223,6 +3656,9 @@ export async function executeRolloutPlan(
     };
     if (stageResult.transactionTrace) {
       trace.transactionTraces.push(cloneUnknown(stageResult.transactionTrace));
+    }
+    if (stageResult.deterministicTrace) {
+      trace.deterministicTraces.push(cloneUnknown(stageResult.deterministicTrace));
     }
 
     const stageValidation = validateStage(stageResult, plan, [...completedUnits], effectiveConfig);

@@ -213,12 +213,17 @@ import {
   computeRollbackSet,
   computeStrategyScore,
   createGlobalPlanningCache,
+  deterministicSort,
   detectPolicyDrift,
+  executeDeterministic,
   executeTransaction,
   executeRolloutPlan,
   evaluateStrategies as evaluateGlobalStrategies,
   evaluateGlobalPolicies,
   executeGlobalPlan,
+  hashInput,
+  hashState as hashGlobalState,
+  replay,
   orderRollback,
   orderPlan as orderGlobalPlan,
   OrgPolicy,
@@ -231,8 +236,10 @@ import {
   simulatePlan,
   simulateUnits,
   synthesizeGlobalPlan,
+  validateTrace,
   validateIsolation,
   validatePostRollback,
+  verifyReplay,
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
 import {
@@ -5762,6 +5769,110 @@ const pass6: TestPass = {
         assert.strictEqual(firstResult.success, true);
         assert.strictEqual(second.success, false);
         assert.ok(second.violations.some((entry) => entry.includes("Lock conflict")));
+      },
+    },
+    {
+      id: "6.10v",
+      name: "deterministic input hash and trace are stable for identical input",
+      run: async () => {
+        const plan = {
+          id: "deterministic-input",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=2", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const state = {
+          "repo-a": { meta: { value: "0" } },
+          "repo-b": { meta: { value: "0" } },
+        };
+
+        const input = {
+          plan,
+          state,
+          policies: [],
+          dependencyGraph: buildRollbackDependencyGraph(plan),
+        };
+
+        const hashA = hashInput(input);
+        const hashB = hashInput(input);
+        const traceA = await executeDeterministic(input);
+        const traceB = await executeDeterministic(input);
+
+        assert.strictEqual(hashA, hashB);
+        assert.strictEqual(traceA.traceId, traceB.traceId);
+        assert.strictEqual(traceA.finalStateHash, traceB.finalStateHash);
+        assert.strictEqual(validateTrace(traceA), true);
+        assert.strictEqual(verifyReplay(traceA), true);
+      },
+    },
+    {
+      id: "6.10w",
+      name: "transaction deterministic trace replays to exact final state hash",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+          { id: "repo-b", dependencies: ["repo-a"], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "transaction-replay-verification",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=2", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const result = await executeTransaction(plan, {
+          repos,
+          policies: [],
+        });
+
+        assert.strictEqual(result.success, true);
+        assert.strictEqual(result.deterministicTrace.deterministic, true);
+        const replayed = replay(result.deterministicTrace);
+        assert.strictEqual(hashGlobalState(replayed), result.deterministicTrace.finalStateHash);
+      },
+    },
+    {
+      id: "6.10x",
+      name: "simulation and execution deterministic hashes converge",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "simulation-execution-hash-convergence",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const simulation = await simulatePlan(plan, {
+          repos,
+          policies: [],
+        });
+
+        const execution = await executeGlobalPlan(plan, {
+          repos,
+          policies: [],
+        });
+
+        assert.strictEqual(simulation.success, true);
+        assert.strictEqual(execution.success, true);
+        assert.ok(simulation.trace.deterministicTrace);
+        assert.ok(execution.trace.deterministicTrace);
+        assert.strictEqual(
+          simulation.trace.deterministicTrace?.finalStateHash,
+          execution.trace.deterministicTrace?.finalStateHash
+        );
+      },
+    },
+    {
+      id: "6.10y",
+      name: "deterministic sort is stable and ordered",
+      run: async () => {
+        assert.deepStrictEqual(deterministicSort(["repo-b", "repo-a", "repo-b"]), ["repo-a", "repo-b", "repo-b"]);
       },
     },
     {

@@ -24,6 +24,7 @@ export type StrategyMemoryEntry = {
   outcome: {
     metrics: StrategyMetrics;
     success: boolean;
+    deterministic?: boolean;
   };
   createdAt: string;
 };
@@ -166,7 +167,9 @@ export function findMatchingStrategies(
 }
 
 export function canReuse(entry: StrategyMemoryEntry): boolean {
-  return entry.outcome.success && entry.outcome.metrics.remainingViolations === 0;
+  return entry.outcome.success
+    && entry.outcome.metrics.remainingViolations === 0
+    && entry.outcome.deterministic !== false;
 }
 
 export function selectFromMemory(entries: StrategyMemoryEntry[]): StrategyMemoryEntry | null {
@@ -330,6 +333,7 @@ export function recordStrategy(
   const entryOutcome: StrategyMemoryEntry["outcome"] = {
     metrics: outcome.metrics,
     success: outcome.success,
+    deterministic: true,
   };
   const id = generateMemoryEntryId(signature, outcome.strategyId, outcome.plan, entryOutcome);
   const existingEntry = existing.find((entry) => entry.id === id);
