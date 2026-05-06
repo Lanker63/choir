@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, supports versioned macro libraries for team-wide standards reuse, and provides a deterministic time-travel replay debugger UI for state transition inspection.
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, supports versioned macro libraries for team-wide standards reuse, provides a deterministic time-travel replay debugger UI for state transition inspection, and includes a distributed synchronization core for multi-repo state convergence.
 
 ---
 
@@ -205,6 +205,56 @@ Choir includes a deterministic orchestration layer that supports:
 - Atomic commit and rollback boundaries to avoid partial writes
 
 All code mutations still flow through the Enforcer path.
+
+### Distributed State Synchronization (Alpha Core)
+
+Choir now includes a deterministic distributed sync core for multi-repo and multi-environment state replication.
+
+Core model:
+
+- `Replica`: repo-scoped state replica with deterministic identity and metadata
+- `LogicalClock`: monotonic clock (`counter`, `nodeId`) with deterministic increment/merge rules
+- `VersionVector`: per-replica version tracking
+- `ChangeSet`: ordered delta payload (`id`, `origin`, `timestamp`, `operations`)
+- `StateOperation`: `add | update | remove` over canonical paths
+
+Sync semantics:
+
+- Delta-based synchronization (`computeDelta`) avoids full-state transfers
+- Deterministic application (`applyDelta`) with explicit conflict records
+- Deterministic merges (`mergeStates` / `mergeReplicaStates`) with no silent conflict drops
+- Sync modes:
+  - `push`
+  - `pull`
+  - `bidirectional`
+- Eventual consistency model with convergence validation (`validateReplicaConvergence`)
+
+Conflict model:
+
+- Conflict detection at same-path different-value boundaries
+- Default resolution: logical-clock last-write-wins with deterministic tie-breaks
+- Optional manual/policy-driven merge handlers; unresolved conflicts require manual resolution
+
+Audit and trace model:
+
+- Sync audit records include source, target, applied deltas, detected conflicts, and trace
+- Sync trace includes replicas involved, changes merged, conflicts detected, convergence status
+
+Security and transport:
+
+- Trusted source checks and signed changeset verification
+- Tamper/untrusted input produces explicit manual-resolution conflict state
+- Transport abstraction (`send` / `receive`) with in-memory implementation
+- Optional event bus for `onStateChange` pub/sub integration
+
+Performance:
+
+- Deterministic batching helpers for large delta streams
+- Compressed delta payload encode/decode helpers
+
+Verification:
+
+- Architecture harness includes a dedicated distributed-sync pass covering clocks, deltas, merge commutativity, sync modes, version vectors, security tamper handling, transport, batching, compression, and manual conflict paths.
 
 ### Cost-Based Plan Selection
 
@@ -951,6 +1001,9 @@ State correctness guarantees:
 - Snapshot persistence follows deterministic hybrid cadence (initial + fixed interval snapshots).
 - Replay navigation supports deterministic `jumpTo`, `replayTo`, `stepForward`, and `stepBackward` behavior.
 - Replay verifies transition hash continuity and deterministically falls back to snapshot reconstruction if needed.
+- Distributed sync core enforces deterministic delta/merge semantics and explicit conflict surfacing.
+- Distributed sync supports eventual consistency with deterministic convergence checks.
+- Signed changeset verification can be enabled to reject untrusted/tampered updates.
 
 State integrity artifacts:
 

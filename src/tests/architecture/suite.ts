@@ -179,6 +179,24 @@ import {
   validateConsistency,
   validateState,
 } from "../../core/state.js";
+import {
+  MANUAL_RESOLUTION,
+  applyDelta,
+  batchChangeSets,
+  compressChangeSets,
+  computeDelta,
+  createReplica,
+  createSyncTrace,
+  decompressChangeSets,
+  incrementClock,
+  InMemoryTransport,
+  mergeClock,
+  mergeReplicaStates,
+  mergeStates,
+  signChangeSet,
+  sync,
+  validateReplicaConvergence,
+} from "../../core/distributedSync.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -4028,6 +4046,282 @@ const pass4: TestPass = {
   ],
 };
 
+const pass5: TestPass = {
+  name: "Pass 5 — Distributed Synchronization",
+  tests: [
+    {
+      id: "5.1",
+      name: "replica model and logical clock operations are deterministic",
+      run: async () => {
+        const replica = createReplica("repo-a", { feature: { enabled: true } }, {
+          version: 2,
+          clock: { counter: 2, nodeId: "repo-a" },
+        });
+
+        const incremented = incrementClock(replica.clock);
+        const merged = mergeClock(
+          { counter: 4, nodeId: "repo-a" },
+          { counter: 9, nodeId: "repo-b" },
+          "repo-a"
+        );
+
+        assert.strictEqual(replica.id, "repo-a");
+        assert.strictEqual(replica.version, 2);
+        assert.deepStrictEqual(incremented, { counter: 3, nodeId: "repo-a" });
+        assert.deepStrictEqual(merged, { counter: 10, nodeId: "repo-a" });
+      },
+    },
+    {
+      id: "5.2",
+      name: "delta computation is minimal and deterministic",
+      run: async () => {
+        const oldState = {
+          a: 1,
+          b: {
+            c: 2,
+            d: 3,
+          },
+        };
+        const newState = {
+          a: 1,
+          b: {
+            c: 4,
+          },
+          e: true,
+        };
+
+        const first = computeDelta(oldState, newState, {
+          origin: "repo-a",
+          timestamp: { counter: 7, nodeId: "repo-a" },
+        });
+        const second = computeDelta(oldState, newState, {
+          origin: "repo-a",
+          timestamp: { counter: 7, nodeId: "repo-a" },
+        });
+
+        assert.deepStrictEqual(first, second);
+        assert.deepStrictEqual(
+          first.operations,
+          [
+            { type: "update", path: "b.c", value: 4 },
+            { type: "remove", path: "b.d", value: null },
+            { type: "add", path: "e", value: true },
+          ]
+        );
+      },
+    },
+    {
+      id: "5.3",
+      name: "delta application records visible conflicts and resolves by logical clock",
+      run: async () => {
+        const local = createReplica("repo-a", { service: { owner: "team-a" } }, {
+          version: 2,
+          clock: { counter: 2, nodeId: "repo-a" },
+          pathClocks: {
+            "service.owner": { counter: 2, nodeId: "repo-a" },
+          },
+        });
+
+        const changeSet = {
+          id: "changeset-owner",
+          origin: "repo-b",
+          timestamp: { counter: 3, nodeId: "repo-b" },
+          operations: [
+            {
+              type: "update" as const,
+              path: "service.owner",
+              value: "team-b",
+            },
+          ],
+        };
+
+        const result = applyDelta(local, changeSet);
+
+        assert.deepStrictEqual(result.replica.state, { service: { owner: "team-b" } });
+        assert.strictEqual(result.appliedOperations, 1);
+        assert.strictEqual(result.conflicts.length, 1);
+        assert.strictEqual(result.conflicts[0]?.resolution, "remote");
+        assert.strictEqual(result.manualResolutionRequired, false);
+      },
+    },
+    {
+      id: "5.4",
+      name: "state merge is commutative and deterministic",
+      run: async () => {
+        const left = createReplica("repo-a", {
+          flags: {
+            enabled: false,
+          },
+          stable: 1,
+        }, {
+          pathClocks: {
+            "flags.enabled": { counter: 5, nodeId: "repo-a" },
+            stable: { counter: 5, nodeId: "repo-a" },
+          },
+        });
+
+        const right = createReplica("repo-b", {
+          flags: {
+            enabled: true,
+          },
+          stable: 1,
+        }, {
+          pathClocks: {
+            "flags.enabled": { counter: 5, nodeId: "repo-b" },
+            stable: { counter: 5, nodeId: "repo-b" },
+          },
+        });
+
+        const mergedAB = mergeReplicaStates(left, right);
+        const mergedBA = mergeReplicaStates(right, left);
+
+        assert.deepStrictEqual(mergedAB.state, mergedBA.state);
+        assert.deepStrictEqual(
+          mergeStates(left.state, right.state),
+          mergeStates(right.state, left.state)
+        );
+      },
+    },
+    {
+      id: "5.5",
+      name: "push pull and bidirectional sync modes converge deterministically",
+      run: async () => {
+        const pushLocal = createReplica("repo-a", { a: 1 });
+        const pushRemote = createReplica("repo-b", { a: 1, b: 2 });
+        const pushed = sync(pushLocal, pushRemote, { mode: "push" });
+
+        assert.deepStrictEqual(pushed.local.state, { a: 1 });
+        assert.deepStrictEqual(pushed.remote.state, { a: 1 });
+
+        const pullLocal = createReplica("repo-a", { a: 1 });
+        const pullRemote = createReplica("repo-b", { a: 1, b: 2 });
+        const pulled = sync(pullLocal, pullRemote, { mode: "pull" });
+
+        assert.deepStrictEqual(pulled.local.state, { a: 1, b: 2 });
+        assert.deepStrictEqual(pulled.remote.state, { a: 1, b: 2 });
+
+        const biLocal = createReplica<Record<string, unknown>>("repo-a", { a: 1, c: true }, {
+          clock: { counter: 2, nodeId: "repo-a" },
+        });
+        const biRemote = createReplica<Record<string, unknown>>("repo-b", { a: 2, b: true }, {
+          clock: { counter: 3, nodeId: "repo-b" },
+        });
+        const bidirectional = sync(biLocal, biRemote, { mode: "bidirectional" });
+
+        assert.strictEqual(bidirectional.trace.convergenceAchieved, true);
+        assert.strictEqual(validateReplicaConvergence([bidirectional.local, bidirectional.remote]), true);
+      },
+    },
+    {
+      id: "5.6",
+      name: "version vectors track per-replica updates after sync",
+      run: async () => {
+        const left = createReplica<Record<string, unknown>>("repo-a", { x: 1 });
+        const right = createReplica<Record<string, unknown>>("repo-b", { y: 2 });
+        const result = sync(left, right, { mode: "bidirectional" });
+
+        assert.ok((result.local.versionVector["repo-a"] ?? 0) > 0);
+        assert.ok((result.local.versionVector["repo-b"] ?? 0) > 0);
+        assert.ok((result.remote.versionVector["repo-a"] ?? 0) > 0);
+        assert.ok((result.remote.versionVector["repo-b"] ?? 0) > 0);
+      },
+    },
+    {
+      id: "5.7",
+      name: "signed changesets reject tampering and require manual resolution",
+      run: async () => {
+        const secret = "top-secret";
+        const baseline = computeDelta({}, { secure: true }, {
+          origin: "repo-a",
+          timestamp: { counter: 1, nodeId: "repo-a" },
+        });
+        const signed = signChangeSet(baseline, "repo-a", secret);
+
+        const tampered = {
+          ...signed,
+          operations: [{ type: "add" as const, path: "secure", value: false }],
+        };
+
+        const target = createReplica("repo-b", {});
+        const applied = applyDelta(target, tampered, {
+          security: {
+            trustedNodeIds: ["repo-a"],
+            secret,
+            requireSignature: true,
+          },
+          signedChangeSet: tampered,
+        });
+
+        assert.deepStrictEqual(applied.replica.state, {});
+        assert.strictEqual(applied.manualResolutionRequired, true);
+        assert.strictEqual(applied.conflicts[0]?.reason, "security-validation-failed");
+      },
+    },
+    {
+      id: "5.8",
+      name: "transport batching compression and trace helpers remain deterministic",
+      run: async () => {
+        const deltaA = computeDelta({}, { a: 1 }, {
+          origin: "repo-a",
+          timestamp: { counter: 1, nodeId: "repo-a" },
+        });
+        const deltaB = computeDelta({ a: 1 }, { a: 2, b: true }, {
+          origin: "repo-b",
+          timestamp: { counter: 2, nodeId: "repo-b" },
+        });
+
+        const transport = new InMemoryTransport();
+        transport.send(deltaA);
+        transport.send(deltaB);
+        const received = transport.receive();
+
+        assert.strictEqual(received.length, 2);
+
+        const batched = batchChangeSets(received, 1);
+        assert.ok(batched.length >= 2);
+
+        const compressed = compressChangeSets(batched);
+        const decompressed = decompressChangeSets(compressed);
+        assert.deepStrictEqual(decompressed, batched);
+
+        const replicaA = createReplica("repo-a", { a: 1 });
+        const replicaB = createReplica("repo-b", { a: 1 });
+        const trace = createSyncTrace([replicaA, replicaB], 2, 0);
+        assert.strictEqual(trace.convergenceAchieved, true);
+      },
+    },
+    {
+      id: "5.9",
+      name: "manual conflict strategy marks unresolved conflicts for manual resolution",
+      run: async () => {
+        const local = createReplica("repo-a", { rules: { owner: "team-a" } }, {
+          pathClocks: {
+            "rules.owner": { counter: 3, nodeId: "repo-a" },
+          },
+        });
+
+        const incoming = {
+          id: "changeset-manual",
+          origin: "repo-b",
+          timestamp: { counter: 3, nodeId: "repo-b" },
+          operations: [{ type: "update" as const, path: "rules.owner", value: "team-b" }],
+        };
+
+        const applied = applyDelta(local, incoming, {
+          conflictStrategy: "manual",
+          mergeHandlers: {
+            "rules.owner": () => MANUAL_RESOLUTION,
+          },
+        });
+
+        assert.strictEqual(applied.manualResolutionRequired, true);
+        assert.strictEqual(applied.appliedOperations, 0);
+        assert.deepStrictEqual(applied.replica.state, { rules: { owner: "team-a" } });
+      },
+    },
+  ],
+};
+
 const finalPass: TestPass = {
   name: "Final — Cross-Cutting Tests",
   tests: [
@@ -4276,7 +4570,7 @@ async function runPass(testPass: TestPass): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const passes: TestPass[] = [pass1, pass2, pass3, pass4, finalPass];
+  const passes: TestPass[] = [pass1, pass2, pass3, pass4, pass5, finalPass];
 
   for (const testPass of passes) {
     const ok = await runPass(testPass);

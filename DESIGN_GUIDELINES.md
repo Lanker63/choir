@@ -1,6 +1,6 @@
 # Choir Design Guidelines
 
-Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, applies speculative execution with rollback-safe transactional batches, records immutable audit evidence for compliance reporting, and supports versioned macro libraries for team-wide standards reuse.
+Choir is a VS Code extension for deterministic, policy-driven workspace governance. The extension compiles intent into enforceable rules, synthesizes plans from state, optimizes execution across plans, applies speculative execution with rollback-safe transactional batches, records immutable audit evidence for compliance reporting, supports versioned macro libraries for team-wide standards reuse, and includes a deterministic distributed state synchronization core for multi-repo convergence.
 
 ---
 
@@ -75,6 +75,19 @@ State correctness layer contract:
 - Transition/audit side logs are append-only:
   - `.choir/state.transitions.jsonl`
   - `.choir/state.audit.jsonl`
+- Distributed synchronization core contract:
+  - Replica model includes deterministic `id`, `state`, `version`, logical `clock`, version vector, path clocks, tombstones, visible pending conflicts, and sync audit entries.
+  - Logical clock semantics are deterministic:
+    - increment: `counter += 1`
+    - merge: `counter = max(local, remote) + 1`
+  - State synchronization is delta-based via ordered `ChangeSet` operations (`add`, `update`, `remove`) over canonical paths.
+  - Merge semantics are deterministic and conflict-visible; no silent resolution is permitted.
+  - Default conflict policy is logical-clock last-write-wins with deterministic tie-breakers.
+  - Optional manual/policy-driven handlers can require explicit manual resolution.
+  - Synchronization modes are `push`, `pull`, and `bidirectional`, with eventual convergence guarantees.
+  - Sync validation is required post-application; validation failure triggers explicit manual-resolution conflict state.
+  - Security supports trusted source identity plus signed changeset verification; tampering is surfaced as manual-resolution conflict.
+  - Performance helpers support deterministic batching and compressed delta payloads.
 
 ---
 
@@ -138,6 +151,32 @@ Replay debugger architecture is derived-only and deterministic:
   - transition patch table (`before`/`after`)
   - replay trace (`visitedStates`, `replayTime`, `consistencyCheck`, `fallbackUsed`)
 - Replay operations must never mutate control plane authority or bypass state validation guarantees.
+
+### Distributed Synchronization Contract
+
+Distributed synchronization is implemented as a deterministic core engine:
+
+- Types:
+  - `Replica`
+  - `LogicalClock`
+  - `VersionVector`
+  - `ChangeSet`
+  - `StateOperation`
+  - `SyncConflict`
+  - `SyncAudit`
+  - `SyncTrace`
+- Primary operations:
+  - `computeDelta`
+  - `applyDelta`
+  - `mergeStates` / `mergeReplicaStates`
+  - `sync`
+- Network abstraction:
+  - transport interface with deterministic in-memory reference implementation
+- Optional eventing:
+  - pub/sub sync event bus for state-change broadcast hooks
+- Convergence requirement:
+  - replicas must converge for the same input deltas and merge policy
+  - merge operation must remain commutative at the state-result level
 
 ### Interactive Init Wizard Contract (`@choir init`)
 
@@ -821,6 +860,7 @@ For identical inputs, Choir must produce identical:
 - State hash values and transition records
 - Snapshot ids and rollback/replay outcomes
 - Replay timeline entries, patch projections, and replay trace flags
+- Distributed delta sets, merge outputs, conflict sets, sync audit records, and convergence status
 - Audit chain ordering and record hashes
 - Compliance report summaries for identical filter windows
 - Macro library version resolution and lockfile pinning outcomes
@@ -846,6 +886,9 @@ Non-negotiable safeguards:
 16. Incremental projected state must equal full recomputed state; mismatch requires deterministic full-state fallback
 17. Snapshot rollback/replay must be deterministic and integrity-checked before reuse
 18. Replay must verify transition hash continuity while applying diffs; on mismatch, deterministic snapshot fallback is required
+19. Distributed merge/sync must not allow long-term divergence under identical deltas and conflict policy
+20. Distributed conflict resolution must always be explicit and traceable; silent conflict dropping is forbidden
+21. Distributed synchronization must reject untrusted/tampered changesets when security checks are enabled
 
 ---
 
@@ -860,6 +903,9 @@ State Transition Log = `.choir/state.transitions.jsonl` (append-only)
 State Transition Record = `id/fromHash/toHash/timestamp/action/diff/metadata` (deterministic replay contract)
 State Audit Log = `.choir/state.audit.jsonl` (append-only)
 Replay Timeline = derived from snapshots + transitions (`jump/step/replay` navigation)
+Distributed Replica = `id/state/version/clock/versionVector/pathClocks/tombstones/conflicts/audit`
+Distributed Delta = ordered `ChangeSet` operations over canonical paths
+Distributed Sync = deterministic `push|pull|bidirectional` with eventual convergence
 Chat = orchestration interface (non-authoritative)
 Init Session = resumable wizard interaction state (`.choir/init-state.json`, non-authoritative)
 Audit = immutable compliance evidence (append-only, hash-chained)
