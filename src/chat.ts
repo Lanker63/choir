@@ -57,6 +57,7 @@ import { runRefactorIntent } from "./core/refactorEngine.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
 import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
 import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
+import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 import {
@@ -720,6 +721,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         return;
                     }
 
+                    if (verifyChatCommand.mode === "state") {
+                        const report = await runStateVerification();
+                        stream.markdown(formatStateVerificationReport(report));
+                        return;
+                    }
+
                     const report = await runFullVerification({
                         workspaceRoot,
                         mode: verifyChatCommand.mode,
@@ -1206,6 +1213,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     const rollout = await executeRolloutPlan(globalPlan, {
                         repos,
                         policies: [],
+                        stateRoot: workspaceRoot,
                     }, rolloutStrategy);
 
                     const stageLines = rollout.trace.stages.map((stage) => {

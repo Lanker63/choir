@@ -10,6 +10,7 @@ import {
   type DeterministicContext,
 } from "./deterministicCore.js";
 import { SystemState } from "./distributedSync.js";
+import { recordCommittedTransaction } from "./persistentStateAudit.js";
 
 export type RepoTask = {
   id: string;
@@ -168,6 +169,7 @@ export type GlobalPlanningCache = {
 export type ExecuteGlobalPlanOptions = {
   repos: Repo[];
   policies: CompiledPolicy[];
+  stateRoot?: string;
   approveExecution?: (input: {
     planId: string;
     policyResult: PolicyResult;
@@ -403,6 +405,8 @@ export type StateTransition = {
   toHash: string;
   operation: string;
   logicalTime: number;
+  timestamp: number;
+  unitStateAfter: SystemState;
 };
 
 export type Compensation = {
@@ -869,6 +873,7 @@ export function applyChange(ctx: TransactionContext, change: Change): void {
   const afterUnitState = cloneUnknown(ctx.workingState[change.unitId] ?? {});
   const toHash = hashState({ [change.unitId]: afterUnitState });
   ctx.appliedChangeFingerprints.add(fingerprint);
+  const timestamp = nextDeterministicTimestamp(ctx);
   ctx.transitions.push({
     id: deterministicId("transition", {
       transactionId: ctx.transactionId,
@@ -876,14 +881,16 @@ export function applyChange(ctx: TransactionContext, change: Change): void {
       fromHash,
       toHash,
       operation: change.type ?? "set",
-      logicalTime: ctx.context.logicalTime + 1,
+      logicalTime: timestamp,
     }, 16),
     transactionId: ctx.transactionId,
     unitId: change.unitId,
     fromHash,
     toHash,
     operation: change.type ?? "set",
-    logicalTime: nextDeterministicTimestamp(ctx),
+    logicalTime: timestamp,
+    timestamp,
+    unitStateAfter: cloneUnknown(afterUnitState),
   });
 }
 
@@ -1892,7 +1899,7 @@ export async function executeTransaction(
         policyResult,
         orderedTaskIds: ordered.orderedTaskIds,
         plan: effectivePlan,
-          violations: sortedUnique([...policyResult.violations, ...finalValidation.errors]),
+        violations: sortedUnique([...policyResult.violations, ...finalValidation.errors]),
         stepsExecuted,
         unitsAffected: sortedUnique([...unitsAffected]),
         executionState,
@@ -1906,6 +1913,39 @@ export async function executeTransaction(
           timestamp: nextDeterministicTimestamp(tx),
         },
       };
+    }
+
+    if (mode === "execution" && options.stateRoot) {
+      try {
+        recordCommittedTransaction(options.stateRoot, tx);
+      } catch (error) {
+        abortTransaction(tx);
+        const deterministicTrace = finalizeDeterministicTrace(tx.workingState, false);
+        return {
+          success: false,
+          finalState: cloneState(tx.workingState),
+          baseState: cloneState(baseState),
+          policyResult,
+          orderedTaskIds: ordered.orderedTaskIds,
+          plan: effectivePlan,
+          violations: sortedUnique([
+            ...policyResult.violations,
+            `State persistence failed: ${error instanceof Error ? error.message : String(error)}`,
+          ]),
+          stepsExecuted,
+          unitsAffected: sortedUnique([...unitsAffected]),
+          executionState,
+          transaction: cloneUnknown(tx.transaction),
+          trace: buildTransactionTrace(tx, committedStages),
+          deterministicTrace,
+          failure: {
+            stageId: "transaction:persist",
+            unitId: normalizedRepos[0]?.id ?? "workspace:root",
+            error: error instanceof Error ? error.message : String(error),
+            timestamp: nextDeterministicTimestamp(tx),
+          },
+        };
+      }
     }
 
     commitPhase(tx);

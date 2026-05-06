@@ -37,6 +37,7 @@ import {
 } from "./strategyMemory.js";
 import { StatePlane, createEmptyStatePlane } from "./state.js";
 import { runTransactionVerification } from "./transactionVerification.js";
+import { runStateVerification } from "./stateVerification.js";
 
 export type VerificationCase = {
   name: string;
@@ -68,6 +69,7 @@ export type VerificationReport = {
     simulation: boolean;
     rollback: boolean;
     transactions: boolean;
+    state: boolean;
     strategy: boolean;
     memory: boolean;
     adaptive: boolean;
@@ -680,7 +682,7 @@ async function executeSuite(
 
 function runFingerprint(
   cases: VerificationCaseResult[],
-  metrics: { transactions: boolean; strategy: boolean; memory: boolean; adaptive: boolean }
+  metrics: { transactions: boolean; state: boolean; strategy: boolean; memory: boolean; adaptive: boolean }
 ): string {
   return stableStringify({
     cases: cases.map((entry) => ({
@@ -763,6 +765,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const transactionReport = await runTransactionVerification();
     const transactions = transactionReport.passed;
     failures.push(...transactionReport.failures.map((failure) => `transactions: ${failure}`));
+    const stateReport = await runStateVerification();
+    const state = stateReport.passed;
+    failures.push(...stateReport.failures.map((failure) => `state: ${failure}`));
 
     const strategy = await verifyStrategySelection(buildStrategyCandidates(deterministicCase.input), deterministicCase.input);
 
@@ -773,7 +778,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { transactions, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, { transactions, state, strategy, memory, adaptive });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
@@ -784,8 +789,10 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunAdaptiveRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
         const rerunTransactions = (await runTransactionVerification()).passed;
+        const rerunState = (await runStateVerification()).passed;
         const rerunFingerprint = runFingerprint(rerunCases, {
           transactions: rerunTransactions,
+          state: rerunState,
           strategy: rerunStrategy,
           memory: rerunMemory,
           adaptive: rerunAdaptive,
@@ -806,7 +813,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const casesPass = caseResults.every((entry) => allAssertionsPass(entry));
 
     report = {
-      passed: casesPass && failures.length === 0 && determinism && replay && simulation && rollback && transactions && strategy && memory && adaptive && flakeFree,
+      passed: casesPass && failures.length === 0 && determinism && replay && simulation && rollback && transactions && state && strategy && memory && adaptive && flakeFree,
       failures,
       metrics: {
         determinism,
@@ -814,6 +821,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         simulation,
         rollback,
         transactions,
+        state,
         strategy,
         memory,
         adaptive,
@@ -843,6 +851,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- simulation: ${report.metrics.simulation}`,
     `- rollback: ${report.metrics.rollback}`,
     `- transactions: ${report.metrics.transactions}`,
+    `- state: ${report.metrics.state}`,
     `- strategy: ${report.metrics.strategy}`,
     `- memory: ${report.metrics.memory}`,
     `- adaptive: ${report.metrics.adaptive}`,

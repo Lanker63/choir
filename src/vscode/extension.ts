@@ -8,6 +8,7 @@ import { GraphViewProvider } from "./GraphViewProvider.js";
 import { TimelineViewProvider } from "./TimelineViewProvider.js";
 import { ChoirEventBus, MessageTraceStore, WebviewRegistry } from "./choirWebviewSync.js";
 import { readStatePlane } from "../core/state.js";
+import { recoverState, verifyReplayConsistency } from "../core/persistentStateAudit.js";
 import { runPipelineForWorkspace } from "../enforcer.js";
 import { registerFixCodeActions } from "./diagnostics.js";
 import { registerChoirLanguageSupport } from "./choirLanguageSupport.js";
@@ -18,6 +19,19 @@ function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Di
 
 export function activate(context: vscode.ExtensionContext) {
     console.log("Choir extension active");
+
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (root) {
+        try {
+            recoverState(root);
+            verifyReplayConsistency(root);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            void vscode.window.showErrorMessage(`Choir state recovery failed: ${message}`);
+            throw new Error(`Choir startup halted due to state recovery failure: ${message}`);
+        }
+    }
+
     registerFixCodeActions(context);
     registerChoirLanguageSupport(context);
 

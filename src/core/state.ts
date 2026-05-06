@@ -1554,18 +1554,25 @@ function normalizeStateTransition(value: unknown): StateTransition | null {
     : typeof value.to === "string"
       ? value.to
       : "";
-  const action = typeof value.action === "string" && value.action.trim().length > 0 ? value.action : "persist-state";
+  const action = typeof value.action === "string" && value.action.trim().length > 0
+    ? value.action
+    : typeof value.operation === "string" && value.operation.trim().length > 0
+      ? value.operation
+      : "persist-state";
 
   if (fromHash.trim().length === 0 || toHash.trim().length === 0) {
     return null;
   }
 
+  const numericTimestamp = typeof value.timestamp === "number" && Number.isFinite(value.timestamp) && value.timestamp > 0
+    ? Math.floor(value.timestamp)
+    : 0;
   const logicalTime = typeof value.logicalTime === "number" && Number.isFinite(value.logicalTime) && value.logicalTime > 0
     ? Math.floor(value.logicalTime)
-    : 0;
+    : numericTimestamp;
   const timestamp = typeof value.timestamp === "string" && value.timestamp.trim().length > 0
     ? value.timestamp
-    : deterministicTimestampFromCounter(logicalTime);
+    : deterministicTimestampFromCounter(logicalTime > 0 ? logicalTime : numericTimestamp);
   const id = typeof value.id === "string" && value.id.trim().length > 0
     ? value.id
     : deterministicId("transition", { fromHash, toHash, action, logicalTime }, 12);
