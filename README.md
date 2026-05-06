@@ -1,26 +1,24 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, supports versioned macro libraries for team-wide standards reuse, provides a deterministic time-travel replay debugger UI for state transition inspection, and includes a distributed synchronization core for multi-repo state convergence.
+**Choir** is a VS Code extension for deterministic, policy-driven workspace governance. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning and execution through `@choir` (routing to internal roles: Architect, Enforcer, Analyst, Conductor), records immutable audit evidence, supports versioned macro libraries, includes a time-travel replay debugger, distributed sync core, and global orchestration core.
 
 ---
 
 ## Requirements
 
-- VS Code 1.90 or later
-- A workspace folder open in VS Code
-- TypeScript/JavaScript source files (the enforcement pipeline analyzes `.ts`/`.js`)
+- VS Code 1.90+
+- A workspace folder open
+- TypeScript/JavaScript source files (`.ts`/`.js`)
 
 ---
 
 ## Installation
 
-Install from the VS Code Marketplace (search **"Choir"**), or install the `.vsix` package manually:
+Search **"Choir"** on the VS Code Marketplace, or install a `.vsix` manually:
 
 ```
 Extensions panel → ··· menu → Install from VSIX…
 ```
-
-The extension activates automatically when VS Code finishes loading and when Choir language features are used in `.choir` files.
 
 ---
 
@@ -51,16 +49,14 @@ execution:
   plans: []
 ```
 
-Commit this file to version control so the team shares one control-plane source of truth.
+Commit this file. Policy sources:
 
-Policy governance source:
+- `/org/policies.dsl` — org-level gates
+- `.choir/policies.dsl` — repo-level gates (auto-created if missing)
+- Environment policies — runtime-derived, applied last
+- Effective policy: `org → repo → environment` (deterministic; org policies propagate to all repos in global orchestration scope; no opt-out)
 
-- Org-level policy gates are authored in `/org/policies.dsl`.
-- Repo-level policy gates are authored in `.choir/policies.dsl`.
-- Environment policies are runtime-derived (trusted context), applied as the last layer.
-- Effective policy set is deterministic: `org -> repo -> environment`.
-- Choir creates a default `.choir/policies.dsl` file if missing.
-- Commit both `/org/policies.dsl` and `.choir/policies.dsl` alongside `.choir/choir.config.yaml`.
+Commit `/org/policies.dsl` and `.choir/policies.dsl` alongside `.choir/choir.config.yaml`.
 
 ### Top-level direction
 
@@ -99,40 +95,19 @@ Explicit DSL rules evaluated across the workspace.
 
 ### Policy DSL Governance (Org + Repo + Environment)
 
-Mutation governance rules are authored as code in Policy DSL and merged across hierarchy layers.
+Policy rules are authored in DSL and merged across hierarchy layers. Runtime flow: `Policy DSL → AST → Compiled Rules → Merge Engine → Policy Engine`. Decision model: `f(yamlDiff, role, environment)`. Parent `deny` is never bypassable by child layers. Merge order: `org → repo → environment`.
 
-Hierarchy model:
+Selectors: `diff.path`, `diff.operation`, `macro`, `role`, `environment`, `contains`, `count > N`  
+Effects: `allow`, `deny`, `require-approval`  
+Inheritance: `inherit assign|append|remove`, `override child|none`
 
-```text
-Org Policies (/org/policies.dsl)
-  -> Repo Policies (.choir/policies.dsl)
-  -> Environment Policies (runtime layer)
-  -> Effective Policy Set (evaluated)
-```
-
-- Policy DSL is the only source of truth for policy gating.
-- Runtime flow is deterministic: `Policy DSL -> AST -> Compiled Policy Rules -> Merge Engine -> Policy Engine`.
-- Policy decisions use context model: `decision = f(yamlDiff, role, environment)`.
-- Parent policies always apply; `deny` is never bypassable by child layers.
-- Merge is deterministic and stable: `org -> repo -> environment`.
-
-Policy DSL rule model supports:
-
-- diff selectors: `diff.path`, `diff.operation`
-- macro selectors: `macro`
-- scope selectors: `role`, `environment`
-- predicates: `contains`, `count > <number>`
-- effects: `allow`, `deny`, `require-approval`
-- inheritance operators: `assign`, `append`, `remove`
-- controlled overrides: `override child`, `override none`
-
-Policy DSL grammar:
+Grammar:
 
 ```bnf
 <policy> ::= "policy" <identifier> "{" <directive>* <rule>* "}"
 
 <directive> ::= "inherit" ("assign" | "append" | "remove")
-          | "override" ("child" | "none")
+              | "override" ("child" | "none")
 
 <rule> ::= "when" <condition> "then" <effect>
 
@@ -149,7 +124,7 @@ Policy DSL grammar:
 <effect> ::= "allow" | "deny" | "require-approval"
 ```
 
-Minimal examples:
+Examples:
 
 ```text
 /org/policies.dsl
@@ -171,10 +146,7 @@ policy repo-fastlane-db {
 }
 ```
 
-Environment layer behavior:
-
-- Environment policies are evaluated last.
-- Production injects strict runtime policy denies for `execution.plans` mutations.
+Environment policies are evaluated last; production injects strict deny rules for `execution.plans` mutations.
 
 ### `execution.plans`
 
@@ -192,278 +164,112 @@ Conductor-managed plans live in the control plane.
 
 ## Orchestration and Execution
 
-Choir includes a deterministic orchestration layer that supports:
+Deterministic orchestration layer:
 
-- State → plan synthesis with stable ordering and deterministic ids
-- Cost-based plan scoring and pre-execution selection
-- Deterministic multi-strategy plan shaping before task execution
-- Deterministic adaptive strategy refinement from prior strategy outcomes
-- User-visible execution previews derived from simulation
-- Multi-plan optimization through global DAG merge and conflict-aware batching
-- Parallel-safe scheduling by dependency layer
-- Speculative transactional batch execution (`simulate → validate → commit/rollback`)
-- Atomic commit and rollback boundaries to avoid partial writes
+- State → plan synthesis (deterministic ids, stable ordering)
+- Cost-based plan scoring and selection
+- Multi-strategy plan shaping (simulation-based, no LLM)
+- Adaptive strategy refinement from prior outcomes
+- Execution previews derived from simulation
+- Multi-plan DAG merge with conflict-aware batching
+- Transactional batch execution (`simulate → validate → commit/rollback`)
+- Global orchestration across repos with org policy propagation and rollback-all semantics
 
-All code mutations still flow through the Enforcer path.
+All code mutations flow through the Enforcer.
+
+### Global Orchestration + Org-Wide Policy Propagation (Alpha Core)
+
+Deterministic multi-repo execution with org policy enforcement.
+
+Key types: `Repo`, `GlobalContext`, `GlobalDependencyGraph`, `GlobalPlan`, `ExecutionOrder`, `TaskBatch`, `OrgPolicy`, `PolicyPropagation`, `GlobalAudit`, `GlobalTrace`
+
+**Plan synthesis:** `buildGlobalDependencyGraph` (inter-repo edges; fails on cycles) → `synthesizeGlobalPlan` (one deterministic DAG, `repoId:taskId` ids) → `validateGlobalPlan` (no missing deps, no cycles, no conflicting actions) → `orderPlan`/`batchTasks` (topological; parallel-safe)
+
+**Policy enforcement:** `propagatePolicies` distributes org policies to all repos (no opt-out); `evaluateGlobalPolicies` detects cross-repo violations (e.g., upstream API break with no downstream adaptation); any deny/required-approval blocks the entire plan.
+
+**Execution:** `executeGlobalPlan` runs dependency-ordered, validates each step, rolls back all repos on failure. `createGlobalPlanningCache` provides deterministic incremental planning keyed by input hash.
+
+Pass 6 of the architecture harness covers: determinism, inter-repo edges, cycle rejection, ordering, batching, policy propagation, cross-repo gating, rollback-all, drift detection, cache reuse. Current scope: core engine + tests; UI integration is a separate layer.
 
 ### Distributed State Synchronization (Alpha Core)
 
-Choir now includes a deterministic distributed sync core for multi-repo and multi-environment state replication.
+Deterministic multi-repo state replication.
 
-Core model:
+Key types: `Replica`, `LogicalClock`, `VersionVector`, `ChangeSet`, `StateOperation`
 
-- `Replica`: repo-scoped state replica with deterministic identity and metadata
-- `LogicalClock`: monotonic clock (`counter`, `nodeId`) with deterministic increment/merge rules
-- `VersionVector`: per-replica version tracking
-- `ChangeSet`: ordered delta payload (`id`, `origin`, `timestamp`, `operations`)
-- `StateOperation`: `add | update | remove` over canonical paths
+- `computeDelta`/`applyDelta`: delta sync with explicit conflict records; no silent drops
+- `mergeStates`/`mergeReplicaStates`: commutative; last-write-wins default (logical clock) with tie-break
+- Clock: increment `+= 1`; merge `= max + 1`; modes: `push`, `pull`, `bidirectional`
+- Security: trusted source + signed changeset verification; tamper → manual-resolution conflict
+- Transport abstraction with in-memory implementation; optional `onStateChange` pub/sub
 
-Sync semantics:
-
-- Delta-based synchronization (`computeDelta`) avoids full-state transfers
-- Deterministic application (`applyDelta`) with explicit conflict records
-- Deterministic merges (`mergeStates` / `mergeReplicaStates`) with no silent conflict drops
-- Sync modes:
-  - `push`
-  - `pull`
-  - `bidirectional`
-- Eventual consistency model with convergence validation (`validateReplicaConvergence`)
-
-Conflict model:
-
-- Conflict detection at same-path different-value boundaries
-- Default resolution: logical-clock last-write-wins with deterministic tie-breaks
-- Optional manual/policy-driven merge handlers; unresolved conflicts require manual resolution
-
-Audit and trace model:
-
-- Sync audit records include source, target, applied deltas, detected conflicts, and trace
-- Sync trace includes replicas involved, changes merged, conflicts detected, convergence status
-
-Security and transport:
-
-- Trusted source checks and signed changeset verification
-- Tamper/untrusted input produces explicit manual-resolution conflict state
-- Transport abstraction (`send` / `receive`) with in-memory implementation
-- Optional event bus for `onStateChange` pub/sub integration
-
-Performance:
-
-- Deterministic batching helpers for large delta streams
-- Compressed delta payload encode/decode helpers
-
-Verification:
-
-- Architecture harness includes a dedicated distributed-sync pass covering clocks, deltas, merge commutativity, sync modes, version vectors, security tamper handling, transport, batching, compression, and manual conflict paths.
+Architecture harness covers: clocks, deltas, merge commutativity, sync modes, version vectors, security/tamper, transport, batching, compression, manual conflict paths.
 
 ### Cost-Based Plan Selection
 
-Before execution, Conductor evaluates approved candidate plans using a deterministic cost model. Scoring is static and execution-free.
-
-Cost dimensions:
-
-- `editCost` (estimated patch count)
-- `fileTouchCost` (unique touched files)
-- `riskCost` (refactor/risk heuristic)
-- `dependencyCost` (longest in-plan dependency chain)
-- `violationReduction` (benefit estimate)
-
-Total score:
+Static, execution-free scoring:
 
 ```text
-totalCost =
-  editCost * 1.0 +
-  fileTouchCost * 2.0 +
-  riskCost * 5.0 +
-  dependencyCost * 1.5 -
-  violationReduction * 3.0
+totalCost = editCost×1.0 + fileTouchCost×2.0 + riskCost×5.0 + dependencyCost×1.5 − violationReduction×3.0
 ```
 
-Selection rules:
-
-- Lower total cost wins
-- Ties are broken by `planId` lexicographic order
-- Same inputs always produce the same selected plan set
-- Scoring performs no mutations and does not execute tasks
-
-Conductor execution output includes a cost trace with evaluated plans and the selection decision.
+Lowest cost wins; `planId` lexicographic tie-break. Output: cost trace with scores and decision.
 
 ### Multi-Strategy Plan Selection
 
-After cost-based plan-set selection, Conductor evaluates each selected plan across a fixed deterministic strategy set:
+Each selected plan is evaluated across `minimal`, `grouped`, `layered`, `aggressive`.
 
-- `minimal`
-- `grouped`
-- `layered`
-- `aggressive`
-
-Evaluation rules:
-
-- Strategy transforms are deterministic and side-effect free
-- Each strategy variant is evaluated via transaction simulation (no commit, no state persistence)
-- Validated strategies are preferred over failed strategies
-- Best real simulation outcome wins among candidates using deterministic metric priority:
-  - lowest remaining violations
-  - then lowest introduced errors
-  - then lowest patch count
-  - then lowest files changed
-- Ties are broken by lexicographic `strategyId`
-
-Execution rules:
-
-- Only the selected strategy plan is executed
-- Conductor emits a strategy trace per base plan:
-  - evaluated strategies
-  - per-strategy outcome metrics/success
-  - selected strategy id
-  - deterministic decision reason
+- Simulation-only (`prepare → simulate → validate`; no commit or state persistence)
+- Selection: validated > failed; rank by violations → errors → patches → files; `strategyId` tie-break
+- Output: strategy trace with per-strategy metrics, selected id, decision reason
 
 ### Adaptive Strategy Generation (Deterministic)
 
-After baseline strategy evaluation, Conductor can run bounded adaptive refinement iterations.
+Bounded refinement iterations after baseline (no LLM, no randomness):
 
-Adaptive rules:
-
-- No LLM usage, no randomness, no probabilistic learning
-- Failure patterns are extracted deterministically from evaluated outcomes
-- Rule-based mutations are applied from a fixed mutation registry
-- Adaptive strategy ids are deterministic hashes of mutation inputs
-- Strategy pool size and iteration count are capped to avoid unbounded growth
-
-Stop conditions:
-
-- Selected strategy is good enough (`success` and `remainingViolations === 0`)
-- No new adaptive strategies are generated
-- Maximum adaptive iterations reached
-
-Adaptive trace includes:
-
-- iteration count
-- strategies evaluated
-- mutations applied
-- selected strategy id
-- deterministic decision log
+- Extract failure patterns → apply rule-based mutations from fixed registry → re-evaluate pool
+- Stop on: success + `remainingViolations === 0`, no new strategies, or max iterations
+- Adaptive ids: deterministic hash of strategy + pattern + mutation + plan shape; pool size capped
+- Trace: iteration count, strategies evaluated, mutations applied, selected id, decision log
 
 ### Strategy Memory and Reuse (Deterministic)
 
-Choir can persist successful strategy outcomes and reuse them deterministically in future runs.
-
-Memory behavior:
-
-- Strategy memory is stored in `.choir/memory.json`
-- Entries are indexed by deterministic context signature (goals, constraints, violation summary, module hints)
-- Exact signature match is used for deterministic lookup
-- Reuse candidates must satisfy:
-  - `success === true`
-  - `remainingViolations === 0`
-- Reuse selection is deterministic:
-  - lowest patch count
-  - then lexicographic memory id tie-break
-
-Safety guardrails:
-
-- Reused plan must pass applicability validation against current workspace/state
-- If validation fails, Choir falls back to adaptive simulation-based strategy evaluation
-- Memory entries are deduplicated and bounded to prevent uncontrolled growth
+- `.choir/memory.json`; keyed by deterministic context signature (goals, constraints, violation summary, module hints)
+- Reuse if `success === true` and `remainingViolations === 0`; select by lowest `patchesCount`
+- Applicability check before reuse; fallback to adaptive evaluation on failure; bounded and deduplicated
 
 ### Execution Preview and Approval Gate
 
-Conductor supports deterministic execution previews so you can inspect exact file diffs before execution.
-
-Preview guarantees:
-
-- Preview runs through simulation logic and does not write real files
-- Preview simulation also does not persist `.choir/state.json`
-- Preview diffs are derived from proposed patches + virtual FS after-state
-- Preview output is deterministic for identical inputs
-- Preview hash binds approval to exact selected-strategy `fileChanges`
-
-Preview surface:
-
-- Includes all evaluated strategies with per-strategy summaries and diffs
-- Includes the deterministically selected strategy id
-- Uses selected strategy file changes for approval hash binding
-
-Approval gate:
-
-- Execution requires a preview hash (`previewId`)
-- Choir stores the last approved preview metadata in state (`execution.lastPreview`)
-- On execute, Choir recomputes preview and rejects if hash differs
-
-Deterministic hash:
-
-```text
-hash = sha256(JSON.stringify(preview.fileChanges))
-```
+- Simulation-derived; never writes real files; deterministic for identical inputs
+- Hash: `sha256(JSON.stringify(preview.fileChanges))` — binds approval to exact file-change content
+- Execution requires matching preview hash; hash mismatch rejects execution and requires a fresh preview
 
 ---
 
 ## Unified Agent Interface
 
-Primary interface from VS Code Chat:
+Entry point: `@choir`. Only `@choir` is a contributed chat participant — internal roles (`architect`, `analyst`, `conductor`, `enforcer`) are not directly addressable.
 
-- `@choir`
-
-Participant exposure contract:
-
-- Only one chat participant is contributed: `@choir` (`id: choir`).
-- Internal role modules (`architect`, `analyst`, `conductor`, `enforcer`) are not directly user-addressable participants.
-- Routing from `@choir` to internal role logic is deterministic and implementation-defined.
-
-Control-plane mutation commands are strict DSL (alpha mode, no natural-language command parsing).
+Commands are strict DSL; no natural-language command parsing.
 
 ### Time-Travel Replay Debugger UI
 
-Choir includes a deterministic replay debugger surface in the Control Center webview.
+Surface: `timeline-view` tab in the Control Center webview.
 
-Replay surface contract:
-
-- Surface id: `timeline-view` (`Time Travel` tab label)
-- Timeline entries are derived from state transitions (index, action, timestamp, from-hash, to-hash, metadata)
-- Replay controls are internal action messages (not DSL commands):
-  - `play`
-  - `pause`
-  - `step-forward`
-  - `step-backward`
-  - `jump` (to explicit timeline index)
-
-Inspector contract:
-
-- Why summary from transition metadata context
-- Dependency chain summary
-- Exact replayed state inspector (`intent`, `ast`, `violations`, `plans`)
-- Patch-level diff table (`path`, `op`, `before`, `after`)
-- Replay trace (`visitedStates`, `replayTime`, `consistencyCheck`, `fallbackUsed`)
-
-Replay behavior:
-
-- Playback advances through deterministic step-forward actions on a fixed timer and auto-pauses when no forward step is available.
-- Replay verifies hash continuity while applying transition diffs.
-- On replay mismatch, Choir falls back deterministically to snapshot-backed reconstruction.
+- Controls (action messages, not DSL): `play`, `pause`, `step-forward`, `step-backward`, `jump`
+- Inspector: why summary, dependency chain, replayed state (`intent`, `ast`, `violations`, `plans`), patch diff table (`path`, `op`, `before`, `after`), replay trace
+- Playback advances on a fixed timer; auto-pauses at end; verifies hash continuity; snapshot fallback on mismatch
 
 ### Interactive Init Wizard (`@choir init`)
 
-Choir includes a stateful guided initialization shortcut in chat:
+```
+@choir init [--template backend|frontend]
+```
 
-- `@choir init`
-- `@choir init --template backend`
-- `@choir init --template frontend`
+Step-driven: `mission → vision → goals → constraints → non-goals → review → confirm`
 
-Wizard behavior:
-
-- Step-driven flow: mission -> vision -> goals -> constraints -> non-goals -> review -> confirm
-- Per-step progress is shown (for example: `Step 2/6 - Vision`)
-- `back` is supported to edit previous steps
-- `cancel` exits the wizard
-- Input dismiss (escape/close) pauses the wizard and keeps resumable state
-- Resume support uses `.choir/init-state.json`
-- Inputs are normalized and duplicate list entries are prevented
-
-Apply model:
-
-- Wizard does not write YAML directly
-- Wizard generates deterministic DSL commands at confirmation
-- Commands are applied sequentially through existing DSL compile + policy gate flow (`compileDSLAndWrite`)
+- `back` navigates; `cancel` exits; dismiss pauses and saves state to `.choir/init-state.json` for resume
+- Generates DSL commands at confirmation; applied through DSL compiler + policy gate; no direct YAML writes
 
 Grammar:
 
@@ -525,213 +331,42 @@ Compilation flow:
 
 ### Choir DSL Editor Language Support (`.choir`)
 
-Choir ships first-class VS Code language support for the DSL.
-
-- File recognition:
-  - `*.choir` is associated to language id `choir`.
-- Syntax highlighting:
-  - TextMate grammar (`source.choir`) highlights comments, strings, keywords, and identifiers.
-  - Keyword list is aligned to the strict DSL command surface (`choir`, `define`, `analyze`, `plan`, `preview`, `execute`, `status`, `export`, `approve`, `reject`, `policy`, `import`, `library`, `install`, `update`, `lock`, `ci`, `run`, `audit`, `log`, `report`, `query`, `macro`, `then`, and related terminals).
-- Language configuration:
-  - Line comments use `#`.
-  - Bracket pairs: `{}`, `()`.
-  - Auto-closing and surrounding pairs for `"`.
-- IntelliSense (deterministic):
-  - Completion suggestions are grammar-state driven (no LLM, no heuristics).
-  - Suggestions are context-aware and only include syntactically valid next tokens.
-  - Hover text is provided for DSL keywords.
-- Validation (parser-backed):
-  - Diagnostics reuse the same strict parser behavior (`parseCommand`) used by compile/runtime.
-  - Validation runs per non-empty, non-comment command line and surfaces parse errors directly in the editor.
-- Snippets:
-  - Built-in snippets for `define`, `plan`, `preview`, `execute`, `export`, `approve`, `reject`, `policy status`, `ci run`, `abstraction run`, `audit log`, `audit report`, `audit query`, and `macro` commands.
-- Editor trace:
-  - Command Palette: `Choir: Show DSL Editor Trace`
-  - Displays deterministic counters: completions triggered, diagnostics count, parse error count.
+- Language id: `choir`; file extension: `.choir`
+- Syntax: TextMate grammar highlights keywords, strings, identifiers, comments
+- IntelliSense: grammar-state driven, valid next tokens only (no LLM); hover for keywords
+- Validation: reuses `parseCommand`; parse errors surfaced inline
+- Config: line comments `#`; bracket pairs `{}`, `()`; auto-closing `"`
+- Snippets: built-in for all DSL commands
+- Trace: `Choir: Show DSL Editor Trace` (completions, diagnostics, parse errors)
 
 ### Internal Architect Role
 
-Defines intent values in `.choir/choir.config.yaml`.
+Defines intent values in `.choir/choir.config.yaml`:
 
-Examples:
-
-- `choir define mission "deterministic engineering workflow"`
-- `choir define vision "policy-native delivery platform"`
-- `choir define goal "enforce service boundaries"`
-- `choir define constraint "no direct db access"`
-- `choir define non-goal "distributed app"`
+```
+choir define mission "deterministic engineering workflow"
+choir define vision "policy-native delivery platform"
+choir define goal "enforce service boundaries"
+choir define constraint "no direct db access"
+choir define non-goal "distributed app"
+```
 
 ### Internal Enforcer Role
 
-Not directly user-addressable in DSL.
+Not directly user-addressable. Evaluates all mutations.
 
 ### YAML Compiler Behavior
 
-The DSL compiler is transactional and deterministic:
+Transactional and deterministic:
 
-- Tokenizes and parses full command input first
-- Validates AST in deterministic phases (`structure -> semantics -> cross-node`)
-- Runs deterministic incremental rule engine pass:
-  - builds AST dependency graph
-  - diffs previous/current AST
-  - computes affected nodes by change propagation
-  - executes indexed rules for affected nodes only
-  - reuses cached rule results for unaffected nodes
-  - invalidates cache entries for changed nodes
-- Supports bounded deterministic fixpoint iteration when rule fixes introduce downstream impact
-- Supports optional incremental-vs-full consistency verification with deterministic fallback to full evaluation on mismatch
-- Applies AST mutations in memory only after validation/rule checks pass
-- Validates resulting config against schema
-- Writes `.choir/choir.config.yaml` once (or returns no-op)
-- After successful YAML write, builds both incremental and full recomputed state projections
-- Compares incremental vs full projected state deterministically before persistence
-- Falls back to full projected state if incremental/full equivalence check fails
-- Persists state through strict validation and consistency checks (YAML/AST/rule outputs)
-- Uses atomic write + rollback-safe persistence for `.choir/state.json`
+1. Tokenize + parse full input
+2. Validate AST (`structure → semantics → cross-node`)
+3. Incremental rule engine: dependency graph → diff changed nodes → propagate affected → execute indexed rules; cache for unaffected; invalidate changed
+4. Apply mutations in memory after validation; validate config against schema
+5. Write `.choir/choir.config.yaml` once; build incremental + full state projections; compare before persistence
+6. Atomic write + rollback-safe persistence for `state.json`
 
-Rule engine trace and performance data include:
-
-- Incremental trace: changed nodes, affected nodes, executed rules, cache usage, fallback status
-- Performance metrics: total candidate rules, rules executed, cache hits, execution time
-
-Supported commands:
-
-- `choir plan`
-- `choir plan for "service boundaries"`
-- `choir plan approve <planId>`
-- `choir preview`
-- `choir preview plan <planId>`
-- `choir execute`
-- `choir execute plan <planId>`
-- `choir status`
-- `choir export dsl`
-- `choir export dsl intent`
-- `choir export dsl policy`
-- `choir export dsl plans`
-- `choir approve <diffId>`
-- `choir reject <diffId>`
-- `choir policy status`
-- `choir import <library>@<version-selector>`
-- `choir library list`
-- `choir library install <library>@<version-selector>`
-- `choir library update <library>`
-- `choir library lock`
-- `choir ci run`
-- `choir <abstraction-id> [key="value", ...]`
-- `choir audit log`
-- `choir audit report`
-- `choir audit query [role=<id>, environment=<id>, action=<id>, from="...", to="..."]`
-- `choir macro list`
-- `choir macro show <macroId>`
-- `choir macro <macroId> [key="value", ...]`
-
-Macro storage and model:
-
-- Local macro registry file: `.choir/macros.yaml`
-- Library manifests: `.choir/libraries/<library>/<version>/macros.yaml`
-- Resolved library versions: `.choir/lock.yaml`
-- Each macro contains:
-  - `id`
-  - required `version` (semver)
-  - optional `description`
-  - optional `parameters[]` (`name`, `required`, optional `default`)
-  - `body[]` (templated DSL command lines)
-- Expansion pipeline is strict and deterministic:
-  - `Macro -> DSL -> AST -> Validation -> Rule Engine -> YAML -> Pipeline`
-- Macros never write YAML directly.
-- Macro body commands are validated with the same DSL parser used by runtime.
-- Macro steps execute sequentially through `compileDSLAndWrite`, so each step passes policy gates and diff/approval checks.
-- Macro composition is supported (`choir macro ...` inside macro bodies) with deterministic recursion detection and depth limit.
-- Library macros are namespaced as `<library>.<macroId>`.
-- Library selectors resolve deterministically to exact versions: `1.0.0`, `1.0.x`, `1.x`.
-- Resolution is local-only and lockfile-pinned (no network lookups).
-- Breaking changes between library versions require MAJOR version bumps.
-
-Mutation behavior:
-
-- `choir define mission|vision ...`: mutates top-level mission/vision in YAML via deterministic set
-- `choir define goal|constraint|non-goal ...`: mutates intent fields in YAML via deterministic upsert
-- Duplicate `define` values inside one command sequence are rejected during AST semantic validation
-- Re-defining an existing identical value in persisted YAML is treated as deterministic no-op (warning trace)
-- Incremental rule cache/state is runtime-only and never treated as authoritative control/state data
-- `choir plan [for "..."]`: synthesizes a deterministic draft plan and upserts it into YAML
-- `choir plan approve <planId>`: marks an existing plan as approved in YAML via deterministic update
-- `choir analyze|preview|execute|status|ci|audit|import|library|<abstraction-id> ...`: accepted by grammar, non-mutating in YAML compiler mode
-
-YAML -> DSL projection behavior:
-
-- `choir export dsl` generates one command per line in deterministic order
-- Command ordering is stable: goals, constraints, non-goals, policy, plans
-- Export output is written to `.choir/choir.dsl` (or section-specific `.choir/choir.<section>.dsl`)
-- Unrepresentable YAML sections are skipped with warnings (no synthetic DSL is invented)
-
-Policy approval gate behavior:
-
-- Decision model: `decision = f(yamlDiff, role, environment)`
-- Macro-aware decision model: `decision = f(yamlDiff, role, environment, macroId)`
-- Every YAML mutation diff is evaluated deterministically against an effective merged policy set from org/repo/environment Policy DSL layers
-- Source merge order is deterministic and fixed: `org -> repo -> environment`
-- Role is trusted system context (derived from command/action role mapping), not user-provided DSL input
-- Environment is trusted runtime context (`CI`, `NODE_ENV`, optional `CHOIR_ENVIRONMENT`), not DSL input
-- Macro context is trusted runtime resolution from lockfile-pinned macro library execution, not free-form user input during policy evaluation
-- Deterministic precedence is enforced: `deny > require-approval > allow`
-- No policy source is mutated during evaluation
-- No hidden overrides are allowed
-- Duplicate policy IDs across layers are rejected
-- `deny` rules block mutation
-- `require-approval` rules create a pending diff id and block mutation until approved
-- Approvals are bound to exact diff hash and cannot be reused for different diffs
-- Child layers cannot override parent `deny`
-- Policy traces include role, environment, source-aware matched rules, policy DSL traces, inheritance traces, and final decision for auditability
-
-Example policy gate config:
-
-```text
-/org/policies.dsl
-policy org-block-prod-plan-changes {
-  when diff.path = "execution.plans"
-    and environment = production
-  then deny
-}
-
-policy org-ci-requires-approval {
-  when diff.path = "intent.constraints"
-    and diff.operation = add
-    and environment = ci
-  then require-approval
-}
-
-.choir/policies.dsl
-policy repo-analyst-readonly {
-  when diff.operation = add
-    and role = analyst
-  then deny
-}
-
-policy repo-restrict-db-access {
-  when diff.path = "intent.constraints"
-    and diff.operation = add
-    and contains "db"
-  then require-approval
-}
-
-# runtime environment layer (implicit)
-# production denies execution.plans add/update/remove
-```
-
-Idempotency guarantees:
-
-- Same input and same starting YAML produce identical output YAML
-- Repeating the same single `define` command against existing identical state is deterministic no-op
-- Duplicate `define` values in a single command sequence are rejected (no partial mutation)
-- Incremental rule results are deterministic and equal full recomputation for identical inputs
-- Projected state hashes are deterministic for equivalent state content
-- Incremental projected state equals full recomputed state (or deterministically falls back before persistence)
-- Cache invalidation prevents stale rule outcomes from being reused after AST changes
-- Duplicate plan ids are not re-added
-- Macro expansion with identical inputs produces identical expanded commands
-- Lockfile-pinned macro library execution produces identical version resolution for identical `.choir/lock.yaml`
-- Identical `(yamlDiff, role, environment, org+repo policies, runtime environment)` inputs always produce identical policy decisions
+Trace includes: changed/affected nodes, executed rules, cache usage, fallback status, performance metrics.
 
 ---
 
@@ -820,21 +455,13 @@ jobs:
 
 ## Higher-Level Abstractions
 
-Choir supports intent-level abstractions that compile into deterministic macro + DSL steps while preserving governance:
+Intent-level commands that compile into macro + DSL steps: `Abstraction → Macro Composition → DSL → YAML → Policy → Execution → Audit`
 
-- `Abstraction -> Macro Composition -> DSL -> YAML -> Policy -> Execution -> Audit`
+Storage: `.choir/abstractions.yaml`. Model: `id`, `version`, `description`, `parameters[]`, `expandsTo[]`.
 
-Storage:
+Built-in: `enforce-hexagonal-architecture`, `migrate-to-service-layer`
 
-- `.choir/abstractions.yaml`
-
-Model:
-
-- `id`
-- `version` (semver)
-- `description`
-- optional `parameters[]`
-- `expandsTo[]` (ordered commands)
+Commands: `@choir list abstractions`, `@choir describe <id>`, `choir <id> [key="value"]`
 
 Example:
 
@@ -842,7 +469,6 @@ Example:
 abstractions:
   - id: bootstrap-service
     version: 1.0.0
-    description: "Initialize a service architecture"
     parameters:
       - name: name
         required: true
@@ -853,112 +479,30 @@ abstractions:
       - choir preview
 ```
 
-Execution guarantees:
-
-- Expanded commands are executed in order.
-- Every expanded command goes through existing DSL compile and policy gates.
-- Abstractions can call macros and other abstractions with recursion depth limits.
-- Non-execution system commands are rejected inside abstractions.
-- Same abstraction id + args + input state produce deterministic output.
-
-Chat commands:
-
-- `@choir list abstractions`
-- `@choir describe <abstraction-id>`
-- `@choir run <abstraction-id>`
-
-DSL command example:
-
-- `choir bootstrap-service name="user-service"`
-
-Built-in abstractions:
-
-- `enforce-hexagonal-architecture`
-- `migrate-to-service-layer`
-
 ---
 
 ## Macro Libraries
 
-Choir supports local, versioned macro libraries for cross-repository reuse.
+Versioned, lockfile-pinned, local-only macro libraries.
 
-Storage model:
-
-- `.choir/libraries/<library>/<version>/macros.yaml`
-- Versions are immutable; publish a new version directory instead of editing in place
-- Library manifests include: `name`, `version`, `metadata`, `macros[]`
-
-Lockfile model:
-
-- `.choir/lock.yaml` stores resolved exact versions
-- Example:
-
-```yaml
-libraries:
-  core: 1.0.0
-  architecture: 2.1.0
-```
-
-Library commands:
-
-- `choir import core@1.0.x`
-- `choir library list`
-- `choir library install core@1.0.0`
-- `choir library update core`
-- `choir library lock`
-
-Determinism guarantees:
-
-- No unversioned macros
-- No nondeterministic library resolution
-- Same locked version produces the same macro behavior
-- No direct macro execution path bypasses DSL compilation/policy gate
+- Storage: `.choir/libraries/<lib>/<ver>/macros.yaml`; versions immutable
+- Lock: `.choir/lock.yaml` pins resolved versions
+- Commands: `choir import core@1.0.x`, `choir library list|install|update|lock`
+- Namespaced as `<library>.<macroId>`; no unversioned macros; no network calls; breaking changes require MAJOR bump
 
 ---
 
 ## Audit and Compliance Reporting
 
-Choir records immutable, explainable audit evidence for significant control-plane and execution actions.
+Append-only, hash-chained audit log: `.choir/audit.log.jsonl` (chain anchored at `GENESIS`).
 
-Audit storage and integrity:
+Audited: `policy-evaluation`, `compile-dsl`, `approval-granted`, `approval-rejected`, `execute-plan`, `macro-execution`, `ci-policy-gate`, `ci-pipeline`, `abstraction-execution`
 
-- Append-only audit log file: `.choir/audit.log.jsonl`
-- Each record is hash-chained with deterministic fields: `chainIndex`, `previousHash`, and `hash`
-- First record uses `GENESIS` as `previousHash`
-- Chain integrity is validated when reading audit data
+- `choir audit log` — recent events
+- `choir audit query role=..., environment=..., action=..., from="...", to="..."` — filtered
+- `choir audit report` → `.choir/reports/compliance-{report.json,.yaml,.pdf}`
 
-Audited action types include:
-
-- `policy-evaluation`
-- `compile-dsl`
-- `approval-granted`
-- `approval-rejected`
-- `execute-plan`
-- `macro-execution`
-- `ci-policy-gate`
-- `ci-pipeline`
-- `abstraction-execution`
-
-Audit query/report command surface:
-
-- `choir audit log`
-  - Shows recent audit events with role, action, and result
-- `choir audit query role=architect, environment=ci, action=compile-dsl`
-  - Filters are deterministic and support: `role`, `environment`, `action`, `from`, `to`
-  - Time-range filters require both `from` and `to`
-- `choir audit report`
-  - Generates deterministic compliance summaries
-  - Exports report artifacts to:
-    - `.choir/reports/compliance-report.json`
-    - `.choir/reports/compliance-report.yaml`
-    - `.choir/reports/compliance-report.pdf`
-
-Report model highlights:
-
-- Summary fields: `totalEvents`, `approvalsRequired`, `denials`
-- Findings fields: `violations`, `anomalies`
-- Anomalies are derived from failed audit events
-- Macro-driven compile records include library provenance metadata (`macroLibrary`, `version`, `macroId`, `resolvedVersion`)
+Report fields: `totalEvents`, `approvalsRequired`, `denials`, `violations`, `anomalies`. Macro records include library provenance metadata.
 
 ---
 
@@ -979,57 +523,35 @@ Command palette:
 
 ## Diagnostics and State
 
-Choir runs the pipeline on save and publishes diagnostics to **Problems** (`View → Problems`).
+Pipeline runs on save; diagnostics published to **Problems** (`View → Problems`).
 
-Derived system state is written to `.choir/state.json`, including:
+`state.json` contains: projected state, AST/dependency metadata, diagnostics, metrics, execution runtime state, `strategyHistory`.
 
-- versioned projected state fields (`version`, `intent`, `ast`, `graph`, `ruleViolations`, `plans`, `stateHash`)
-- AST and symbol/dependency metadata
-- diagnostics and metrics
-- execution runtime state (task status, task results, history, preview approvals)
-- strategy history (`strategyHistory`) for deterministic adaptive refinement feedback
+State correctness:
 
-State correctness guarantees:
+- Strict read validation; atomic write with pre/post validation; rollback-safe
+- Transitions: deterministic records (`id`, `fromHash`, `toHash`, `action`, `timestamp`, `diff`, metadata)
+- Snapshots: hybrid cadence (initial + every 5 transitions)
+- Replay: `jumpTo`, `replayTo`, `stepForward`, `stepBackward`; hash continuity verified; snapshot fallback on mismatch
+- Distributed sync: deterministic delta/merge, explicit conflicts, convergence checks, tamper rejection
+- Global orchestration: full plan + policy validation before execution; rollback-all on failure; deterministic propagation
 
-- `state.json` reads are strict; invalid/corrupt state is rejected.
-- Persistence is atomic and rollback-safe (`persistStatePlane`).
-- Pre-write and post-write validation must pass.
-- Optional consistency checks enforce alignment between state and YAML/AST/rule outputs.
-- State transitions are validated and recorded deterministically.
-- Transition records include deterministic replay fields (`id`, `fromHash`, `toHash`, `action`, `timestamp`, `diff`, metadata).
-- Transition diffs are patch-based and ordered (`path`, `op`, `before`, `after`).
-- Snapshot persistence follows deterministic hybrid cadence (initial + fixed interval snapshots).
-- Replay navigation supports deterministic `jumpTo`, `replayTo`, `stepForward`, and `stepBackward` behavior.
-- Replay verifies transition hash continuity and deterministically falls back to snapshot reconstruction if needed.
-- Distributed sync core enforces deterministic delta/merge semantics and explicit conflict surfacing.
-- Distributed sync supports eventual consistency with deterministic convergence checks.
-- Signed changeset verification can be enabled to reject untrusted/tampered updates.
+Artifacts:
 
-State integrity artifacts:
-
-- snapshots: `.choir/state.snapshots.jsonl`
-- transitions: `.choir/state.transitions.jsonl`
-- state audit trail: `.choir/state.audit.jsonl`
-
-Audit evidence is persisted in `.choir/audit.log.jsonl`.
-
-Macro library manifests are stored under `.choir/libraries/`.
-
-Macro library lock resolution is stored in `.choir/lock.yaml`.
-
-CI pipeline configuration is stored in `.choir/ci.yaml`.
-
-Abstraction registry is stored in `.choir/abstractions.yaml`.
-
-CI run artifacts are stored in `.choir/artifacts/ci/`.
-
-Compliance reports are exported to `.choir/reports/` when `choir audit report` is invoked.
-
-Strategy memory is persisted separately in `.choir/memory.json`.
-
-Interactive init wizard session state (resumable) is persisted in `.choir/init-state.json`.
-
-`state.json` is derived and reproducible from workspace + control plane.
+| Path | Purpose |
+|---|---|
+| `.choir/state.json` | Derived state (reproducible) |
+| `.choir/state.snapshots.jsonl` | Rollback snapshots |
+| `.choir/state.transitions.jsonl` | Append-only transition log |
+| `.choir/state.audit.jsonl` | Append-only state audit |
+| `.choir/audit.log.jsonl` | Compliance audit log |
+| `.choir/memory.json` | Strategy memory |
+| `.choir/lock.yaml` | Library version lock |
+| `.choir/ci.yaml` | CI pipeline config |
+| `.choir/abstractions.yaml` | Abstraction registry |
+| `.choir/libraries/` | Macro library manifests |
+| `.choir/artifacts/ci/` | CI run artifacts |
+| `.choir/reports/` | Compliance report exports |
 
 ---
 

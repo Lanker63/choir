@@ -197,6 +197,22 @@ import {
   sync,
   validateReplicaConvergence,
 } from "../../core/distributedSync.js";
+import {
+  blockGlobalExecution,
+  batchTasks as batchGlobalTasks,
+  buildGlobalContext,
+  buildGlobalDependencyGraph,
+  createGlobalPlanningCache,
+  detectPolicyDrift,
+  evaluateGlobalPolicies,
+  executeGlobalPlan,
+  orderPlan as orderGlobalPlan,
+  OrgPolicy,
+  propagatePolicies,
+  Repo,
+  synthesizeGlobalPlan,
+  validateGlobalPlan,
+} from "../../core/globalOrchestration.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -4322,6 +4338,345 @@ const pass5: TestPass = {
   ],
 };
 
+const pass6: TestPass = {
+  name: "Pass 6 — Global Orchestration and Org Policy Propagation",
+  tests: [
+    {
+      id: "6.1",
+      name: "global context and synthesized plan are deterministic for identical inputs",
+      run: async () => {
+        const cache = createGlobalPlanningCache();
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { status: { ready: true } },
+            tasks: [
+              { id: "build", action: "set:status.build=done", dependsOn: [] },
+            ],
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: { status: { ready: true } },
+            tasks: [
+              { id: "adapt", action: "adapt:api:v2", dependsOn: [] },
+            ],
+          },
+        ];
+
+        const orgPolicies: OrgPolicy[] = [
+          {
+            id: "org-base",
+            rules: [
+              {
+                id: "deny-eval",
+                kind: "deny-action-prefix",
+                effect: "deny",
+                actionPrefix: "eval:",
+              },
+            ],
+          },
+        ];
+
+        const propagated = propagatePolicies(orgPolicies, repos);
+        const firstContext = buildGlobalContext(repos, propagated.byRepo["repo-a"] ?? [], { cache });
+        const secondContext = buildGlobalContext(repos, propagated.byRepo["repo-a"] ?? [], { cache });
+        const firstPlan = synthesizeGlobalPlan(firstContext, { cache });
+        const secondPlan = synthesizeGlobalPlan(secondContext, { cache });
+
+        assert.strictEqual(firstPlan.id, secondPlan.id);
+        assert.deepStrictEqual(firstPlan.tasks, secondPlan.tasks);
+      },
+    },
+    {
+      id: "6.2",
+      name: "global dependency graph includes inter-repo edges and rejects repo cycles",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: {},
+            tasks: [{ id: "publish", action: "api:breaking:v2", dependsOn: [] }],
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: {},
+            tasks: [{ id: "consume", action: "adapt:api:v2", dependsOn: [] }],
+          },
+        ];
+
+        const graph = buildGlobalDependencyGraph(repos);
+        assert.ok(
+          graph.edges.some((edge) => edge.from === "repo-a:publish" && edge.to === "repo-b:consume")
+        );
+
+        assert.throws(() => buildGlobalDependencyGraph([
+          { id: "repo-a", dependencies: ["repo-b"], state: {}, tasks: [{ id: "a", action: "noop", dependsOn: [] }] },
+          { id: "repo-b", dependencies: ["repo-a"], state: {}, tasks: [{ id: "b", action: "noop", dependsOn: [] }] },
+        ]));
+      },
+    },
+    {
+      id: "6.3",
+      name: "ordered global execution is deterministic and dependency-safe",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: {},
+            tasks: [
+              { id: "a1", action: "set:meta.a1=done", dependsOn: [] },
+              { id: "a2", action: "set:meta.a2=done", dependsOn: ["a1"] },
+            ],
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: {},
+            tasks: [{ id: "b1", action: "set:meta.b1=done", dependsOn: [] }],
+          },
+        ];
+
+        const context = buildGlobalContext(repos, []);
+        const plan = synthesizeGlobalPlan(context);
+        const orderedA = orderGlobalPlan(plan);
+        const orderedB = orderGlobalPlan(plan);
+
+        assert.deepStrictEqual(orderedA.orderedTaskIds, orderedB.orderedTaskIds);
+
+        const index = new Map(orderedA.orderedTaskIds.map((taskId, taskIndex) => [taskId, taskIndex] as const));
+        for (const task of plan.tasks) {
+          for (const dep of task.dependsOn) {
+            assert.ok((index.get(dep) ?? -1) < (index.get(task.id) ?? -1));
+          }
+        }
+      },
+    },
+    {
+      id: "6.4",
+      name: "global plan validation catches missing deps and conflicting actions",
+      run: async () => {
+        const invalid = {
+          id: "plan-invalid",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "add:feature-x", dependsOn: ["repo-a:missing"] },
+            { id: "repo-a:t2", repoId: "repo-a", action: "remove:feature-x", dependsOn: [] },
+          ],
+        };
+
+        const result = validateGlobalPlan(invalid);
+        assert.strictEqual(result.valid, false);
+        assert.ok(result.errors.some((error) => error.includes("Missing dependency")));
+        assert.ok(result.errors.some((error) => error.includes("Conflicting actions")));
+      },
+    },
+    {
+      id: "6.5",
+      name: "task batching parallelizes independent work and sequences dependencies",
+      run: async () => {
+        const plan = {
+          id: "plan-batches",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:x=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:y=1", dependsOn: [] },
+            { id: "repo-c:t1", repoId: "repo-c", action: "set:z=1", dependsOn: ["repo-a:t1", "repo-b:t1"] },
+          ],
+        };
+
+        const batches = batchGlobalTasks(plan);
+        assert.strictEqual(batches.length, 2);
+        assert.deepStrictEqual(batches[0]?.taskIds, ["repo-a:t1", "repo-b:t1"]);
+        assert.deepStrictEqual(batches[1]?.taskIds, ["repo-c:t1"]);
+      },
+    },
+    {
+      id: "6.6",
+      name: "org policies are propagated to all repos with no opt-out",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: {} },
+          { id: "repo-b", dependencies: ["repo-a"], state: {} },
+          { id: "repo-c", dependencies: [], state: {} },
+        ];
+
+        const orgPolicies: OrgPolicy[] = [
+          {
+            id: "org-standard",
+            rules: [
+              {
+                id: "require-baseline",
+                kind: "require-state-path",
+                effect: "deny",
+                path: "security.baseline",
+              },
+            ],
+          },
+        ];
+
+        const distribution = propagatePolicies(orgPolicies, repos);
+        assert.deepStrictEqual(distribution.propagation.targets, ["repo-a", "repo-b", "repo-c"]);
+        assert.strictEqual(Object.keys(distribution.byRepo).length, 3);
+        assert.strictEqual((distribution.byRepo["repo-b"] ?? []).length, 1);
+      },
+    },
+    {
+      id: "6.7",
+      name: "cross-repo policy evaluation detects compatibility violations and blocks execution",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: {},
+            tasks: [{ id: "publish", action: "api:breaking:v2", dependsOn: [] }],
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: {},
+            tasks: [{ id: "internal", action: "refactor:internal", dependsOn: [] }],
+          },
+        ];
+
+        const policy = {
+          id: "cross-repo-api-compat",
+          kind: "cross-repo-action-compatibility" as const,
+          effect: "deny" as const,
+          upstreamPrefix: "api:breaking",
+          downstreamPrefix: "adapt:api",
+        };
+
+        const context = buildGlobalContext(repos, [{ id: "org-policy", source: "org", rules: [policy] }]);
+        const plan = synthesizeGlobalPlan(context);
+        const policyResult = evaluateGlobalPolicies(plan, [policy], repos);
+
+        assert.strictEqual(policyResult.allowed, false);
+        assert.ok(policyResult.violations.some((entry) => entry.includes("repo-b depends on repo-a")));
+        assert.throws(() => blockGlobalExecution(policyResult));
+      },
+    },
+    {
+      id: "6.8",
+      name: "global execution is transactional and rolls back all repos on failure",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { value: "initial-a" },
+            tasks: [{ id: "ok", action: "set:meta.synced=true", dependsOn: [] }],
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: { value: "initial-b" },
+            tasks: [{ id: "fail", action: "set:meta.synced=true", dependsOn: [] }],
+          },
+        ];
+
+        const context = buildGlobalContext(repos, []);
+        const plan = synthesizeGlobalPlan(context);
+        const result = await executeGlobalPlan(plan, {
+          repos,
+          policies: [],
+          executeTask: async (task, state) => {
+            if (task.id === "repo-b:fail") {
+              throw new Error("simulated failure");
+            }
+
+            return {
+              ...state,
+              appliedBy: task.id,
+            };
+          },
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.rolledBack, true);
+        assert.deepStrictEqual(result.finalStates["repo-a"], { value: "initial-a" });
+        assert.deepStrictEqual(result.finalStates["repo-b"], { value: "initial-b" });
+      },
+    },
+    {
+      id: "6.9",
+      name: "policy drift detection flags repo states that diverge from org expectations",
+      run: async () => {
+        const orgPolicies: OrgPolicy[] = [
+          {
+            id: "org-security",
+            rules: [
+              {
+                id: "baseline-required",
+                kind: "require-state-path",
+                effect: "deny",
+                path: "security.baseline",
+              },
+            ],
+          },
+        ];
+
+        const driftedRepo: Repo = {
+          id: "repo-a",
+          dependencies: [],
+          state: { security: {} },
+        };
+
+        const compliantRepo: Repo = {
+          id: "repo-b",
+          dependencies: [],
+          state: { security: { baseline: "v1" } },
+        };
+
+        const driftA = detectPolicyDrift(driftedRepo, orgPolicies);
+        const driftB = detectPolicyDrift(compliantRepo, orgPolicies);
+
+        assert.strictEqual(driftA.driftDetected, true);
+        assert.strictEqual(driftB.driftDetected, false);
+      },
+    },
+    {
+      id: "6.10",
+      name: "incremental planning cache reuses previous graph and plan for unchanged inputs",
+      run: async () => {
+        const cache = createGlobalPlanningCache();
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { marker: 1 },
+            tasks: [{ id: "task", action: "set:marker=2", dependsOn: [] }],
+          },
+        ];
+
+        const contextA = buildGlobalContext(repos, [], { cache });
+        const planA = synthesizeGlobalPlan(contextA, { cache });
+        const contextB = buildGlobalContext(repos, [], { cache });
+        const planB = synthesizeGlobalPlan(contextB, { cache });
+
+        assert.strictEqual(planA.id, planB.id);
+        assert.deepStrictEqual(planA.tasks, planB.tasks);
+
+        const changedRepos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { marker: 1 },
+            tasks: [{ id: "task", action: "set:marker=3", dependsOn: [] }],
+          },
+        ];
+        const changedContext = buildGlobalContext(changedRepos, [], { cache });
+        const changedPlan = synthesizeGlobalPlan(changedContext, { cache });
+
+        assert.notStrictEqual(changedPlan.id, planA.id);
+      },
+    },
+  ],
+};
+
 const finalPass: TestPass = {
   name: "Final — Cross-Cutting Tests",
   tests: [
@@ -4570,7 +4925,7 @@ async function runPass(testPass: TestPass): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  const passes: TestPass[] = [pass1, pass2, pass3, pass4, pass5, finalPass];
+  const passes: TestPass[] = [pass1, pass2, pass3, pass4, pass5, pass6, finalPass];
 
   for (const testPass of passes) {
     const ok = await runPass(testPass);
