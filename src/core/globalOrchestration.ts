@@ -274,11 +274,6 @@ export type RolloutStrategy =
   | { type: "phased"; phases: number[] }
   | { type: "batched"; batchSize: number };
 
-export type TransactionStage = {
-  stageId: string;
-  units: string[];
-};
-
 export type Transaction = {
   id: string;
   stages: ExecutionStage[];
@@ -344,6 +339,7 @@ export type CompensationAction = {
 export type Lock = {
   unitId: string;
   transactionId: string;
+  ownerToken: symbol;
 };
 
 export type RollbackTrace = {
@@ -517,6 +513,21 @@ function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
 }
 
+function uniqueInOrder(values: string[]): string[] {
+  const seen = new Set<string>();
+  const ordered: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    ordered.push(value);
+  }
+
+  return ordered;
+}
+
 function stateForRepos(repos: Repo[]): GlobalState {
   return Object.fromEntries(
     [...repos]
@@ -555,12 +566,6 @@ function setUnitExecutionState(state: ExecutionState, unitId: string, value: Uni
 }
 
 const transactionLocks = new Map<string, Lock>();
-let transactionLockOwnerCounter = 0;
-
-function nextTransactionLockOwner(transactionId: string): string {
-  transactionLockOwnerCounter += 1;
-  return `${transactionId}:${transactionLockOwnerCounter}`;
-}
 
 export function sortStages(stages: ExecutionStage[]): ExecutionStage[] {
   return [...stages].sort((left, right) =>
@@ -625,10 +630,8 @@ export function abortTransaction(ctx: TransactionContext): void {
   ctx.transaction.status = "aborted";
 }
 
-function applyToState(state: GlobalState, change: Change): GlobalState {
-  const next = cloneState(state);
-  next[change.unitId] = cloneUnknown(change.nextState);
-  return next;
+function setTransactionUnitState(ctx: TransactionContext, unitId: string, nextState: SystemState): void {
+  ctx.workingState[unitId] = cloneUnknown(nextState);
 }
 
 export function snapshotUnit(ctx: TransactionContext, unitId: string): void {
@@ -645,7 +648,7 @@ export function snapshotUnit(ctx: TransactionContext, unitId: string): void {
 
 export function applyChange(ctx: TransactionContext, change: Change): void {
   snapshotUnit(ctx, change.unitId);
-  ctx.workingState = applyToState(ctx.workingState, change);
+  setTransactionUnitState(ctx, change.unitId, change.nextState);
 }
 
 export function registerCompensationAction(ctx: TransactionContext, action: CompensationAction): void {
@@ -694,13 +697,13 @@ export function commitPhase(ctx: TransactionContext): void {
   commitTransaction(ctx);
 }
 
-function acquireLocks(transactionId: string, units: string[]): RolloutValidationResult {
+function acquireLocks(ownerToken: symbol, transactionId: string, units: string[]): RolloutValidationResult {
   const errors: string[] = [];
   const uniqueUnits = sortedUnique(units);
 
   for (const unit of uniqueUnits) {
     const existing = transactionLocks.get(unit);
-    if (existing && existing.transactionId !== transactionId) {
+    if (existing && existing.ownerToken !== ownerToken) {
       errors.push(`Lock conflict: unit ${unit} is held by transaction ${existing.transactionId}`);
     }
   }
@@ -716,6 +719,7 @@ function acquireLocks(transactionId: string, units: string[]): RolloutValidation
     transactionLocks.set(unit, {
       unitId: unit,
       transactionId,
+      ownerToken,
     });
   }
 
@@ -725,9 +729,9 @@ function acquireLocks(transactionId: string, units: string[]): RolloutValidation
   };
 }
 
-function releaseLocks(transactionId: string): void {
+function releaseLocks(ownerToken: symbol): void {
   for (const [unit, lock] of transactionLocks.entries()) {
-    if (lock.transactionId === transactionId) {
+    if (lock.ownerToken === ownerToken) {
       transactionLocks.delete(unit);
     }
   }
@@ -1181,7 +1185,7 @@ function executionStagesFromBatches(batches: TaskBatch[]): ExecutionStage[] {
 function buildTransactionTrace(ctx: TransactionContext, stagesExecuted: string[]): TransactionTrace {
   return {
     transactionId: ctx.transactionId,
-    stagesExecuted: sortedUnique(stagesExecuted),
+    stagesExecuted: uniqueInOrder(stagesExecuted),
     committed: ctx.transaction.status === "committed",
     duration: Math.max(0, Date.now() - ctx.transaction.startedAt),
   };
@@ -1238,15 +1242,15 @@ export async function executeTransaction(
   const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
   const tx = beginTransaction(baseState, stages);
   const shouldLock = mode === "execution";
-  const lockOwnerId = shouldLock ? nextTransactionLockOwner(tx.transactionId) : undefined;
+  const lockOwnerToken = shouldLock ? Symbol(tx.transactionId) : undefined;
   const lockUnits = sortedUnique(effectivePlan.tasks.map((task) => task.repoId));
   const stepsExecuted: string[] = [];
   const unitsAffected = new Set<string>();
   const committedStages: string[] = [];
   const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
 
-  if (shouldLock && lockOwnerId) {
-    const lockResult = acquireLocks(lockOwnerId, lockUnits);
+  if (shouldLock && lockOwnerToken) {
+    const lockResult = acquireLocks(lockOwnerToken, tx.transactionId, lockUnits);
     if (!lockResult.valid) {
       abortTransaction(tx);
       return {
@@ -1274,8 +1278,8 @@ export async function executeTransaction(
 
   if (!policyResult.allowed) {
     abortTransaction(tx);
-    if (lockOwnerId) {
-      releaseLocks(lockOwnerId);
+    if (lockOwnerToken) {
+      releaseLocks(lockOwnerToken);
     }
     return {
       success: false,
@@ -1318,10 +1322,7 @@ export async function executeTransaction(
           registerCompensationAction(stageTx, {
             unitId: task.repoId,
             undo: () => {
-              stageTx.workingState = applyToState(stageTx.workingState, {
-                unitId: task.repoId,
-                nextState: previousState,
-              });
+              setTransactionUnitState(stageTx, task.repoId, previousState);
             },
           });
           stepsExecuted.push(task.id);
@@ -1446,8 +1447,8 @@ export async function executeTransaction(
       trace: buildTransactionTrace(tx, committedStages),
     };
   } finally {
-    if (lockOwnerId) {
-      releaseLocks(lockOwnerId);
+    if (lockOwnerToken) {
+      releaseLocks(lockOwnerToken);
     }
   }
 }
