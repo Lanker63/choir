@@ -40,6 +40,7 @@ import {
     simulatePlan as simulateGlobalPlan,
     simulateUnits as simulateGlobalUnits,
 } from "./core/globalOrchestration.js";
+import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import {
     formatDSL,
@@ -176,18 +177,6 @@ function buildSimulationRepos(plans: GlobalPlan[]): Repo[] {
             dependencies: sortedUnique([...dependencies]),
             state: {},
         }));
-}
-
-function riskLabel(violations: number, riskScore: number): "LOW" | "MEDIUM" | "HIGH" {
-    if (violations > 0) {
-        return "HIGH";
-    }
-
-    if (riskScore >= 8) {
-        return "MEDIUM";
-    }
-
-    return "LOW";
 }
 
 function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace): void {
@@ -1038,16 +1027,6 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         ? await simulateGlobalUnits(simulateNode.units, chosenPlan, simulationOptions)
                         : await simulateGlobalPlan(chosenPlan, simulationOptions);
 
-                    const changeLines = simulated.changes.length === 0
-                        ? ["- none"]
-                        : simulated.changes
-                            .sort((left, right) => left.unitId.localeCompare(right.unitId))
-                            .map((entry) => `- ${entry.unitId}: ${entry.filesChanged.length} files`);
-
-                    const violationLines = simulated.violations.length === 0
-                        ? ["- none"]
-                        : simulated.violations.map((entry) => `- ${entry}`);
-
                     const fallbackChanges = simulated.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
                     const fallbackRisk = (simulated.violations.length * 5) + fallbackChanges;
                     const metrics = comparisonMetrics ?? {
@@ -1056,22 +1035,14 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         violations: simulated.violations.length,
                     };
 
-                    stream.markdown([
-                        simulated.success ? "Simulation successful" : "Simulation failed",
-                        `- strategy: ${chosenPlan.id}`,
-                        simulateNode.units && simulateNode.units.length > 0 ? `- units: ${simulateNode.units.join(", ")}` : "- units: all",
-                        "",
-                        "Changes:",
-                        ...changeLines,
-                        "",
-                        "Violations:",
-                        ...violationLines,
-                        "",
-                        `Risk: ${riskLabel(metrics.violations, metrics.risk)}`,
-                        `- riskScore: ${metrics.risk}`,
-                        `- changes: ${metrics.changes}`,
-                        `- violations: ${metrics.violations}`,
-                    ].join("\n"));
+                    stream.markdown(formatSimulationChatResult({
+                        success: simulated.success,
+                        strategyId: chosenPlan.id,
+                        units: simulateNode.units,
+                        changes: simulated.changes,
+                        violations: simulated.violations,
+                        metrics,
+                    }));
                     return;
                 }
 

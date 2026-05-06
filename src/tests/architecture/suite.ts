@@ -220,6 +220,10 @@ import {
   synthesizeGlobalPlan,
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
+import {
+  formatSimulationChatResult,
+  simulationRiskLabel,
+} from "../../core/simulationChat.js";
 import { detectWorkspace } from "../../core/workspaceDetection.js";
 import {
   buildGraphSnapshot,
@@ -1681,6 +1685,48 @@ const pass2: TestPass = {
         });
 
         assert.strictEqual(parseInitChatCommand("choir init"), null);
+      },
+    },
+    {
+      id: "2.30b",
+      name: "simulation chat formatter renders deterministic summary and risk labels",
+      run: async () => {
+        const rendered = formatSimulationChatResult({
+          success: true,
+          strategyId: "strategy-safe",
+          units: ["repo-b", "repo-a"],
+          changes: [
+            {
+              unitId: "repo-b",
+              filesChanged: [".choir/state.json"],
+              operations: ["set:meta.b=1"],
+            },
+            {
+              unitId: "repo-a",
+              filesChanged: [".choir/state.json"],
+              operations: ["set:meta.a=1"],
+            },
+          ],
+          violations: [],
+          metrics: {
+            risk: 2,
+            changes: 2,
+            violations: 0,
+          },
+        });
+
+        assert.ok(rendered.includes("Simulation successful"));
+        assert.ok(rendered.includes("- strategy: strategy-safe"));
+        assert.ok(rendered.includes("- units: repo-b, repo-a"));
+
+        const repoALine = rendered.indexOf("- repo-a: 1 files");
+        const repoBLine = rendered.indexOf("- repo-b: 1 files");
+        assert.ok(repoALine >= 0 && repoBLine >= 0);
+        assert.ok(repoALine < repoBLine);
+
+        assert.ok(rendered.includes("Risk: LOW"));
+        assert.strictEqual(simulationRiskLabel(0, 9), "MEDIUM");
+        assert.strictEqual(simulationRiskLabel(1, 0), "HIGH");
       },
     },
     {
@@ -5034,6 +5080,69 @@ const pass6: TestPass = {
         assert.strictEqual(simulated.success, true);
         assert.strictEqual(executed.success, true);
         assert.deepStrictEqual(executed.finalStates, simulated.finalState);
+      },
+    },
+    {
+      id: "6.10f",
+      name: "strategy comparison tie-break is deterministic by lexical strategy id",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: {} },
+        ];
+
+        const alphaPlan = {
+          id: "strategy-alpha",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const betaPlan = {
+          id: "strategy-beta",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const comparison = await compareStrategies([betaPlan, alphaPlan], {
+          repos,
+          policies: [],
+        });
+
+        assert.strictEqual(comparison.bestStrategy, "strategy-alpha");
+        assert.deepStrictEqual(comparison.metrics, {
+          risk: 1,
+          changes: 1,
+          violations: 0,
+        });
+      },
+    },
+    {
+      id: "6.10g",
+      name: "execution fails closed when simulation and execution outcomes diverge",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "sim-divergence",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] }],
+        };
+
+        const modeCalls: Array<"simulation" | "execution"> = [];
+        const result = await executeGlobalPlan(plan, {
+          repos,
+          policies: [],
+          executeTask: async (_task, state, _repoId, _allStates, mode) => {
+            modeCalls.push(mode);
+
+            return mode === "simulation"
+              ? { ...state, meta: { value: "sim" } }
+              : { ...state, meta: { value: "exec" } };
+          },
+        });
+
+        assert.deepStrictEqual(modeCalls, ["simulation", "execution"]);
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.rolledBack, true);
+        assert.ok(result.audit.violations.some((entry) => entry.includes("Simulation and execution diverged")));
       },
     },
     {
