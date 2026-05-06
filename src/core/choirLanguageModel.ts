@@ -6,6 +6,7 @@ import {
   CHOIR_DEFINE_TYPE_KEYWORDS,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   CHOIR_EXPORT_SECTION_KEYWORDS,
+  CHOIR_GRAPH_META_KEYWORDS,
   CHOIR_IDENTIFIER_PATTERN,
   CHOIR_LIBRARY_META_KEYWORDS,
   CHOIR_MACRO_META_KEYWORDS,
@@ -67,6 +68,8 @@ type ParserState =
   | "audit-query-equals"
   | "audit-query-value"
   | "audit-query-after-filter"
+  | "graph-tail"
+  | "graph-node-id"
   | "macro-next"
   | "macro-show-id"
   | "macro-id"
@@ -96,6 +99,7 @@ const DSL_KEYWORDS = new Set<string>([
   ...CHOIR_ACTION_KEYWORDS,
   ...CHOIR_LIBRARY_META_KEYWORDS,
   ...CHOIR_AUDIT_META_KEYWORDS,
+  ...CHOIR_GRAPH_META_KEYWORDS,
   ...CHOIR_MACRO_META_KEYWORDS,
   ...CHOIR_DEFINE_TYPE_KEYWORDS,
   ...CHOIR_ANALYZE_TARGET_KEYWORDS,
@@ -138,6 +142,10 @@ const KEYWORD_HOVER: Record<string, string> = {
   ci: "Run deterministic Choir CI pipeline execution.",
   run: "Execute Choir CI pipeline stages for deterministic enforcement.",
   library: "Manage local macro libraries and lockfile resolution.",
+  graph: "Open and focus the dependency graph webview.",
+  focus: "Focus graph mode on a single node.",
+  dependencies: "Show transitive dependencies for a node.",
+  dependents: "Show transitive dependents for a node.",
   install: "Install a library selector into .choir/lock.yaml.",
   update: "Update a locked library to latest available local version.",
   lock: "Validate and normalize .choir/lock.yaml deterministically.",
@@ -321,6 +329,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["expect-then-or-end"];
     }
 
+    if (state === "graph-node-id") {
+      return ["expect-then-or-end"];
+    }
+
     if (state === "macro-arg-value") {
       return ["macro-after-arg"];
     }
@@ -384,6 +396,19 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["audit-query-after-filter"];
     }
 
+    if (state === "graph-node-id") {
+      return ["expect-then-or-end"];
+    }
+
+    if (state === "graph-tail") {
+      const lower = token.value.toLowerCase();
+      if (lower === "focus" || lower === "dependencies" || lower === "dependents") {
+        return ["graph-node-id"];
+      }
+
+      return [];
+    }
+
     return [];
   }
 
@@ -426,6 +451,14 @@ function transition(state: ParserState, token: Token): ParserState[] {
 
     if (state === "audit-query-value") {
       return ["audit-query-after-filter"];
+    }
+
+    if (state === "graph-tail") {
+      if (token.value === "focus" || token.value === "dependencies" || token.value === "dependents") {
+        return ["graph-node-id"];
+      }
+
+      return [];
     }
   }
 
@@ -482,6 +515,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
 
     if (token.value === "audit") {
       return ["audit-next"];
+    }
+
+    if (token.value === "graph") {
+      return ["graph-tail", "expect-then-or-end"];
     }
 
     return ["policy-status"];
@@ -673,6 +710,14 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
       ...CHOIR_MACRO_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword } as const)),
       { type: "identifier" as const },
     ];
+  }
+
+  if (state === "graph-tail") {
+    return CHOIR_GRAPH_META_KEYWORDS.map((keyword) => ({ type: "keyword", value: keyword }));
+  }
+
+  if (state === "graph-node-id") {
+    return [{ type: "identifier" }];
   }
 
   if (state === "macro-show-id" || state === "macro-id" || state === "macro-args-or-end") {

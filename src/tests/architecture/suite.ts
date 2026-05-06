@@ -214,6 +214,10 @@ import {
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
 import { detectWorkspace } from "../../core/workspaceDetection.js";
+import {
+  buildGraphSnapshot,
+  toUIGraph,
+} from "../../core/dependencyGraphUi.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -1462,6 +1466,7 @@ const pass2: TestPass = {
           "ci",
           "audit",
           "macro",
+          "graph",
         ]);
 
         const defineTypes = getDeterministicCompletions("choir define ").map((item) => item.label);
@@ -1490,6 +1495,9 @@ const pass2: TestPass = {
 
         const ciTail = getDeterministicCompletions("choir ci ").map((item) => item.label);
         assert.deepStrictEqual(ciTail, ["run"]);
+
+        const graphTail = getDeterministicCompletions("choir graph ").map((item) => item.label);
+        assert.deepStrictEqual(graphTail, ["focus", "dependencies", "dependents", "then"]);
       },
     },
     {
@@ -4786,6 +4794,127 @@ const pass6: TestPass = {
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
+      },
+    },
+    {
+      id: "6.15",
+      name: "dependency graph transform to UI graph is deterministic and sorted",
+      run: async () => {
+        const ui = toUIGraph({
+          nodes: [
+            { id: "unit:packages/b", type: "unit", label: "b" },
+            { id: "unit:packages/a", type: "unit", label: "a" },
+          ],
+          edges: [
+            { from: "unit:packages/b", to: "unit:packages/a", type: "depends-on" },
+          ],
+        });
+
+        assert.deepStrictEqual(ui.nodes.map((node) => node.id), ["unit:packages/a", "unit:packages/b"]);
+        assert.deepStrictEqual(ui.edges.map((edge) => edge.id), ["edge:unit:packages/b->unit:packages/a"]);
+      },
+    },
+    {
+      id: "6.16",
+      name: "graph snapshot is deterministic and projects plan/violation overlays",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-graph-snapshot-"));
+
+        try {
+          fs.writeFileSync(
+            path.join(root, "package.json"),
+            JSON.stringify({
+              workspaces: ["packages/*"],
+            }),
+            "utf-8"
+          );
+
+          fs.mkdirSync(path.join(root, "packages/a/src"), { recursive: true });
+          fs.mkdirSync(path.join(root, "packages/b/src"), { recursive: true });
+
+          fs.writeFileSync(
+            path.join(root, "packages/a/package.json"),
+            JSON.stringify({ name: "pkg-a" }),
+            "utf-8"
+          );
+          fs.writeFileSync(
+            path.join(root, "packages/b/package.json"),
+            JSON.stringify({ name: "pkg-b", dependencies: { "pkg-a": "workspace:*" } }),
+            "utf-8"
+          );
+
+          const control = makeControlPlane();
+          control.execution.plans = [
+            {
+              id: "p-graph",
+              title: "graph",
+              derivedFrom: "goal",
+              goalRefs: ["g"],
+              tasks: [
+                makeTask("t-a", "refactor", { files: ["packages/a/src/a.ts"] }),
+                makeTask("t-b", "refactor", { files: ["packages/b/src/b.ts"], dependsOn: ["t-a"] }),
+              ],
+              status: "approved",
+            },
+          ];
+
+          const state = createEmptyStatePlane();
+          state.execution.activePlanId = "p-graph";
+          state.execution.taskStatus = {
+            "p-graph:t-b": "complete",
+          };
+          state.violations = [
+            {
+              id: "diag-graph-1",
+              ruleId: "rule.graph",
+              message: "violation",
+              severity: "warning",
+              location: testLocation("packages/b/src/b.ts", 1, 0, 1, 1),
+              category: "pattern",
+              traceId: "trace-graph-1",
+            },
+          ];
+
+          const first = buildGraphSnapshot({
+            root,
+            control,
+            state,
+            mode: "full",
+          });
+          const second = buildGraphSnapshot({
+            root,
+            control,
+            state,
+            mode: "full",
+          });
+
+          assert.deepStrictEqual(first.graph.nodes.map((node) => node.id), ["unit:packages/a", "unit:packages/b"]);
+          assert.deepStrictEqual(first.graph.edges.map((edge) => edge.id), ["edge:unit:packages/b->unit:packages/a"]);
+          assert.ok(first.planOverlay);
+          assert.deepStrictEqual(first.violationNodeIds, ["unit:packages/b"]);
+          assert.deepStrictEqual(first.changedNodeIds, ["unit:packages/b"]);
+
+          assert.deepStrictEqual(first.graph, second.graph);
+          assert.deepStrictEqual(first.changedNodeIds, second.changedNodeIds);
+          assert.deepStrictEqual(first.affectedNodeIds, second.affectedNodeIds);
+          assert.deepStrictEqual(first.violationNodeIds, second.violationNodeIds);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "6.17",
+      name: "graph DSL commands parse into deterministic graph AST",
+      run: async () => {
+        const parsed = parseCommand("choir graph dependencies \"unit:packages/b\"");
+        assert.strictEqual(parsed.ast.type, "graph");
+        if (parsed.ast.type !== "graph") {
+          return;
+        }
+
+        assert.strictEqual(parsed.ast.mode, "dependency");
+        assert.strictEqual(parsed.ast.nodeId, "unit:packages/b");
       },
     },
   ],

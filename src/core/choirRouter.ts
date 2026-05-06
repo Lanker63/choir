@@ -16,6 +16,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <ci>
   | <audit>
   | <macro>
+  | <graph>
   | <abstraction>
 
 <define> ::= "define" <define-type> <string>
@@ -72,6 +73,11 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
           | "macro" "show" <identifier>
           | "macro" <identifier> [<args>]
 
+<graph> ::= "graph"
+          | "graph" "focus" <identifier>
+          | "graph" "dependencies" <identifier>
+          | "graph" "dependents" <identifier>
+
 <abstraction> ::= <identifier> [<args>]
 
 <args> ::= <key-value> ("," <key-value>)*
@@ -108,12 +114,14 @@ export const CHOIR_ACTION_KEYWORDS = [
   "ci",
   "audit",
   "macro",
+  "graph",
 ] as const;
 
 export const CHOIR_MACRO_META_KEYWORDS = ["list", "show"] as const;
 export const CHOIR_LIBRARY_META_KEYWORDS = ["list", "install", "update", "lock"] as const;
 export const CHOIR_CI_META_KEYWORDS = ["run"] as const;
 export const CHOIR_AUDIT_META_KEYWORDS = ["log", "report", "query"] as const;
+export const CHOIR_GRAPH_META_KEYWORDS = ["focus", "dependencies", "dependents"] as const;
 
 export const CHOIR_DEFINE_TYPE_KEYWORDS = ["mission", "vision", "goal", "constraint", "non-goal"] as const;
 export const CHOIR_ANALYZE_TARGET_KEYWORDS = ["workspace", "hotspots", "summary"] as const;
@@ -271,6 +279,12 @@ export type MacroRunNode = {
   args: Record<string, string>;
 };
 
+export type GraphNode = {
+  type: "graph";
+  mode: "full" | "focused" | "dependency" | "dependents";
+  nodeId?: string;
+};
+
 export type AbstractionRunNode = {
   type: "abstraction-run";
   identifier: string;
@@ -301,6 +315,7 @@ export type ActionNode =
   | MacroListNode
   | MacroShowNode
   | MacroRunNode
+  | GraphNode
   | AbstractionRunNode;
 
 export type SequenceNode = {
@@ -580,9 +595,49 @@ class Parser {
         return this.parseAudit();
       case "macro":
         return this.parseMacro();
+      case "graph":
+        return this.parseGraph();
       default:
         throw new Error(`Unsupported Choir DSL action: ${next.value}`);
     }
+  }
+
+  private parseGraph(): GraphNode {
+    this.expectKeyword("graph");
+    const next = this.peek();
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return {
+        type: "graph",
+        mode: "full",
+      };
+    }
+
+    const selector = this.expectIdentifierLike().toLowerCase();
+    if (selector === "focus") {
+      return {
+        type: "graph",
+        mode: "focused",
+        nodeId: this.expectIdentifierLikeOrString(),
+      };
+    }
+
+    if (selector === "dependencies") {
+      return {
+        type: "graph",
+        mode: "dependency",
+        nodeId: this.expectIdentifierLikeOrString(),
+      };
+    }
+
+    if (selector === "dependents") {
+      return {
+        type: "graph",
+        mode: "dependents",
+        nodeId: this.expectIdentifierLikeOrString(),
+      };
+    }
+
+    throw new Error("Expected graph mode: focus|dependencies|dependents");
   }
 
   private parseAbstraction(): AbstractionRunNode {
@@ -1160,6 +1215,19 @@ function validateActionNode(node: ActionNode): boolean {
     return entries.every(([key, value]) => CHOIR_IDENTIFIER_PATTERN.test(key) && typeof value === "string");
   }
 
+  if (node.type === "graph") {
+    const validMode = node.mode === "full" || node.mode === "focused" || node.mode === "dependency" || node.mode === "dependents";
+    if (!validMode) {
+      return false;
+    }
+
+    if (node.mode === "full") {
+      return node.nodeId === undefined || node.nodeId.trim().length > 0;
+    }
+
+    return typeof node.nodeId === "string" && node.nodeId.trim().length > 0;
+  }
+
   if (node.type === "abstraction-run") {
     if (!CHOIR_IDENTIFIER_PATTERN.test(node.identifier)) {
       return false;
@@ -1198,6 +1266,8 @@ export function routeActionToRole(action: ActionNode): RoutedRole {
     case "macro-run":
     case "abstraction-run":
       return "conductor";
+    case "graph":
+      return "system";
     case "execute":
       return "enforcer";
     default:
@@ -1366,6 +1436,11 @@ async function compileAction<TContext>(
     case "abstraction-run":
       trace.steps.push("system.abstraction.run");
       trace.compiledActions.push("system.abstraction.run");
+      return;
+
+    case "graph":
+      trace.steps.push("system.graph.view");
+      trace.compiledActions.push(`system.graph.${action.mode}`);
       return;
   }
 }

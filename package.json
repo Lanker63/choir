@@ -44,6 +44,16 @@
         "command": "choir.showDslEditorTrace",
         "title": "Choir: Show DSL Editor Trace",
         "category": "Choir"
+      },
+      {
+        "command": "choir.openDependencyGraph",
+        "title": "Choir: Open Dependency Graph",
+        "category": "Choir"
+      },
+      {
+        "command": "choir.graph.setMode",
+        "title": "Choir: Set Graph Mode",
+        "category": "Choir"
       }
     ],
     "languages": [
@@ -107,6 +117,12 @@
           "id": "choir.ruleEditor",
           "name": "Control Center",
           "icon": "media/choir.png"
+        },
+        {
+          "type": "webview",
+          "id": "choir.graphView",
+          "name": "Dependency Graph",
+          "icon": "media/choir.png"
         }
       ]
     }
@@ -135,6 +151,7 @@
     "vite": "^6.3.5"
   },
   "dependencies": {
+    "d3": "^7.9.0",
     "glob": "^13.0.6",
     "monaco-editor": "^0.53.0",
     "monaco-yaml": "^5.4.1",

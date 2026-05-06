@@ -77,6 +77,11 @@ type InitChatCommand = {
     invalidTemplate?: string;
 };
 
+type GraphChatCommand = {
+    mode: "full" | "focused" | "dependency" | "dependents";
+    nodeId?: string;
+};
+
 function registerParticipant(
     context: vscode.ExtensionContext,
     id: string,
@@ -148,6 +153,10 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir library update core",
         "- choir library lock",
         "- choir ci run",
+        "- choir graph",
+        "- choir graph focus <node>",
+        "- choir graph dependencies <node>",
+        "- choir graph dependents <node>",
         "- choir bootstrap-service name=\"user-service\"",
         "- choir approve <diffId>",
         "- choir reject <diffId>",
@@ -229,6 +238,40 @@ function parseInitChatCommand(input: string): InitChatCommand | null {
     };
 }
 
+function parseGraphChatCommand(input: string): GraphChatCommand | null {
+    const normalized = input.trim();
+
+    if (/^@choir\s+graph\s*$/i.test(normalized)) {
+        return { mode: "full" };
+    }
+
+    const focus = normalized.match(/^@choir\s+graph\s+focus\s+([a-zA-Z0-9._/-]+)\s*$/i);
+    if (focus) {
+        return {
+            mode: "focused",
+            nodeId: focus[1],
+        };
+    }
+
+    const dependencies = normalized.match(/^@choir\s+graph\s+dependencies\s+([a-zA-Z0-9._/-]+)\s*$/i);
+    if (dependencies) {
+        return {
+            mode: "dependency",
+            nodeId: dependencies[1],
+        };
+    }
+
+    const dependents = normalized.match(/^@choir\s+graph\s+dependents\s+([a-zA-Z0-9._/-]+)\s*$/i);
+    if (dependents) {
+        return {
+            mode: "dependents",
+            nodeId: dependents[1],
+        };
+    }
+
+    return null;
+}
+
 export function registerChoir(context: vscode.ExtensionContext) {
     registerParticipant(
         context,
@@ -243,6 +286,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
             const abstractionChatCommand = parseAbstractionChatCommand(raw);
             const initChatCommand = parseInitChatCommand(raw);
+            const graphChatCommand = parseGraphChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
                     stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
@@ -559,6 +603,15 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 return;
             }
 
+            if (graphChatCommand) {
+                await vscode.commands.executeCommand("workbench.view.extension.choir");
+                await vscode.commands.executeCommand("choir.graph.setMode", graphChatCommand.mode, graphChatCommand.nodeId);
+                stream.markdown(graphChatCommand.nodeId
+                    ? `Graph opened in mode: ${graphChatCommand.mode} ${graphChatCommand.nodeId}`
+                    : `Graph opened in mode: ${graphChatCommand.mode}`);
+                return;
+            }
+
             if (abstractionChatCommand) {
                 const workspaceRoot = getWorkspaceRoot();
                 if (!workspaceRoot) {
@@ -677,9 +730,10 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-list"
                     || action.type === "macro-show"
                     || action.type === "macro-run"
+                    || action.type === "graph"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph` cannot be chained with `then`.");
                 return;
             }
 
@@ -894,6 +948,15 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     });
 
                     stream.markdown(formatCIRunResult(ciResult));
+                    return;
+                }
+
+                if (parsed.ast.type === "graph") {
+                    await vscode.commands.executeCommand("workbench.view.extension.choir");
+                    await vscode.commands.executeCommand("choir.graph.setMode", parsed.ast.mode, parsed.ast.nodeId);
+
+                    const suffix = parsed.ast.nodeId ? ` ${parsed.ast.nodeId}` : "";
+                    stream.markdown(`Graph opened in mode: ${parsed.ast.mode}${suffix}`);
                     return;
                 }
 

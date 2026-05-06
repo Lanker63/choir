@@ -690,6 +690,18 @@ export class ChoirProductService {
       };
     }
 
+    if (parsed.ast.type === "graph") {
+      const nodeId = clean(parsed.ast.nodeId);
+      await vscode.commands.executeCommand("choir.graph.setMode", parsed.ast.mode, nodeId);
+      const freshControl = readControlPlane() ?? control;
+      return {
+        message: nodeId
+          ? `Graph view updated (${parsed.ast.mode}) for ${nodeId}.`
+          : `Graph view updated (${parsed.ast.mode}).`,
+        trace: this.createTrace("graph.view", dsl, controlPlaneToChoirConfig(freshControl)),
+      };
+    }
+
     if (parsed.ast.type === "macro-show") {
       const macro = getMacro(root, parsed.ast.macroId);
       const freshControl = readControlPlane() ?? control;

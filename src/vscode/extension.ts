@@ -3,6 +3,7 @@ import * as path from "path";
 import { registerChoir } from "../chat.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
+import { GraphViewProvider } from "./GraphViewProvider.js";
 import { runPipelineForWorkspace } from "../enforcer.js";
 import { registerFixCodeActions } from "./diagnostics.js";
 import { registerChoirLanguageSupport } from "./choirLanguageSupport.js";
@@ -32,9 +33,11 @@ export function activate(context: vscode.ExtensionContext) {
     
     try {
         const provider = new RuleEditorProvider(context);
+        const graphProvider = new GraphViewProvider(context);
 
         // Register the sidebar webview view so resolveWebviewView is invoked.
         addSubscription(context, vscode.window.registerWebviewViewProvider("choir.ruleEditor", provider));
+        addSubscription(context, vscode.window.registerWebviewViewProvider("choir.graphView", graphProvider));
 
         // Register tree provider for the activity view that lists rules
         const tree = new RuleTreeProvider();
@@ -75,6 +78,18 @@ export function activate(context: vscode.ExtensionContext) {
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditor", () => {
             vscode.commands.executeCommand("workbench.view.extension.choir");
             vscode.commands.executeCommand("choir.ruleEditor.focus");
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.openDependencyGraph", async () => {
+            await vscode.commands.executeCommand("workbench.view.extension.choir");
+            await vscode.commands.executeCommand("choir.graphView.focus");
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.graph.setMode", async (mode?: string, nodeId?: string) => {
+            const normalizedMode = mode === "focused" || mode === "dependency" || mode === "dependents" ? mode : "full";
+            await graphProvider.setMode(normalizedMode, typeof nodeId === "string" ? nodeId : undefined);
+            await vscode.commands.executeCommand("workbench.view.extension.choir");
+            await vscode.commands.executeCommand("choir.graphView.focus");
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorPanel", () => {

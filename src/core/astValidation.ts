@@ -454,6 +454,14 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
       return;
     }
 
+    case "graph": {
+      if (!action.mode || typeof action.mode !== "string") {
+        issues.push(issue("graph-mode-missing", "error", "Graph mode is required", `${path}.mode`));
+      }
+
+      return;
+    }
+
     default:
       pushUnexpectedNode(issues, action, path);
   }
