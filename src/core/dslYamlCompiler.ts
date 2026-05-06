@@ -932,6 +932,12 @@ export function compileDSLAndWrite(
         ast: result.trace.ast,
         ruleResults: result.trace.ruleResults,
       },
+      metadata: {
+        command: input,
+        policyDecision: "allow",
+        auditId: `compile-dsl-${diffHash.slice(0, 12)}`,
+        ruleTriggers: Array.from(new Set(result.trace.ruleResults.map((entry) => entry.ruleId))).sort((left, right) => left.localeCompare(right)),
+      },
     });
 
     if (workspaceRoot && policyEvaluation.result.requiresApproval) {

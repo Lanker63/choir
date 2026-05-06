@@ -5,6 +5,7 @@ export type UISurface =
   | "dashboard"
   | "workspace"
   | "plan-view"
+  | "timeline-view"
   | "policy-view"
   | "audit-view"
   | "macro-library";
@@ -76,6 +77,58 @@ export type UITrace = {
   resultingYAML: object;
 };
 
+export type StateTimelineEntry = {
+  index: number;
+  transitionId: string;
+  label: string;
+  action: string;
+  timestamp: string;
+  fromHash: string;
+  toHash: string;
+  metadata?: {
+    command: string;
+    policyDecision: string;
+    auditId: string;
+    ruleTriggers?: string[];
+    dependencyChain?: string[];
+  };
+};
+
+export type TimelineUI = {
+  currentIndex: number;
+  canStepForward: boolean;
+  canStepBackward: boolean;
+  playing: boolean;
+  states: StateTimelineEntry[];
+};
+
+export type StateInspector = {
+  intent: object;
+  ast: object[];
+  violations: object[];
+  plans: object[];
+  why: string[];
+  dependencyChain: string[];
+};
+
+export type StateDiff = {
+  before: object;
+  after: object;
+  patches: Array<{
+    path: string;
+    op: "set" | "delete";
+    before: unknown;
+    after?: unknown;
+  }>;
+};
+
+export type TimelineReplayTrace = {
+  visitedStates: string[];
+  replayTime: number;
+  consistencyCheck: boolean;
+  fallbackUsed: boolean;
+};
+
 export type WorkflowState = {
   current: WorkflowStep;
   completed: WorkflowStep[];
@@ -98,6 +151,10 @@ export type ProductSnapshot = {
   pendingApprovals: Array<{ id: string; command: string; diffHash: string; createdAt: string }>;
   traces: UITrace[];
   controlPlane: object;
+  timeline: TimelineUI;
+  stateInspector: StateInspector;
+  stateDiff?: StateDiff;
+  replayTrace?: TimelineReplayTrace;
 };
 
 export type ProductActionRequest =
@@ -119,6 +176,12 @@ export type ProductActionRequest =
     role?: Role;
     step: WorkflowStep;
     payload?: Record<string, string>;
+  }
+  | {
+    type: "replay-control";
+    role?: Role;
+    control: "play" | "pause" | "step-forward" | "step-backward" | "jump";
+    index?: number;
   };
 
 export type ProductActionResult = {

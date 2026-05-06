@@ -54,11 +54,24 @@ State correctness layer contract:
 - `persistStatePlane` performs deterministic validation and consistency checks before write.
 - Writes are atomic and include post-write validation; failures rollback to prior bytes.
 - State transitions are validated and recorded deterministically.
+- Transition records must include deterministic replay fields:
+  - `id`, `fromHash`, `toHash`, `action`, `timestamp`
+  - `diff` (`patchCount`, ordered `patches[]` with `path`, `op`, `before`, `after`)
+  - metadata (`command`, `policyDecision`, `auditId`, optional `ruleTriggers`, optional `dependencyChain`)
 - Snapshot lifecycle is deterministic and includes:
   - save (`.choir/state.snapshots.jsonl`)
   - list
   - rollback
   - replay
+- Snapshot cadence is deterministic and hybrid:
+  - initial snapshot on first transition
+  - periodic snapshots at fixed transition interval (`SNAPSHOT_INTERVAL`, currently 5)
+- Replay navigation supports deterministic index/hash targeting:
+  - `jumpTo`
+  - `replayTo`
+  - `stepForward`
+  - `stepBackward`
+- Replay integrity must recompute and verify transition hash continuity; mismatch triggers deterministic snapshot fallback.
 - Transition/audit side logs are append-only:
   - `.choir/state.transitions.jsonl`
   - `.choir/state.audit.jsonl`
@@ -103,6 +116,28 @@ Internal roles remain isolated modules:
 Compiler model:
 
 `User -> @choir -> DSL -> Tokens -> AST -> Validation -> Rule Engine -> Compiler -> choir.config.yaml -> pipeline`
+
+### Time-Travel Replay Debugger Contract
+
+Replay debugger architecture is derived-only and deterministic:
+
+- Timeline source is `StateTimeline = snapshots + transitions` from state artifacts.
+- Timeline UI is a dedicated surface id: `timeline-view`.
+- Timeline entries are transition-backed and include index, action, hashes, timestamp, and metadata context.
+- Replay controls are extension/webview action messages, not DSL grammar commands:
+  - `play`
+  - `pause`
+  - `step-forward`
+  - `step-backward`
+  - `jump`
+- Playback advances by deterministic step-forward actions on a fixed interval and must auto-pause at timeline end.
+- Timeline inspector must provide:
+  - Why summary from transition + metadata context
+  - dependency chain context
+  - exact replayed state projection
+  - transition patch table (`before`/`after`)
+  - replay trace (`visitedStates`, `replayTime`, `consistencyCheck`, `fallbackUsed`)
+- Replay operations must never mutate control plane authority or bypass state validation guarantees.
 
 ### Interactive Init Wizard Contract (`@choir init`)
 
@@ -785,6 +820,7 @@ For identical inputs, Choir must produce identical:
 - Transaction outcomes
 - State hash values and transition records
 - Snapshot ids and rollback/replay outcomes
+- Replay timeline entries, patch projections, and replay trace flags
 - Audit chain ordering and record hashes
 - Compliance report summaries for identical filter windows
 - Macro library version resolution and lockfile pinning outcomes
@@ -809,6 +845,7 @@ Non-negotiable safeguards:
 15. State writes must be atomic, validated pre/post write, and rollback-safe on failure
 16. Incremental projected state must equal full recomputed state; mismatch requires deterministic full-state fallback
 17. Snapshot rollback/replay must be deterministic and integrity-checked before reuse
+18. Replay must verify transition hash continuity while applying diffs; on mismatch, deterministic snapshot fallback is required
 
 ---
 
@@ -820,7 +857,9 @@ JSON = computed facts + execution runtime state (derived)
 State Integrity = validated hash + consistency checks + transition validation
 State Snapshots = `.choir/state.snapshots.jsonl` (derived rollback points)
 State Transition Log = `.choir/state.transitions.jsonl` (append-only)
+State Transition Record = `id/fromHash/toHash/timestamp/action/diff/metadata` (deterministic replay contract)
 State Audit Log = `.choir/state.audit.jsonl` (append-only)
+Replay Timeline = derived from snapshots + transitions (`jump/step/replay` navigation)
 Chat = orchestration interface (non-authoritative)
 Init Session = resumable wizard interaction state (`.choir/init-state.json`, non-authoritative)
 Audit = immutable compliance evidence (append-only, hash-chained)

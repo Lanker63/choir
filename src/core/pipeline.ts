@@ -315,6 +315,12 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
       consistency: {
         yaml: input.controlPlane,
       },
+      metadata: {
+        command: "pipeline-run",
+        policyDecision: "allow",
+        auditId: `pipeline-run-${runId}`,
+        ruleTriggers: triggeredRuleIds,
+      },
     })
     : path.join(input.workspace.root, ".choir", "state.json");
 

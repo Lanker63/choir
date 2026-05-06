@@ -128,10 +128,53 @@ export type StateSnapshot = {
   hash: string;
 };
 
+export type StatePatch = {
+  path: string;
+  op: "set" | "delete";
+  before: unknown;
+  after?: unknown;
+};
+
+export type StateTransitionDiff = {
+  patchCount: number;
+  patches: StatePatch[];
+};
+
+export type StateMetadata = {
+  command: string;
+  policyDecision: string;
+  auditId: string;
+  ruleTriggers?: string[];
+  dependencyChain?: string[];
+};
+
 export type StateTransition = {
-  from: string;
-  to: string;
+  id: string;
+  fromHash: string;
+  toHash: string;
   action: string;
+  timestamp: string;
+  diff: StateTransitionDiff;
+  metadata?: StateMetadata;
+};
+
+export type StateTimeline = {
+  snapshots: StateSnapshot[];
+  transitions: StateTransition[];
+};
+
+export type ReplayTrace = {
+  visitedStates: string[];
+  replayTime: number;
+  consistencyCheck: boolean;
+  fallbackUsed: boolean;
+};
+
+export type ReplayResult = {
+  state: StatePlane;
+  index: number;
+  trace: ReplayTrace;
+  transition?: StateTransition;
 };
 
 export type StateAudit = {
@@ -159,6 +202,7 @@ export type PersistStateOptions = {
   action?: string;
   consistency?: Omit<ConsistencyInput, "state">;
   skipSnapshot?: boolean;
+  metadata?: Partial<StateMetadata>;
 };
 
 export type StatePlane = {
@@ -184,6 +228,7 @@ export type StatePlane = {
 
 const MAX_STRATEGY_HISTORY = 256;
 const STATE_VERSION = "2.0.0-alpha";
+const SNAPSHOT_INTERVAL = 5;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -209,6 +254,119 @@ function stableStringify(value: unknown): string {
 
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function cloneUnknown<T>(value: T): T {
+  if (typeof value === "undefined") {
+    return value;
+  }
+
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function splitPath(pathValue: string): string[] {
+  return pathValue.split(".").filter((segment) => segment.length > 0);
+}
+
+function setAtPath(target: UnknownRecord, pathValue: string, value: unknown): void {
+  const segments = splitPath(pathValue);
+  if (segments.length === 0) {
+    return;
+  }
+
+  let current: UnknownRecord = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const next = current[segment];
+    if (!isRecord(next)) {
+      current[segment] = {};
+    }
+
+    current = current[segment] as UnknownRecord;
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  current[lastSegment] = cloneUnknown(value);
+}
+
+function deleteAtPath(target: UnknownRecord, pathValue: string): void {
+  const segments = splitPath(pathValue);
+  if (segments.length === 0) {
+    return;
+  }
+
+  let current: UnknownRecord = target;
+  for (let index = 0; index < segments.length - 1; index += 1) {
+    const segment = segments[index];
+    const next = current[segment];
+    if (!isRecord(next)) {
+      return;
+    }
+
+    current = next;
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  delete current[lastSegment];
+}
+
+function diffUnknown(before: unknown, after: unknown, pathValue = ""): StatePatch[] {
+  if (stableStringify(before) === stableStringify(after)) {
+    return [];
+  }
+
+  if (Array.isArray(before) || Array.isArray(after) || !isRecord(before) || !isRecord(after)) {
+    const op: StatePatch["op"] = typeof after === "undefined" ? "delete" : "set";
+    return [{
+      path: pathValue,
+      op,
+      before: cloneUnknown(before),
+      ...(op === "set" ? { after: cloneUnknown(after) } : {}),
+    }];
+  }
+
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const sortedKeys = [...keys].sort((left, right) => left.localeCompare(right));
+
+  return sortedKeys.flatMap((key) => {
+    const nextPath = pathValue.length > 0 ? `${pathValue}.${key}` : key;
+    const hasBefore = Object.prototype.hasOwnProperty.call(before, key);
+    const hasAfter = Object.prototype.hasOwnProperty.call(after, key);
+
+    if (!hasAfter) {
+      return [{
+        path: nextPath,
+        op: "delete" as const,
+        before: cloneUnknown(before[key]),
+      } satisfies StatePatch];
+    }
+
+    if (!hasBefore) {
+      return [{
+        path: nextPath,
+        op: "set" as const,
+        before: undefined,
+        after: cloneUnknown(after[key]),
+      } satisfies StatePatch];
+    }
+
+    return diffUnknown(before[key], after[key], nextPath);
+  });
+}
+
+function applyTransitionDiff(state: StatePlane, diff: StateTransitionDiff): StatePlane {
+  const working = cloneUnknown(materializeStatePlane(state)) as UnknownRecord;
+
+  for (const patch of diff.patches) {
+    if (patch.op === "delete") {
+      deleteAtPath(working, patch.path);
+      continue;
+    }
+
+    setAtPath(working, patch.path, patch.after);
+  }
+
+  return materializeStatePlane(working as StatePlane);
 }
 
 function stateWithoutHash(state: StatePlane): Omit<StatePlane, "stateHash"> {
@@ -1272,22 +1430,126 @@ function appendJsonLine(filePath: string, value: unknown): void {
   fs.appendFileSync(filePath, `${stableStringify(value)}\n`, "utf-8");
 }
 
-function computeStateDiff(previous: StatePlane | null, next: StatePlane): Record<string, unknown> {
-  if (!previous) {
+function computeStateDiff(previous: StatePlane | null, next: StatePlane): StateTransitionDiff {
+  const base = materializeStatePlane(previous ?? createEmptyStatePlane());
+  const target = materializeStatePlane(next);
+  const patches = diffUnknown(base, target);
+
+  return {
+    patchCount: patches.length,
+    patches,
+  };
+}
+
+function normalizeTransitionDiff(value: unknown): StateTransitionDiff {
+  if (!isRecord(value) || !Array.isArray(value.patches)) {
     return {
-      kind: "initial",
-      nextHash: next.stateHash,
+      patchCount: 0,
+      patches: [],
     };
   }
 
-  const changedKeys = Object.keys(next)
-    .filter((key) => !valuesEqual((previous as Record<string, unknown>)[key], (next as Record<string, unknown>)[key]))
-    .sort((a, b) => a.localeCompare(b));
+  const patches = value.patches.flatMap((entry) => {
+    if (!isRecord(entry)) {
+      return [];
+    }
+
+    const pathValue = typeof entry.path === "string" ? entry.path.trim() : "";
+    if (pathValue.length === 0) {
+      return [];
+    }
+
+    const op = entry.op === "delete" ? "delete" : entry.op === "set" ? "set" : null;
+    if (!op) {
+      return [];
+    }
+
+    return [{
+      path: pathValue,
+      op,
+      before: cloneUnknown(entry.before),
+      ...(op === "set" ? { after: cloneUnknown(entry.after) } : {}),
+    } satisfies StatePatch];
+  }).sort((left, right) => left.path.localeCompare(right.path) || left.op.localeCompare(right.op));
 
   return {
-    changedKeys,
-    beforeHash: previous.stateHash,
-    afterHash: next.stateHash,
+    patchCount: patches.length,
+    patches,
+  };
+}
+
+function normalizeStateMetadata(value: unknown): StateMetadata | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const command = typeof value.command === "string" && value.command.trim().length > 0
+    ? value.command
+    : undefined;
+  const policyDecision = typeof value.policyDecision === "string" && value.policyDecision.trim().length > 0
+    ? value.policyDecision
+    : undefined;
+  const auditId = typeof value.auditId === "string" && value.auditId.trim().length > 0
+    ? value.auditId
+    : undefined;
+
+  if (!command || !policyDecision || !auditId) {
+    return undefined;
+  }
+
+  const ruleTriggers = Array.isArray(value.ruleTriggers)
+    ? sortedUnique(value.ruleTriggers.filter((entry): entry is string => typeof entry === "string"))
+    : [];
+  const dependencyChain = Array.isArray(value.dependencyChain)
+    ? value.dependencyChain.filter((entry): entry is string => typeof entry === "string")
+    : [];
+
+  return {
+    command,
+    policyDecision,
+    auditId,
+    ...(ruleTriggers.length > 0 ? { ruleTriggers } : {}),
+    ...(dependencyChain.length > 0 ? { dependencyChain } : {}),
+  };
+}
+
+function normalizeStateTransition(value: unknown): StateTransition | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const fromHash = typeof value.fromHash === "string"
+    ? value.fromHash
+    : typeof value.from === "string"
+      ? value.from
+      : "";
+  const toHash = typeof value.toHash === "string"
+    ? value.toHash
+    : typeof value.to === "string"
+      ? value.to
+      : "";
+  const action = typeof value.action === "string" && value.action.trim().length > 0 ? value.action : "persist-state";
+
+  if (fromHash.trim().length === 0 || toHash.trim().length === 0) {
+    return null;
+  }
+
+  const timestamp = typeof value.timestamp === "string" && value.timestamp.trim().length > 0
+    ? value.timestamp
+    : new Date(0).toISOString();
+  const id = typeof value.id === "string" && value.id.trim().length > 0
+    ? value.id
+    : `transition-${createHash("sha256").update(`${fromHash}:${toHash}:${action}:${timestamp}`).digest("hex").slice(0, 12)}`;
+  const metadata = normalizeStateMetadata(value.metadata);
+
+  return {
+    id,
+    fromHash,
+    toHash,
+    action,
+    timestamp,
+    diff: normalizeTransitionDiff(value.diff),
+    ...(metadata ? { metadata } : {}),
   };
 }
 
@@ -1358,7 +1620,221 @@ function recordStateAudit(root: string, audit: StateAudit): void {
 }
 
 export function listSnapshots(root: string): StateSnapshot[] {
-  return readJsonLines<StateSnapshot>(stateSnapshotsPath(root));
+  return readJsonLines<StateSnapshot>(stateSnapshotsPath(root))
+    .map((snapshot) => ({
+      ...snapshot,
+      state: materializeStatePlane(snapshot.state),
+    }))
+    .sort((left, right) =>
+      left.timestamp.localeCompare(right.timestamp)
+      || left.id.localeCompare(right.id)
+    );
+}
+
+export function listStateTransitions(root: string): StateTransition[] {
+  return readJsonLines<unknown>(stateTransitionsPath(root))
+    .map((entry) => normalizeStateTransition(entry))
+    .filter((entry): entry is StateTransition => entry !== null)
+    .sort((left, right) =>
+      left.timestamp.localeCompare(right.timestamp)
+      || left.id.localeCompare(right.id)
+    );
+}
+
+export function buildStateTimeline(root: string): StateTimeline {
+  return {
+    snapshots: listSnapshots(root),
+    transitions: listStateTransitions(root),
+  };
+}
+
+function fallbackToSnapshot(
+  snapshots: StateSnapshot[],
+  transitions: StateTransition[],
+  targetIndex: number,
+  replayStart: number,
+  visitedStates: string[]
+): ReplayResult {
+  const targetTransition = transitions[targetIndex];
+  const targetHash = targetTransition.toHash;
+  const direct = snapshots.find((snapshot) => snapshot.hash === targetHash);
+  if (direct) {
+    const replayTime = Date.now() - replayStart;
+    return {
+      state: materializeStatePlane(direct.state),
+      index: targetIndex,
+      transition: targetTransition,
+      trace: {
+        visitedStates: [...visitedStates, direct.hash],
+        replayTime,
+        consistencyCheck: true,
+        fallbackUsed: true,
+      },
+    };
+  }
+
+  let best: { snapshot: StateSnapshot; index: number } | null = null;
+  for (let index = 0; index <= targetIndex; index += 1) {
+    const hash = transitions[index]?.toHash;
+    if (!hash) {
+      continue;
+    }
+
+    const snapshot = snapshots.find((entry) => entry.hash === hash);
+    if (!snapshot) {
+      continue;
+    }
+
+    if (!best || index > best.index) {
+      best = { snapshot, index };
+    }
+  }
+
+  if (!best) {
+    throw new Error("Replay failed and no fallback snapshot is available");
+  }
+
+  const replayTime = Date.now() - replayStart;
+  return {
+    state: materializeStatePlane(best.snapshot.state),
+    index: targetIndex,
+    transition: targetTransition,
+    trace: {
+      visitedStates: [...visitedStates, best.snapshot.hash],
+      replayTime,
+      consistencyCheck: best.snapshot.hash === targetHash,
+      fallbackUsed: true,
+    },
+  };
+}
+
+export function jumpTo(root: string, index: number): ReplayResult {
+  const replayStart = Date.now();
+  const timeline = buildStateTimeline(root);
+
+  if (timeline.transitions.length === 0) {
+    const state = readStatePlane(root) ?? createEmptyStatePlane();
+    return {
+      state,
+      index: -1,
+      trace: {
+        visitedStates: [state.stateHash],
+        replayTime: Date.now() - replayStart,
+        consistencyCheck: true,
+        fallbackUsed: false,
+      },
+    };
+  }
+
+  const clampedIndex = Math.max(0, Math.min(index, timeline.transitions.length - 1));
+  const transitions = timeline.transitions;
+  const snapshots = timeline.snapshots;
+  const target = transitions[clampedIndex];
+  const targetHash = target.toHash;
+
+  const directSnapshot = snapshots.find((snapshot) => snapshot.hash === targetHash);
+  if (directSnapshot) {
+    return {
+      state: materializeStatePlane(directSnapshot.state),
+      index: clampedIndex,
+      transition: target,
+      trace: {
+        visitedStates: [directSnapshot.hash],
+        replayTime: Date.now() - replayStart,
+        consistencyCheck: true,
+        fallbackUsed: false,
+      },
+    };
+  }
+
+  let baseSnapshot: StateSnapshot | null = null;
+  let baseIndex = -1;
+  for (let candidateIndex = clampedIndex - 1; candidateIndex >= 0; candidateIndex -= 1) {
+    const hash = transitions[candidateIndex]?.toHash;
+    if (!hash) {
+      continue;
+    }
+
+    const snapshot = snapshots.find((entry) => entry.hash === hash);
+    if (!snapshot) {
+      continue;
+    }
+
+    baseSnapshot = snapshot;
+    baseIndex = candidateIndex;
+    break;
+  }
+
+  if (!baseSnapshot) {
+    baseSnapshot = snapshots[0] ?? null;
+    if (baseSnapshot) {
+      const foundIndex = transitions.findIndex((entry) => entry.toHash === baseSnapshot?.hash);
+      baseIndex = foundIndex;
+    }
+  }
+
+  if (!baseSnapshot) {
+    throw new Error("Replay requires at least one snapshot");
+  }
+
+  const visitedStates: string[] = [baseSnapshot.hash];
+  try {
+    let current = materializeStatePlane(baseSnapshot.state);
+
+    for (let currentIndex = baseIndex + 1; currentIndex <= clampedIndex; currentIndex += 1) {
+      const transition = transitions[currentIndex];
+      current = applyTransitionDiff(current, transition.diff);
+      const computedHash = hashState(current);
+      visitedStates.push(computedHash);
+      if (computedHash !== transition.toHash) {
+        throw new Error(`Replay hash mismatch at transition ${transition.id}`);
+      }
+    }
+
+    return {
+      state: materializeStatePlane(current),
+      index: clampedIndex,
+      transition: target,
+      trace: {
+        visitedStates,
+        replayTime: Date.now() - replayStart,
+        consistencyCheck: true,
+        fallbackUsed: false,
+      },
+    };
+  } catch {
+    return fallbackToSnapshot(snapshots, transitions, clampedIndex, replayStart, visitedStates);
+  }
+}
+
+export function replayTo(root: string, snapshotId: string): ReplayResult {
+  const transitions = listStateTransitions(root);
+  const index = transitions.findIndex((entry) => entry.id === snapshotId || entry.toHash === snapshotId);
+  if (index < 0) {
+    throw new Error(`Replay target not found: ${snapshotId}`);
+  }
+
+  return jumpTo(root, index);
+}
+
+export function stepForward(root: string, currentIndex: number): ReplayResult {
+  const transitions = listStateTransitions(root);
+  if (transitions.length === 0) {
+    return jumpTo(root, -1);
+  }
+
+  const nextIndex = Math.min(currentIndex + 1, transitions.length - 1);
+  return jumpTo(root, nextIndex);
+}
+
+export function stepBackward(root: string, currentIndex: number): ReplayResult {
+  const transitions = listStateTransitions(root);
+  if (transitions.length === 0) {
+    return jumpTo(root, -1);
+  }
+
+  const previousIndex = Math.max(currentIndex - 1, 0);
+  return jumpTo(root, previousIndex);
 }
 
 export function rollbackState(root: string, snapshotId: string): StatePlane {
@@ -1426,6 +1902,7 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
   const statePath = getStatePath(root);
   const previousRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf-8") : null;
   const previousState = previousRaw ? readStatePlane(root) : null;
+  const transitionCountBeforeWrite = listStateTransitions(root).length;
 
   const nextState = materializeStatePlane(state);
   const validation = validateState(nextState);
@@ -1463,22 +1940,48 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
       throw new Error(`State persistence validation failed: ${postValidation.issues.map((issue) => issue.code).join(", ")}`);
     }
 
-    if (!options?.skipSnapshot) {
-      saveSnapshot(root, reloaded);
-    }
-
     const previousHash = previousState?.stateHash ?? "GENESIS";
+    const timestamp = new Date().toISOString();
+    const transitionId = `transition-${formatTimestampForId(timestamp)}-${reloaded.stateHash.slice(0, 8)}`;
+    const transitionDiff = computeStateDiff(previousState, reloaded);
+    const metadata: StateMetadata = {
+      command: options?.metadata?.command ?? options?.action ?? "persist-state",
+      policyDecision: options?.metadata?.policyDecision ?? "allow",
+      auditId: options?.metadata?.auditId ?? `state-transition-${transitionId}`,
+      ...(options?.metadata?.ruleTriggers && options.metadata.ruleTriggers.length > 0
+        ? { ruleTriggers: sortedUnique(options.metadata.ruleTriggers) }
+        : {}),
+      ...(options?.metadata?.dependencyChain && options.metadata.dependencyChain.length > 0
+        ? { dependencyChain: [...options.metadata.dependencyChain] }
+        : { dependencyChain: transitionDiff.patches.map((patch) => patch.path) }
+      ),
+    };
     const transition: StateTransition = {
-      from: previousHash,
-      to: reloaded.stateHash,
+      id: transitionId,
+      fromHash: previousHash,
+      toHash: reloaded.stateHash,
       action: options?.action ?? "persist-state",
+      timestamp,
+      diff: transitionDiff,
+      metadata,
     };
     recordStateTransition(root, transition);
+
+    if (!options?.skipSnapshot) {
+      const transitionNumber = transitionCountBeforeWrite + 1;
+      const shouldSaveSnapshot = transitionCountBeforeWrite === 0 || transitionNumber % SNAPSHOT_INTERVAL === 0;
+      if (shouldSaveSnapshot) {
+        saveSnapshot(root, reloaded);
+      }
+    }
 
     const stateAudit: StateAudit = {
       previousHash,
       newHash: reloaded.stateHash,
-      diff: computeStateDiff(previousState, reloaded),
+      diff: {
+        patchCount: transitionDiff.patchCount,
+        patchedPaths: transitionDiff.patches.map((patch) => patch.path),
+      },
     };
     recordStateAudit(root, stateAudit);
 

@@ -44,8 +44,12 @@ import {
   runMacro,
 } from "../core/macros.js";
 import {
+  buildStateTimeline,
   createEmptyStatePlane,
+  jumpTo,
   readStatePlane,
+  stepBackward,
+  stepForward,
 } from "../core/state.js";
 import {
   detectEnvironment,
@@ -72,7 +76,10 @@ import type {
   ProductActionResult,
   ProductSnapshot,
   RoleView,
+  StateDiff,
+  StateInspector,
   UIError,
+  TimelineReplayTrace,
   UITrace,
   UISurface,
   WorkflowState,
@@ -96,10 +103,10 @@ const ROLE_VIEW: RoleView = {
 };
 
 const SURFACES_BY_ROLE: Record<Role, UISurface[]> = {
-  architect: ["dashboard", "workspace", "policy-view", "audit-view", "macro-library"],
-  analyst: ["dashboard", "workspace", "audit-view", "plan-view"],
-  conductor: ["dashboard", "workspace", "plan-view", "policy-view", "audit-view", "macro-library"],
-  enforcer: ["dashboard", "workspace", "plan-view", "audit-view"],
+  architect: ["dashboard", "workspace", "timeline-view", "policy-view", "audit-view", "macro-library"],
+  analyst: ["dashboard", "workspace", "timeline-view", "audit-view", "plan-view"],
+  conductor: ["dashboard", "workspace", "plan-view", "timeline-view", "policy-view", "audit-view", "macro-library"],
+  enforcer: ["dashboard", "workspace", "plan-view", "timeline-view", "audit-view"],
 };
 
 const WORKFLOW_PERMISSIONS: Record<Role, WorkflowStep[]> = {
@@ -178,6 +185,9 @@ export class ChoirProductService {
   private traces: UITrace[] = [];
   private lastPreviewDiffs: DiffView[] = [];
   private lastWorkflowAction = "";
+  private replayIndex = -1;
+  private replayPlaying = false;
+  private replayTrace: TimelineReplayTrace | undefined;
 
   constructor(_context: vscode.ExtensionContext) {}
 
@@ -340,6 +350,115 @@ export class ChoirProductService {
     };
   }
 
+  private buildStateInspector(
+    state: ReturnType<typeof createEmptyStatePlane>,
+    why: string[],
+    dependencyChain: string[]
+  ): StateInspector {
+    return {
+      intent: state.intent,
+      ast: state.ast,
+      violations: state.ruleViolations,
+      plans: state.plans,
+      why,
+      dependencyChain,
+    };
+  }
+
+  private snapshotForHash(root: string, hash: string): ReturnType<typeof createEmptyStatePlane> | null {
+    if (!hash || hash === "GENESIS") {
+      return createEmptyStatePlane();
+    }
+
+    const timeline = buildStateTimeline(root);
+    const snapshot = timeline.snapshots.find((entry) => entry.hash === hash);
+    return snapshot ? snapshot.state : null;
+  }
+
+  private buildReplayView(root: string, fallbackState: ReturnType<typeof createEmptyStatePlane>): {
+    timeline: ProductSnapshot["timeline"];
+    stateInspector: StateInspector;
+    stateDiff?: StateDiff;
+    replayTrace?: TimelineReplayTrace;
+  } {
+    const timeline = buildStateTimeline(root);
+    const timelineEntries = timeline.transitions.map((transition, index) => ({
+      index,
+      transitionId: transition.id,
+      label: `State ${index + 1}`,
+      action: transition.action,
+      timestamp: transition.timestamp,
+      fromHash: transition.fromHash,
+      toHash: transition.toHash,
+      ...(transition.metadata ? { metadata: transition.metadata } : {}),
+    }));
+
+    if (timelineEntries.length === 0) {
+      this.replayIndex = -1;
+      this.replayTrace = undefined;
+      return {
+        timeline: {
+          currentIndex: -1,
+          canStepForward: false,
+          canStepBackward: false,
+          playing: false,
+          states: [],
+        },
+        stateInspector: this.buildStateInspector(
+          fallbackState,
+          ["No transitions recorded yet."],
+          []
+        ),
+      };
+    }
+
+    this.replayIndex = Math.max(0, Math.min(this.replayIndex < 0 ? timelineEntries.length - 1 : this.replayIndex, timelineEntries.length - 1));
+    const replayed = jumpTo(root, this.replayIndex);
+    this.replayTrace = replayed.trace;
+    const currentTransition = timeline.transitions[this.replayIndex];
+    const metadata = currentTransition?.metadata;
+
+    const why = [
+      `Applied transition ${currentTransition.id}`,
+      `Action: ${currentTransition.action}`,
+      `From ${currentTransition.fromHash} to ${currentTransition.toHash}`,
+      ...(metadata?.command ? [`Command: ${metadata.command}`] : []),
+      ...(metadata?.policyDecision ? [`Policy decision: ${metadata.policyDecision}`] : []),
+      ...(metadata?.auditId ? [`Audit link: ${metadata.auditId}`] : []),
+      ...(metadata?.ruleTriggers && metadata.ruleTriggers.length > 0
+        ? [`Rule triggers: ${metadata.ruleTriggers.join(", ")}`]
+        : []),
+    ];
+
+    const dependencyChain = metadata?.dependencyChain ?? [];
+    const currentState = replayed.state;
+
+    let stateDiff: StateDiff | undefined;
+    if (currentTransition) {
+      const beforeState = this.replayIndex > 0
+        ? jumpTo(root, this.replayIndex - 1).state
+        : this.snapshotForHash(root, currentTransition.fromHash) ?? createEmptyStatePlane();
+      stateDiff = {
+        before: beforeState,
+        after: currentState,
+        patches: currentTransition.diff.patches,
+      };
+    }
+
+    return {
+      timeline: {
+        currentIndex: this.replayIndex,
+        canStepForward: this.replayIndex < timelineEntries.length - 1,
+        canStepBackward: this.replayIndex > 0,
+        playing: this.replayPlaying,
+        states: timelineEntries,
+      },
+      stateInspector: this.buildStateInspector(currentState, why, dependencyChain),
+      ...(stateDiff ? { stateDiff } : {}),
+      replayTrace: this.replayTrace,
+    };
+  }
+
   async buildSnapshot(
     role: Role,
     filters?: {
@@ -385,6 +504,7 @@ export class ChoirProductService {
         ...(environmentFilter ? { environment: environmentFilter } : {}),
       },
     };
+    const replayView = this.buildReplayView(root, state);
 
     return {
       generatedAt: new Date().toISOString(),
@@ -407,6 +527,10 @@ export class ChoirProductService {
       pendingApprovals: pending,
       traces: [...this.traces].reverse(),
       controlPlane: controlPlaneToChoirConfig(control),
+      timeline: replayView.timeline,
+      stateInspector: replayView.stateInspector,
+      ...(replayView.stateDiff ? { stateDiff: replayView.stateDiff } : {}),
+      ...(replayView.replayTrace ? { replayTrace: replayView.replayTrace } : {}),
     };
   }
 
@@ -767,6 +891,69 @@ export class ChoirProductService {
           ok: true,
           message: executed.message,
           trace: executed.trace,
+          snapshot: await this.buildSnapshot(role),
+        };
+      }
+
+      if (action.type === "replay-control") {
+        const { root } = this.requireControlContext();
+
+        if (action.control === "play") {
+          this.replayPlaying = true;
+          return {
+            ok: true,
+            message: "Replay playback started.",
+            snapshot: await this.buildSnapshot(role),
+          };
+        }
+
+        if (action.control === "pause") {
+          this.replayPlaying = false;
+          return {
+            ok: true,
+            message: "Replay playback paused.",
+            snapshot: await this.buildSnapshot(role),
+          };
+        }
+
+        if (action.control === "step-forward") {
+          const replayed = stepForward(root, this.replayIndex);
+          this.replayIndex = replayed.index;
+          this.replayTrace = replayed.trace;
+          return {
+            ok: true,
+            message: replayed.index >= 0 ? `Stepped forward to state ${replayed.index + 1}.` : "No replay states available.",
+            snapshot: await this.buildSnapshot(role),
+          };
+        }
+
+        if (action.control === "step-backward") {
+          const replayed = stepBackward(root, this.replayIndex);
+          this.replayIndex = replayed.index;
+          this.replayTrace = replayed.trace;
+          return {
+            ok: true,
+            message: replayed.index >= 0 ? `Stepped backward to state ${replayed.index + 1}.` : "No replay states available.",
+            snapshot: await this.buildSnapshot(role),
+          };
+        }
+
+        if (action.control === "jump") {
+          const target = typeof action.index === "number" && Number.isFinite(action.index) ? action.index : this.replayIndex;
+          const replayed = jumpTo(root, target);
+          this.replayIndex = replayed.index;
+          this.replayTrace = replayed.trace;
+          return {
+            ok: true,
+            message: replayed.index >= 0 ? `Jumped to state ${replayed.index + 1}.` : "No replay states available.",
+            snapshot: await this.buildSnapshot(role),
+          };
+        }
+
+        return {
+          ok: false,
+          message: "Unknown replay control action.",
+          error: toUIError("Unknown replay control action."),
           snapshot: await this.buildSnapshot(role),
         };
       }

@@ -23,6 +23,7 @@ const SURFACE_LABELS: Record<UISurface, string> = {
   dashboard: "Dashboard",
   workspace: "Workspace",
   "plan-view": "Plan View",
+  "timeline-view": "Time Travel",
   "policy-view": "Policy View",
   "audit-view": "Audit View",
   "macro-library": "Macro/Abstraction",
@@ -55,6 +56,7 @@ if (!(roleSelect instanceof HTMLSelectElement)
 let snapshot: ProductSnapshot | null = null;
 let activeSurface: UISurface = "dashboard";
 let auditFilters: { role?: string; environment?: string } = {};
+let playbackTimer: number | undefined;
 
 function getActiveRole(): Role {
   const value = roleSelect.value;
@@ -78,6 +80,41 @@ function appendLog(line: string): void {
   const timestamp = new Date().toISOString();
   const existing = consoleOutput.textContent ?? "";
   consoleOutput.textContent = `[${timestamp}] ${line}\n${existing}`;
+}
+
+function stopPlaybackTimer(): void {
+  if (typeof playbackTimer !== "undefined") {
+    window.clearInterval(playbackTimer);
+    playbackTimer = undefined;
+  }
+}
+
+function syncPlaybackTimer(): void {
+  if (!snapshot?.timeline.playing) {
+    stopPlaybackTimer();
+    return;
+  }
+
+  if (typeof playbackTimer !== "undefined") {
+    return;
+  }
+
+  playbackTimer = window.setInterval(() => {
+    if (!snapshot?.timeline.playing || !snapshot.timeline.canStepForward) {
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "pause",
+      });
+      return;
+    }
+
+    postAction({
+      type: "replay-control",
+      role: getActiveRole(),
+      control: "step-forward",
+    });
+  }, 900);
 }
 
 function postAction(payload: ProductActionRequest): void {
@@ -279,6 +316,110 @@ function renderPlanView(): string {
   `;
 }
 
+function renderTimelineView(): string {
+  if (!snapshot) {
+    return "";
+  }
+
+  const entries = snapshot.timeline.states;
+  const nodes = entries.length > 0
+    ? entries.map((entry) => {
+      const isCurrent = entry.index === snapshot?.timeline.currentIndex;
+      return `
+        <button
+          type="button"
+          class="timeline-node ${isCurrent ? "current" : ""}"
+          data-timeline-index="${entry.index}"
+          title="${escapeHtml(entry.action)}">
+          <span class="timeline-label">${escapeHtml(entry.label)}</span>
+          <span class="timeline-action">${escapeHtml(entry.action)}</span>
+        </button>
+      `;
+    }).join("")
+    : `<div class="muted">No transitions recorded yet.</div>`;
+
+  const inspector = snapshot.stateInspector;
+  const whyRows = inspector.why.length > 0
+    ? inspector.why.map((line) => `<li>${escapeHtml(line)}</li>`).join("")
+    : "<li>No transition explanation available.</li>";
+  const dependencyRows = inspector.dependencyChain.length > 0
+    ? inspector.dependencyChain.map((line) => `<li class=\"mono\">${escapeHtml(line)}</li>`).join("")
+    : "<li>No dependency chain captured.</li>";
+
+  const patchRows = snapshot.stateDiff && snapshot.stateDiff.patches.length > 0
+    ? snapshot.stateDiff.patches.map((patch) => `
+      <tr>
+        <td class="mono">${escapeHtml(patch.path)}</td>
+        <td>${escapeHtml(patch.op)}</td>
+        <td><pre class="mono compact">${escapeHtml(JSON.stringify(patch.before, null, 2) ?? "null")}</pre></td>
+        <td><pre class="mono compact">${escapeHtml(JSON.stringify(patch.after, null, 2) ?? "null")}</pre></td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="4" class="muted">No diff patches for current state.</td></tr>`;
+
+  const replayTrace = snapshot.replayTrace
+    ? `
+      <article class="card full">
+        <div class="muted">Replay Trace</div>
+        <p class="mono">visited=${snapshot.replayTrace.visitedStates.length} · replayTime=${snapshot.replayTrace.replayTime}ms · consistency=${snapshot.replayTrace.consistencyCheck} · fallback=${snapshot.replayTrace.fallbackUsed}</p>
+      </article>
+    `
+    : "";
+
+  return `
+    <section class="grid">
+      <article class="card full">
+        <div class="muted">Time Navigation</div>
+        <div class="timeline-controls">
+          <button id="timelinePlayBtn" ${snapshot.timeline.playing ? "disabled" : ""}>Play</button>
+          <button id="timelinePauseBtn" class="ghost" ${snapshot.timeline.playing ? "" : "disabled"}>Pause</button>
+          <button id="timelineStepBackBtn" class="secondary" ${snapshot.timeline.canStepBackward ? "" : "disabled"}>Step Back</button>
+          <button id="timelineStepForwardBtn" class="secondary" ${snapshot.timeline.canStepForward ? "" : "disabled"}>Step Forward</button>
+          <span class="mono">Current Index: ${snapshot.timeline.currentIndex}</span>
+        </div>
+        <div class="timeline-track">${nodes}</div>
+      </article>
+
+      <article class="card wide">
+        <div class="muted">Why Did This Happen?</div>
+        <ul class="list">${whyRows}</ul>
+      </article>
+
+      <article class="card">
+        <div class="muted">Dependency Chain</div>
+        <ul class="list">${dependencyRows}</ul>
+      </article>
+
+      <article class="card full">
+        <div class="muted">State Inspector (Exact Replay State)</div>
+        <pre class="mono">${escapeHtml(JSON.stringify({
+          intent: inspector.intent,
+          ast: inspector.ast,
+          violations: inspector.violations,
+          plans: inspector.plans,
+        }, null, 2))}</pre>
+      </article>
+
+      <article class="card full">
+        <div class="muted">State Diff Patches</div>
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Path</th>
+              <th>Op</th>
+              <th>Before</th>
+              <th>After</th>
+            </tr>
+          </thead>
+          <tbody>${patchRows}</tbody>
+        </table>
+      </article>
+
+      ${replayTrace}
+    </section>
+  `;
+}
+
 function renderPolicyView(): string {
   if (!snapshot) {
     return "";
@@ -472,6 +613,10 @@ function wireSurfaceButtons(): void {
   const runAuditBtn = document.getElementById("runAuditBtn");
   const applyAuditFilterBtn = document.getElementById("applyAuditFilterBtn");
   const runMacroCommandBtn = document.getElementById("runMacroCommandBtn");
+  const timelinePlayBtn = document.getElementById("timelinePlayBtn");
+  const timelinePauseBtn = document.getElementById("timelinePauseBtn");
+  const timelineStepBackBtn = document.getElementById("timelineStepBackBtn");
+  const timelineStepForwardBtn = document.getElementById("timelineStepForwardBtn");
 
   if (runDefineBtn instanceof HTMLButtonElement) {
     runDefineBtn.addEventListener("click", () => {
@@ -595,6 +740,67 @@ function wireSurfaceButtons(): void {
       });
     });
   }
+
+  if (timelinePlayBtn instanceof HTMLButtonElement) {
+    timelinePlayBtn.addEventListener("click", () => {
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "play",
+      });
+    });
+  }
+
+  if (timelinePauseBtn instanceof HTMLButtonElement) {
+    timelinePauseBtn.addEventListener("click", () => {
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "pause",
+      });
+    });
+  }
+
+  if (timelineStepBackBtn instanceof HTMLButtonElement) {
+    timelineStepBackBtn.addEventListener("click", () => {
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "step-backward",
+      });
+    });
+  }
+
+  if (timelineStepForwardBtn instanceof HTMLButtonElement) {
+    timelineStepForwardBtn.addEventListener("click", () => {
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "step-forward",
+      });
+    });
+  }
+
+  document.querySelectorAll<HTMLButtonElement>(".timeline-node[data-timeline-index]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const value = button.dataset.timelineIndex;
+      if (!value) {
+        return;
+      }
+
+      const parsedIndex = Number.parseInt(value, 10);
+      if (!Number.isFinite(parsedIndex)) {
+        return;
+      }
+
+      postAction({
+        type: "replay-control",
+        role: getActiveRole(),
+        control: "jump",
+        index: parsedIndex,
+      });
+    });
+  });
 }
 
 function renderSurface(): void {
@@ -609,6 +815,8 @@ function renderSurface(): void {
     surfaceContainer.innerHTML = renderWorkspaceView();
   } else if (activeSurface === "plan-view") {
     surfaceContainer.innerHTML = renderPlanView();
+  } else if (activeSurface === "timeline-view") {
+    surfaceContainer.innerHTML = renderTimelineView();
   } else if (activeSurface === "policy-view") {
     surfaceContainer.innerHTML = renderPolicyView();
   } else if (activeSurface === "audit-view") {
@@ -625,6 +833,7 @@ function renderSnapshot(newSnapshot: ProductSnapshot): void {
   roleSelect.value = newSnapshot.activeRole;
   renderTabs();
   renderSurface();
+  syncPlaybackTimer();
 }
 
 function handleActionResult(result: ProductActionResult): void {

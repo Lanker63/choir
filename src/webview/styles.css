@@ -221,6 +221,53 @@ button.danger {
   gap: 8px;
 }
 
+.timeline-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.timeline-track {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 10px 2px 4px;
+  margin-top: 10px;
+}
+
+.timeline-node {
+  min-width: 180px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+  padding: 9px 10px;
+  text-align: left;
+}
+
+.timeline-node.current {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px rgba(2, 106, 93, 0.35);
+  background: rgba(2, 106, 93, 0.12);
+}
+
+.timeline-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--muted);
+}
+
+.timeline-action {
+  display: block;
+  margin-top: 2px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .step {
   padding: 7px 10px;
   border-radius: 999px;
@@ -256,6 +303,13 @@ button.danger {
 .mono {
   font-family: var(--mono);
   font-size: 11px;
+}
+
+pre.compact {
+  margin: 0;
+  max-height: 100px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .diff {

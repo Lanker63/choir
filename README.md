@@ -1,6 +1,6 @@
 # Choir
 
-**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, and supports versioned macro libraries for team-wide standards reuse.
+**Choir** is a VS Code extension that keeps your codebase honest through a deterministic, policy-driven pipeline. It reads a committed YAML control plane, compiles intent and policy into executable rules, emits diagnostics, coordinates planning/execution through a unified chat facade (`@choir`) that routes to internal roles (Architect, Enforcer, Analyst, and Conductor), records immutable audit/compliance evidence for significant actions, supports versioned macro libraries for team-wide standards reuse, and provides a deterministic time-travel replay debugger UI for state transition inspection.
 
 ---
 
@@ -361,6 +361,35 @@ Participant exposure contract:
 - Routing from `@choir` to internal role logic is deterministic and implementation-defined.
 
 Control-plane mutation commands are strict DSL (alpha mode, no natural-language command parsing).
+
+### Time-Travel Replay Debugger UI
+
+Choir includes a deterministic replay debugger surface in the Control Center webview.
+
+Replay surface contract:
+
+- Surface id: `timeline-view` (`Time Travel` tab label)
+- Timeline entries are derived from state transitions (index, action, timestamp, from-hash, to-hash, metadata)
+- Replay controls are internal action messages (not DSL commands):
+  - `play`
+  - `pause`
+  - `step-forward`
+  - `step-backward`
+  - `jump` (to explicit timeline index)
+
+Inspector contract:
+
+- Why summary from transition metadata context
+- Dependency chain summary
+- Exact replayed state inspector (`intent`, `ast`, `violations`, `plans`)
+- Patch-level diff table (`path`, `op`, `before`, `after`)
+- Replay trace (`visitedStates`, `replayTime`, `consistencyCheck`, `fallbackUsed`)
+
+Replay behavior:
+
+- Playback advances through deterministic step-forward actions on a fixed timer and auto-pauses when no forward step is available.
+- Replay verifies hash continuity while applying transition diffs.
+- On replay mismatch, Choir falls back deterministically to snapshot-backed reconstruction.
 
 ### Interactive Init Wizard (`@choir init`)
 
@@ -917,6 +946,11 @@ State correctness guarantees:
 - Pre-write and post-write validation must pass.
 - Optional consistency checks enforce alignment between state and YAML/AST/rule outputs.
 - State transitions are validated and recorded deterministically.
+- Transition records include deterministic replay fields (`id`, `fromHash`, `toHash`, `action`, `timestamp`, `diff`, metadata).
+- Transition diffs are patch-based and ordered (`path`, `op`, `before`, `after`).
+- Snapshot persistence follows deterministic hybrid cadence (initial + fixed interval snapshots).
+- Replay navigation supports deterministic `jumpTo`, `replayTo`, `stepForward`, and `stepBackward` behavior.
+- Replay verifies transition hash continuity and deterministically falls back to snapshot reconstruction if needed.
 
 State integrity artifacts:
 
