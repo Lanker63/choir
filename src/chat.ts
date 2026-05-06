@@ -54,6 +54,8 @@ import {
 } from "./core/globalOrchestration.js";
 import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
+import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
+import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import {
     formatDSL,
     generateDSL,
@@ -65,6 +67,7 @@ import {
     parseGraphChatCommand,
     parseInitChatCommand,
     parsePanelChatCommand,
+    parseVerifyChatCommand,
 } from "./core/chatCommands.js";
 import {
     InitApplyMode,
@@ -278,6 +281,11 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir init",
         "- @choir init --template backend",
         "- @choir init --template frontend",
+        "- @choir verify",
+        "- @choir verify --quick",
+        "- @choir verify --property",
+        "- @choir verify --chaos",
+        "- @choir verify --chaos extreme",
         "- @choir control",
         "- @choir timeline",
         "- @choir list abstractions",
@@ -323,6 +331,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const initChatCommand = parseInitChatCommand(raw);
             const graphChatCommand = parseGraphChatCommand(raw);
             const panelChatCommand = parsePanelChatCommand(raw);
+            const verifyChatCommand = parseVerifyChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
                     stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
@@ -656,6 +665,43 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 await vscode.commands.executeCommand("choir.openTimeline");
                 stream.markdown("Timeline opened.");
+                return;
+            }
+
+            if (verifyChatCommand) {
+                const workspaceRoot = getWorkspaceRoot() ?? undefined;
+
+                try {
+                    if (verifyChatCommand.mode === "property") {
+                        const report = await runPropertyTest(16, {
+                            throwOnFailure: false,
+                        });
+                        stream.markdown(formatChaosTestReport(report));
+                        return;
+                    }
+
+                    if (verifyChatCommand.mode === "chaos") {
+                        const report = await runChaosTest(verifyChatCommand.chaosMode ?? "moderate", 10, {
+                            throwOnFailure: false,
+                        });
+                        stream.markdown(formatChaosTestReport(report));
+                        return;
+                    }
+
+                    const report = await runFullVerification({
+                        workspaceRoot,
+                        mode: verifyChatCommand.mode,
+                        throwOnFailure: false,
+                        detectFlakiness: true,
+                        parallelCaseExecution: true,
+                    });
+
+                    stream.markdown(formatVerificationReport(report));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    stream.markdown(`Verification failed: ${message}`);
+                }
+
                 return;
             }
 

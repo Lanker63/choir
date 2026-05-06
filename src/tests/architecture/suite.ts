@@ -154,7 +154,7 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
-import { parseInitChatCommand } from "../../core/chatCommands.js";
+import { parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
 import {
   getAbstraction,
   listAbstractions,
@@ -258,6 +258,20 @@ import {
   rollbackRefactor,
   runRefactorIntent,
 } from "../../core/refactorEngine.js";
+import {
+  formatChaosTestReport,
+  runChaosTest,
+  runPropertyTest,
+  setSeed,
+} from "../../core/propertyChaosHarness.js";
+import {
+  checkDeterminism,
+  createVerificationSuite,
+  deterministicCase,
+  formatVerificationReport,
+  runFullVerification,
+  runVerificationCase,
+} from "../../core/verificationHarness.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -1783,6 +1797,44 @@ const pass2: TestPass = {
         });
 
         assert.strictEqual(parseInitChatCommand("choir init"), null);
+      },
+    },
+    {
+      id: "2.30c",
+      name: "verify chat shortcut parser accepts full and quick modes",
+      run: async () => {
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify"), {
+          type: "verify",
+          mode: "full",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("verify"), {
+          type: "verify",
+          mode: "full",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --quick"), {
+          type: "verify",
+          mode: "quick",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --property"), {
+          type: "verify",
+          mode: "property",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos"), {
+          type: "verify",
+          mode: "chaos",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos extreme"), {
+          type: "verify",
+          mode: "chaos",
+          chaosMode: "extreme",
+        });
+
+        assert.strictEqual(parseVerifyChatCommand("choir verify"), null);
       },
     },
     {
@@ -6295,6 +6347,84 @@ const pass6: TestPass = {
 
         assert.strictEqual(parsed.ast.mode, "dependency");
         assert.strictEqual(parsed.ast.nodeId, "unit:packages/b");
+      },
+    },
+    {
+      id: "6.18",
+      name: "verification harness case runner validates deterministic replay simulation and rollback",
+      run: async () => {
+        const result = await runVerificationCase(deterministicCase);
+        assert.strictEqual(result.passed, true);
+        assert.strictEqual(result.actual.deterministic, true);
+        assert.strictEqual(result.actual.replayMatches, true);
+        assert.strictEqual(result.actual.simulationMatches, true);
+        assert.strictEqual(result.actual.rollbackSafe, true);
+      },
+    },
+    {
+      id: "6.19",
+      name: "verification harness full run is deterministic and report formatting is stable",
+      run: async () => {
+        const suite = createVerificationSuite("quick");
+        const first = await runFullVerification({
+          mode: "quick",
+          suite,
+          throwOnFailure: false,
+          detectFlakiness: true,
+          flakeRuns: 2,
+        });
+
+        const second = await runFullVerification({
+          mode: "quick",
+          suite,
+          throwOnFailure: false,
+          detectFlakiness: true,
+          flakeRuns: 2,
+        });
+
+        assert.strictEqual(first.passed, true);
+        assert.strictEqual(second.passed, true);
+        assert.strictEqual(await checkDeterminism(deterministicCase.input), true);
+        assert.deepStrictEqual(first.metrics, second.metrics);
+        assert.strictEqual(formatVerificationReport(first), formatVerificationReport(second));
+      },
+    },
+    {
+      id: "6.20",
+      name: "property-based harness is deterministic with fixed seed and stable report",
+      run: async () => {
+        setSeed(424242);
+        const first = await runPropertyTest(4, {
+          seed: 424242,
+          throwOnFailure: false,
+        });
+        const second = await runPropertyTest(4, {
+          seed: 424242,
+          throwOnFailure: false,
+        });
+
+        assert.strictEqual(first.failures, 0);
+        assert.strictEqual(second.failures, 0);
+        assert.strictEqual(formatChaosTestReport(first), formatChaosTestReport(second));
+      },
+    },
+    {
+      id: "6.21",
+      name: "chaos harness mode is deterministic and reports invariant set",
+      run: async () => {
+        setSeed(515151);
+        const first = await runChaosTest("light", 3, {
+          seed: 515151,
+          throwOnFailure: false,
+        });
+        const second = await runChaosTest("light", 3, {
+          seed: 515151,
+          throwOnFailure: false,
+        });
+
+        assert.deepStrictEqual(first.invariantsBroken, second.invariantsBroken);
+        assert.strictEqual(first.mode, "light");
+        assert.strictEqual(second.mode, "light");
       },
     },
   ],

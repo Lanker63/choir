@@ -20,6 +20,12 @@ export type PanelChatCommand = {
   target: "control" | "timeline";
 };
 
+export type VerifyChatCommand = {
+  type: "verify";
+  mode: "full" | "quick" | "property" | "chaos";
+  chaosMode?: "none" | "light" | "moderate" | "extreme";
+};
+
 export function parseAbstractionChatCommand(input: string): AbstractionChatCommand | null {
   const normalized = input.trim();
 
@@ -105,6 +111,42 @@ export function parsePanelChatCommand(input: string): PanelChatCommand | null {
 
   if (/^(?:@choir\s+)?timeline\s*$/i.test(normalized)) {
     return { target: "timeline" };
+  }
+
+  return null;
+}
+
+export function parseVerifyChatCommand(input: string): VerifyChatCommand | null {
+  const normalized = input.trim();
+
+  if (/^(?:@choir\s+)?verify\s+--property\s*$/i.test(normalized)) {
+    return {
+      type: "verify",
+      mode: "property",
+    };
+  }
+
+  const chaos = normalized.match(/^(?:@choir\s+)?verify\s+--chaos(?:\s+(none|light|moderate|extreme))?\s*$/i);
+  if (chaos) {
+    return {
+      type: "verify",
+      mode: "chaos",
+      ...(chaos[1] ? { chaosMode: chaos[1].toLowerCase() as VerifyChatCommand["chaosMode"] } : {}),
+    };
+  }
+
+  if (/^(?:@choir\s+)?verify\s*$/i.test(normalized)) {
+    return {
+      type: "verify",
+      mode: "full",
+    };
+  }
+
+  if (/^(?:@choir\s+)?verify\s+--quick\s*$/i.test(normalized)) {
+    return {
+      type: "verify",
+      mode: "quick",
+    };
   }
 
   return null;
