@@ -56,6 +56,7 @@ import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
+import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 import {
     formatDSL,
     generateDSL,
@@ -66,6 +67,7 @@ import {
     parseAbstractionChatCommand,
     parseGraphChatCommand,
     parseInitChatCommand,
+    normalizeChatDSLInput,
     parsePanelChatCommand,
     parseVerifyChatCommand,
 } from "./core/chatCommands.js";
@@ -286,6 +288,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --property",
         "- @choir verify --chaos",
         "- @choir verify --chaos extreme",
+        "- @choir verify --contracts",
         "- @choir control",
         "- @choir timeline",
         "- @choir list abstractions",
@@ -463,7 +466,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     let input: string | undefined;
 
-                    if (step === "confirm") {
+                    if (step === "review" || step === "confirm") {
                         const confirmSelection = await vscode.window.showQuickPick([
                             { label: "yes", description: "Apply this configuration" },
                             { label: "no", description: "Cancel and clear wizard state" },
@@ -495,7 +498,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         const stepInput = await vscode.window.showInputBox({
                             title: progress,
                             prompt: `${renderPrompt(wizard.state)} Type back to edit previous step or cancel to exit.`,
-                            placeHolder: step === "review" ? "continue | back | cancel" : "enter value",
+                            placeHolder: "enter value",
                             ignoreFocusOut: true,
                         });
 
@@ -688,6 +691,21 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         return;
                     }
 
+                    if (verifyChatCommand.mode === "contracts") {
+                        if (!workspaceRoot) {
+                            stream.markdown("No workspace folder found.");
+                            return;
+                        }
+
+                        const report = await runContractVerification({
+                            workspaceRoot,
+                            mode: "quick",
+                            throwOnFailure: false,
+                        });
+                        stream.markdown(formatContractVerificationReport(report));
+                        return;
+                    }
+
                     const report = await runFullVerification({
                         workspaceRoot,
                         mode: verifyChatCommand.mode,
@@ -786,8 +804,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
             }
 
             let parsed;
+            const normalizedDSLInput = normalizeChatDSLInput(raw);
             try {
-                parsed = parseCommand(raw);
+                parsed = parseCommand(normalizedDSLInput);
             } catch (error) {
                 const message = error instanceof Error ? error.message : String(error);
                 stream.markdown([
@@ -1505,6 +1524,62 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
+                if (parsed.ast.type === "status") {
+                    const mission = control.mission.trim();
+                    const vision = control.vision.trim();
+                    const plans = control.execution.plans;
+                    const approvedPlans = plans.filter((plan) => plan.status === "approved").length;
+                    const draftPlans = plans.length - approvedPlans;
+                    const pending = policyStatus(workspaceRoot).pending;
+
+                    let state = null;
+                    let stateReadError: string | undefined;
+                    try {
+                        state = readStatePlane(workspaceRoot);
+                    } catch (error) {
+                        stateReadError = error instanceof Error ? error.message : String(error);
+                    }
+
+                    const executionStatuses = state
+                        ? Object.values(state.execution.taskStatus)
+                        : [];
+
+                    const pendingTasks = executionStatuses.filter((status) => status === "pending").length;
+                    const inProgressTasks = executionStatuses.filter((status) => status === "in-progress").length;
+                    const completedTasks = executionStatuses.filter((status) => status === "complete").length;
+                    const failedTasks = executionStatuses.filter((status) => status === "failed").length;
+
+                    stream.markdown([
+                        "Choir status",
+                        "",
+                        "Control plane:",
+                        `- mission: ${mission.length > 0 ? mission : "(empty)"}`,
+                        `- vision: ${vision.length > 0 ? vision : "(empty)"}`,
+                        `- goals: ${control.intent.goals.length}`,
+                        `- constraints: ${control.intent.constraints.length}`,
+                        `- non-goals: ${control.intent["non-goals"].length}`,
+                        `- policyRules: ${control.policy.rules.length}`,
+                        `- plans: ${plans.length} (approved=${approvedPlans}, draft=${draftPlans})`,
+                        "",
+                        "Approvals:",
+                        `- pendingPolicyApprovals: ${pending.length}`,
+                        "",
+                        "State plane:",
+                        stateReadError
+                            ? `- state: invalid (${stateReadError})`
+                            : state
+                                ? "- state: present"
+                                : "- state: missing",
+                        state ? `- stateHash: ${state.stateHash}` : "- stateHash: n/a",
+                        state ? `- violations: ${state.violations.length}` : "- violations: n/a",
+                        state ? `- executionActivePlan: ${state.execution.activePlanId ?? "none"}` : "- executionActivePlan: n/a",
+                        state
+                            ? `- taskStatus: pending=${pendingTasks}, in-progress=${inProgressTasks}, complete=${completedTasks}, failed=${failedTasks}`
+                            : "- taskStatus: n/a",
+                    ].join("\n"));
+                    return;
+                }
+
                 if (parsed.ast.type === "policy-status") {
                     const status = policyStatus(workspaceRoot);
                     if (status.pending.length === 0) {
@@ -1640,7 +1715,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                const compiled = compileDSLAndWrite(raw, control, controlPath, {
+                const compiled = compileDSLAndWrite(normalizedDSLInput, control, controlPath, {
                     workspaceRoot,
                     actorId: "chat-user",
                 });

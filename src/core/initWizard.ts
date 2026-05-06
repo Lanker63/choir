@@ -297,23 +297,7 @@ export class InitWizard {
     }
 
     if (this.state.currentStep === "review") {
-      if (keyword === "continue") {
-        this.state.currentStep = "confirm";
-        return {
-          state: cloneState(this.state),
-          status: "active",
-        };
-      }
-
-      return {
-        state: cloneState(this.state),
-        status: "active",
-        message: "Type continue to move to confirmation, back to edit, or cancel.",
-      };
-    }
-
-    if (this.state.currentStep === "confirm") {
-      if (keyword === "yes") {
+      if (keyword === "yes" || keyword === "continue") {
         return {
           state: cloneState(this.state),
           status: "confirmed",
@@ -330,7 +314,37 @@ export class InitWizard {
       return {
         state: cloneState(this.state),
         status: "active",
-        message: "Type yes or no.",
+        message: "Type yes to apply, no to cancel, back to edit, or cancel.",
+      };
+    }
+
+    if (this.state.currentStep === "confirm") {
+      if (keyword === "yes") {
+        return {
+          state: cloneState(this.state),
+          status: "confirmed",
+        };
+      }
+
+      if (keyword === "back") {
+        this.state.currentStep = "review";
+        return {
+          state: cloneState(this.state),
+          status: "active",
+        };
+      }
+
+      if (keyword === "no") {
+        return {
+          state: cloneState(this.state),
+          status: "cancelled",
+        };
+      }
+
+      return {
+        state: cloneState(this.state),
+        status: "active",
+        message: "Type yes, no, back, or cancel.",
       };
     }
 
@@ -413,7 +427,7 @@ export function renderPrompt(state: WizardState): string {
     case "non-goals":
       return "Enter a non-goal (type done to continue):";
     case "review":
-      return "Review complete. Type continue to confirm, or back to edit.";
+      return "Review complete. Apply this configuration? (yes/no/back/cancel)";
     case "confirm":
       return "Apply this configuration? (yes/no)";
   }

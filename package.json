@@ -162,6 +162,8 @@
     "verify:quick": "npm run build:extension && CHOIR_VERIFY_MODE=quick node out/tests/verification/harness.js",
     "verify:property": "npm run build:extension && node out/tests/verification/propertyChaosHarness.js property",
     "verify:chaos": "npm run build:extension && node out/tests/verification/propertyChaosHarness.js chaos moderate",
+    "verify:contracts": "npm run build:extension && CHOIR_CONTRACT_MODE=quick node out/tests/verification/contracts.js",
+    "verify:contracts:full": "npm run build:extension && CHOIR_CONTRACT_MODE=full node out/tests/verification/contracts.js",
     "verify:property:full": "npm run build:extension && CHOIR_PROPERTY_ITERATIONS=200 node out/tests/verification/propertyChaosHarness.js property",
     "verify:chaos:full": "npm run build:extension && CHOIR_CHAOS_ITERATIONS=120 node out/tests/verification/propertyChaosHarness.js chaos extreme",
     "test:rules": "npm run build:extension && node out/tests/rules/harness.js",

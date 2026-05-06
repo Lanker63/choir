@@ -819,6 +819,62 @@ export class ChoirProductService {
       };
     }
 
+    if (parsed.ast.type === "status") {
+      const mission = control.mission.trim();
+      const vision = control.vision.trim();
+      const plans = control.execution.plans;
+      const approvedPlans = plans.filter((plan) => plan.status === "approved").length;
+      const draftPlans = plans.length - approvedPlans;
+      const pending = policyStatus(root).pending;
+
+      let state = null;
+      let stateReadError: string | undefined;
+      try {
+        state = readStatePlane(root);
+      } catch (error) {
+        stateReadError = error instanceof Error ? error.message : String(error);
+      }
+
+      const executionStatuses = state ? Object.values(state.execution.taskStatus) : [];
+      const pendingTasks = executionStatuses.filter((status) => status === "pending").length;
+      const inProgressTasks = executionStatuses.filter((status) => status === "in-progress").length;
+      const completedTasks = executionStatuses.filter((status) => status === "complete").length;
+      const failedTasks = executionStatuses.filter((status) => status === "failed").length;
+
+      const freshControl = readControlPlane() ?? control;
+      return {
+        message: [
+          "Choir status",
+          "",
+          "Control plane:",
+          `- mission: ${mission.length > 0 ? mission : "(empty)"}`,
+          `- vision: ${vision.length > 0 ? vision : "(empty)"}`,
+          `- goals: ${control.intent.goals.length}`,
+          `- constraints: ${control.intent.constraints.length}`,
+          `- non-goals: ${control.intent["non-goals"].length}`,
+          `- policyRules: ${control.policy.rules.length}`,
+          `- plans: ${plans.length} (approved=${approvedPlans}, draft=${draftPlans})`,
+          "",
+          "Approvals:",
+          `- pendingPolicyApprovals: ${pending.length}`,
+          "",
+          "State plane:",
+          stateReadError
+            ? `- state: invalid (${stateReadError})`
+            : state
+              ? "- state: present"
+              : "- state: missing",
+          state ? `- stateHash: ${state.stateHash}` : "- stateHash: n/a",
+          state ? `- violations: ${state.violations.length}` : "- violations: n/a",
+          state ? `- executionActivePlan: ${state.execution.activePlanId ?? "none"}` : "- executionActivePlan: n/a",
+          state
+            ? `- taskStatus: pending=${pendingTasks}, in-progress=${inProgressTasks}, complete=${completedTasks}, failed=${failedTasks}`
+            : "- taskStatus: n/a",
+        ].join("\n"),
+        trace: this.createTrace("status", dsl, controlPlaneToChoirConfig(freshControl)),
+      };
+    }
+
     if (parsed.ast.type === "policy-status") {
       const pending = policyStatus(root).pending;
       const freshControl = readControlPlane() ?? control;

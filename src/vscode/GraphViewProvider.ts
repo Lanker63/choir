@@ -274,6 +274,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       --ink: #123325;
       --muted: #4b6b60;
       --line: #bfd8cd;
+      --sidebar-width: 320px;
+      --splitter-width: 10px;
     }
     * { box-sizing: border-box; }
     body {
@@ -285,8 +287,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     .layout {
       height: 100vh;
       display: grid;
-      grid-template-columns: minmax(280px, 360px) 1fr;
-      gap: 12px;
+      grid-template-columns: minmax(240px, var(--sidebar-width)) var(--splitter-width) minmax(0, 1fr);
+      gap: 0;
       padding: 12px;
     }
     .panel {
@@ -358,6 +360,32 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       position: relative;
       min-width: 0;
       overflow: hidden;
+    }
+    .splitter {
+      position: relative;
+      cursor: col-resize;
+      touch-action: none;
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(191, 216, 205, 0.45), rgba(191, 216, 205, 0.2));
+      outline: none;
+      margin: 0 6px;
+    }
+    .splitter::before {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      width: 2px;
+      height: 48px;
+      border-radius: 999px;
+      background: #7ea99a;
+      box-shadow: 0 0 0 3px rgba(126, 169, 154, 0.12);
+    }
+    .splitter:hover,
+    .splitter:focus-visible,
+    .splitter.dragging {
+      background: linear-gradient(180deg, rgba(47, 157, 123, 0.25), rgba(47, 157, 123, 0.16));
     }
     #graphSvg {
       width: 100%;
@@ -442,6 +470,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       <section class="section inspector" id="inspector">Select a node to inspect metadata.</section>
     </aside>
 
+    <div id="splitter" class="splitter" role="separator" aria-orientation="vertical" aria-label="Resize panels" tabindex="0"></div>
+
     <main class="panel canvas">
       <svg id="graphSvg"></svg>
       <svg id="miniMap" class="minimap"></svg>
@@ -461,6 +491,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       zoomTransform: null,
     };
 
+    const layout = document.querySelector(".layout");
     const modeSelect = document.getElementById("modeSelect");
     const focusSelect = document.getElementById("focusSelect");
     const searchInput = document.getElementById("searchInput");
@@ -471,8 +502,74 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     const statusLine = document.getElementById("statusLine");
     const traceLine = document.getElementById("traceLine");
     const inspector = document.getElementById("inspector");
+    const splitter = document.getElementById("splitter");
     const graphSvg = document.getElementById("graphSvg");
     const miniMap = document.getElementById("miniMap");
+
+    const SIDEBAR_MIN = 240;
+    const RIGHT_MIN = 320;
+    const SPLITTER_WIDTH = 10;
+
+    let activePointerId;
+    let resizeFrame = 0;
+
+    function parsePixelValue(value, fallback) {
+      const parsed = Number.parseFloat(String(value || "").trim());
+      return Number.isFinite(parsed) ? parsed : fallback;
+    }
+
+    function currentSidebarWidth() {
+      const raw = getComputedStyle(layout).getPropertyValue("--sidebar-width");
+      return parsePixelValue(raw, 320);
+    }
+
+    function clampSidebarWidth(width) {
+      const max = Math.max(SIDEBAR_MIN, layout.clientWidth - RIGHT_MIN - SPLITTER_WIDTH);
+      return Math.max(SIDEBAR_MIN, Math.min(width, max));
+    }
+
+    function persistSidebarWidth(width) {
+      const existing = vscode.getState() || {};
+      vscode.setState({
+        ...existing,
+        sidebarWidth: width,
+      });
+    }
+
+    function applySidebarWidth(width, persist) {
+      const clamped = clampSidebarWidth(width);
+      layout.style.setProperty("--sidebar-width", String(clamped) + "px");
+      splitter.setAttribute("aria-valuenow", String(Math.round(clamped)));
+      if (persist) {
+        persistSidebarWidth(clamped);
+      }
+      if (state.snapshot) {
+        if (resizeFrame) {
+          cancelAnimationFrame(resizeFrame);
+        }
+        resizeFrame = requestAnimationFrame(function() {
+          resizeFrame = 0;
+          renderGraph();
+        });
+      }
+    }
+
+    function beginResize(pointerId) {
+      activePointerId = pointerId;
+      splitter.classList.add("dragging");
+      document.body.style.userSelect = "none";
+    }
+
+    function updateResize(clientX, persist) {
+      const layoutRect = layout.getBoundingClientRect();
+      applySidebarWidth(clientX - layoutRect.left, persist);
+    }
+
+    function endResize() {
+      activePointerId = undefined;
+      splitter.classList.remove("dragging");
+      document.body.style.userSelect = "";
+    }
 
     function sortedUnique(values) {
       return Array.from(new Set(values)).filter(function(value) {
@@ -979,6 +1076,55 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       modeSelect.value = "dependents";
       sendMode("dependents");
     });
+
+    splitter.addEventListener("pointerdown", function(event) {
+      beginResize(event.pointerId);
+      splitter.setPointerCapture(event.pointerId);
+      updateResize(event.clientX, false);
+    });
+
+    splitter.addEventListener("pointermove", function(event) {
+      if (activePointerId !== event.pointerId) {
+        return;
+      }
+
+      updateResize(event.clientX, false);
+    });
+
+    splitter.addEventListener("pointerup", function(event) {
+      if (activePointerId !== event.pointerId) {
+        return;
+      }
+
+      updateResize(event.clientX, true);
+      endResize();
+    });
+
+    splitter.addEventListener("pointercancel", function(event) {
+      if (activePointerId !== event.pointerId) {
+        return;
+      }
+
+      persistSidebarWidth(currentSidebarWidth());
+      endResize();
+    });
+
+    splitter.addEventListener("keydown", function(event) {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") {
+        return;
+      }
+
+      event.preventDefault();
+      const delta = event.key === "ArrowLeft" ? -16 : 16;
+      applySidebarWidth(currentSidebarWidth() + delta, true);
+    });
+
+    window.addEventListener("resize", function() {
+      applySidebarWidth(currentSidebarWidth(), false);
+    });
+
+    const savedState = vscode.getState() || {};
+    applySidebarWidth(parsePixelValue(savedState.sidebarWidth, 320), false);
 
     window.addEventListener("message", function(event) {
       const message = event.data;

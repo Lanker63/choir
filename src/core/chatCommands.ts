@@ -22,9 +22,45 @@ export type PanelChatCommand = {
 
 export type VerifyChatCommand = {
   type: "verify";
-  mode: "full" | "quick" | "property" | "chaos";
+  mode: "full" | "quick" | "property" | "chaos" | "contracts";
   chaosMode?: "none" | "light" | "moderate" | "extreme";
 };
+
+export function normalizeChatDSLInput(input: string): string {
+  const trimmed = input.trim();
+  if (trimmed.length === 0) {
+    return trimmed;
+  }
+
+  const hasParticipantPrefix = /^@choir\s+/i.test(trimmed);
+  const withoutParticipantPrefix = trimmed.replace(/^@choir\s+/i, "");
+
+  const showAlias = withoutParticipantPrefix.match(/^(?:choir\s+)?show(?:\s+status)?\s*$/i);
+  if (showAlias) {
+    return "choir status";
+  }
+
+  const setAlias = withoutParticipantPrefix.match(/^(?:choir\s+)?set\s+(mission|vision|goal|constraint|non-goal|non\s+goal)\b(.*)$/i);
+  if (setAlias) {
+    const defineType = setAlias[1].toLowerCase().replace(/\s+/g, "-");
+    const tail = setAlias[2] ?? "";
+    return `choir define ${defineType}${tail}`;
+  }
+
+  if (/^choir\s+/i.test(withoutParticipantPrefix)) {
+    return withoutParticipantPrefix;
+  }
+
+  if (/^(define|analyze|plan|refactor|simulate|preview|execute|rollback|status|export|approve|reject|policy|import|library|ci|audit|macro|graph)\b/i.test(withoutParticipantPrefix)) {
+    return `choir ${withoutParticipantPrefix}`;
+  }
+
+  if (hasParticipantPrefix) {
+    return `choir ${withoutParticipantPrefix}`;
+  }
+
+  return withoutParticipantPrefix;
+}
 
 export function parseAbstractionChatCommand(input: string): AbstractionChatCommand | null {
   const normalized = input.trim();
@@ -123,6 +159,13 @@ export function parseVerifyChatCommand(input: string): VerifyChatCommand | null 
     return {
       type: "verify",
       mode: "property",
+    };
+  }
+
+  if (/^(?:@choir\s+)?verify\s+--contracts\s*$/i.test(normalized)) {
+    return {
+      type: "verify",
+      mode: "contracts",
     };
   }
 

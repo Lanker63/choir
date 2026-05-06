@@ -154,7 +154,7 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
-import { parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
+import { normalizeChatDSLInput, parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
 import {
   getAbstraction,
   listAbstractions,
@@ -1727,9 +1727,6 @@ const pass2: TestPass = {
         wizard.next("done");
         assert.strictEqual(wizard.state.currentStep, "review");
 
-        wizard.next("continue");
-        assert.strictEqual(wizard.state.currentStep, "confirm");
-
         const commands = buildDSL(wizard.state.data);
         assert.deepStrictEqual(commands, [
           'choir define mission "Deterministic delivery platform"',
@@ -1823,6 +1820,11 @@ const pass2: TestPass = {
           mode: "property",
         });
 
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --contracts"), {
+          type: "verify",
+          mode: "contracts",
+        });
+
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos"), {
           type: "verify",
           mode: "chaos",
@@ -1835,6 +1837,49 @@ const pass2: TestPass = {
         });
 
         assert.strictEqual(parseVerifyChatCommand("choir verify"), null);
+      },
+    },
+    {
+      id: "2.30d",
+      name: "chat DSL normalization maps set shorthand to canonical define commands",
+      run: async () => {
+        assert.strictEqual(
+          normalizeChatDSLInput('@choir set goal "Refactor API layer"'),
+          'choir define goal "Refactor API layer"'
+        );
+
+        assert.strictEqual(
+          normalizeChatDSLInput('set non goal "legacy API support"'),
+          'choir define non-goal "legacy API support"'
+        );
+
+        assert.strictEqual(
+          normalizeChatDSLInput('@choir define goal "Deterministic planning"'),
+          'choir define goal "Deterministic planning"'
+        );
+
+        assert.strictEqual(
+          normalizeChatDSLInput("@choir show"),
+          "choir status"
+        );
+
+        assert.strictEqual(
+          normalizeChatDSLInput("@choir show status"),
+          "choir status"
+        );
+
+        assert.strictEqual(
+          normalizeChatDSLInput("@choir rollback"),
+          "choir rollback"
+        );
+
+        const normalizedAst = parseCommand(normalizeChatDSLInput('set goal "Refactor API layer"')).ast;
+        assert.strictEqual(normalizedAst.type, "define");
+        assert.strictEqual(normalizedAst.defineType, "goal");
+        assert.strictEqual(normalizedAst.value, "Refactor API layer");
+
+        const showAst = parseCommand(normalizeChatDSLInput("@choir show")).ast;
+        assert.strictEqual(showAst.type, "status");
       },
     },
     {

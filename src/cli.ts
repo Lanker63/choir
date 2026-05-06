@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { formatCIRunResult, runCI } from "./core/ci.js";
+import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./core/propertyChaosHarness.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
@@ -16,6 +17,7 @@ function usage(): string {
     "Usage:",
     "  choir ci run",
     "  choir verify [--quick]",
+    "  choir verify --contracts",
     "  choir verify --property [--seed <n>]",
     "  choir verify --chaos [none|light|moderate|extreme] [--seed <n>]",
   ].join("\n");
@@ -84,6 +86,17 @@ async function main(): Promise<void> {
         });
         console.log(formatChaosTestReport(report));
         process.exitCode = report.failures === 0 ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--contracts") {
+        const report = await runContractVerification({
+          workspaceRoot: process.cwd(),
+          mode: "quick",
+          throwOnFailure: false,
+        });
+        console.log(formatContractVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
         return;
       }
 

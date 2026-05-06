@@ -30,6 +30,9 @@ jobs:
       - name: Run verification harness
         run: npm run verify
 
+      - name: Run contract verification checklist
+        run: npm run verify:contracts
+
       - name: Property-based tests
         run: npm run verify:property
 
@@ -67,6 +70,9 @@ jobs:
 
       - name: Verification harness (full)
         run: npm run verify
+
+      - name: Contract verification checklist (full)
+        run: npm run verify:contracts:full
 
       - name: Property-based tests (full)
         run: npm run verify:property:full
