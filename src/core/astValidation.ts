@@ -137,6 +137,11 @@ function actionNodeTypes(): ASTNode["type"][] {
     "define",
     "analyze",
     "plan",
+    "refactor-rename",
+    "refactor-move",
+    "refactor-extract",
+    "refactor-inline",
+    "simulate",
     "plan-approve",
     "preview",
     "execute",
@@ -158,6 +163,7 @@ function actionNodeTypes(): ASTNode["type"][] {
     "macro-show",
     "macro-run",
     "abstraction-run",
+    "graph",
   ];
 }
 
@@ -372,6 +378,22 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
     case "refactor-inline": {
       if (!action.symbol || typeof action.symbol !== "string") {
         issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
+      }
+
+      return;
+    }
+
+    case "simulate": {
+      if (action.planRef && (!action.planRef.identifier || typeof action.planRef.identifier !== "string")) {
+        issues.push(issue("simulate-plan-ref-invalid", "error", "Invalid simulate plan reference identifier", `${path}.planRef.identifier`));
+      }
+
+      if (action.units !== undefined) {
+        if (!Array.isArray(action.units) || action.units.length === 0) {
+          issues.push(issue("simulate-units-invalid", "error", "Simulate units must be a non-empty array when provided", `${path}.units`));
+        } else if (action.units.some((unit) => typeof unit !== "string" || unit.trim().length === 0)) {
+          issues.push(issue("simulate-units-invalid", "error", "Simulate units entries must be non-empty strings", `${path}.units`));
+        }
       }
 
       return;

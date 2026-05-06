@@ -157,7 +157,13 @@ export type ExecuteGlobalPlanOptions = {
   repos: Repo[];
   policies: CompiledPolicy[];
   validateState?: (state: SystemState, repoId: string) => boolean;
-  executeTask?: (task: GlobalPlanTask, repoState: SystemState, repoId: string, allStates: Record<string, SystemState>) => Promise<SystemState>;
+  executeTask?: (
+    task: GlobalPlanTask,
+    repoState: SystemState,
+    repoId: string,
+    allStates: Record<string, SystemState>,
+    mode: "simulation" | "execution"
+  ) => Promise<SystemState>;
 };
 
 export type GlobalExecutionResult = {
@@ -166,6 +172,69 @@ export type GlobalExecutionResult = {
   finalStates: Record<string, SystemState>;
   audit: GlobalAudit;
   trace: GlobalTrace;
+};
+
+export type GlobalState = Record<string, SystemState>;
+
+export type SimulationContext = {
+  baseState: GlobalState;
+  simulatedState: GlobalState;
+  plan: GlobalPlan;
+  mode: "simulation";
+};
+
+export type ChangeSummary = {
+  unitId: string;
+  filesChanged: string[];
+  operations: string[];
+};
+
+export type CostModel = {
+  changeCost: number;
+  riskScore: number;
+};
+
+export type SimulationTrace = {
+  stepsExecuted: string[];
+  unitsAffected: string[];
+  replayable: boolean;
+};
+
+export type SimulationResult = {
+  finalState: GlobalState;
+  changes: ChangeSummary[];
+  violations: string[];
+  policyDecisions: PolicyResult[];
+  success: boolean;
+  trace: SimulationTrace;
+  context: SimulationContext;
+};
+
+export type ComparisonResult = {
+  bestStrategy: string;
+  metrics: {
+    risk: number;
+    changes: number;
+    violations: number;
+  };
+};
+
+export type GlobalConsistencyResult = {
+  valid: boolean;
+  errors: string[];
+};
+
+type InternalRunResult = {
+  success: boolean;
+  rolledBack: boolean;
+  finalStates: GlobalState;
+  baseStates: GlobalState;
+  policyResult: PolicyResult;
+  orderedTaskIds: string[];
+  plan: GlobalPlan;
+  violations: string[];
+  stepsExecuted: string[];
+  unitsAffected: string[];
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -200,8 +269,373 @@ function cloneUnknown<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }
 
+export function cloneState(state: GlobalState): GlobalState {
+  return cloneUnknown(state);
+}
+
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function stateForRepos(repos: Repo[]): GlobalState {
+  return Object.fromEntries(
+    [...repos]
+      .sort((left, right) => left.id.localeCompare(right.id))
+      .map((repo) => [repo.id, cloneUnknown(repo.state)] as const)
+  ) as GlobalState;
+}
+
+function statesEqual(left: GlobalState, right: GlobalState): boolean {
+  return stableStringify(left) === stableStringify(right);
+}
+
+function collectUndefinedPaths(value: unknown, prefix: string): string[] {
+  if (typeof value === "undefined") {
+    return [prefix.length > 0 ? prefix : "<root>"];
+  }
+
+  if (Array.isArray(value)) {
+    return value.flatMap((entry, index) => collectUndefinedPaths(entry, `${prefix}[${index}]`));
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  return Object.keys(value)
+    .sort((left, right) => left.localeCompare(right))
+    .flatMap((key) => collectUndefinedPaths(value[key], prefix.length > 0 ? `${prefix}.${key}` : key));
+}
+
+export function validateGlobalConsistency(simulatedState: GlobalState, repos?: Repo[]): GlobalConsistencyResult {
+  const errors: string[] = [];
+  const repoIds = Object.keys(simulatedState).sort((left, right) => left.localeCompare(right));
+
+  for (const repoId of repoIds) {
+    const state = simulatedState[repoId];
+    if (!isRecord(state)) {
+      errors.push(`State for ${repoId} must be an object`);
+      continue;
+    }
+
+    const undefinedPaths = collectUndefinedPaths(state, "");
+    for (const entry of undefinedPaths) {
+      errors.push(`State for ${repoId} contains undefined value at ${entry}`);
+    }
+  }
+
+  if (repos) {
+    const expectedRepoIds = repos.map((repo) => repo.id).sort((left, right) => left.localeCompare(right));
+    if (stableStringify(expectedRepoIds) !== stableStringify(repoIds)) {
+      errors.push("Simulated state repo set diverged from orchestration context");
+    }
+  }
+
+  return {
+    valid: errors.length === 0,
+    errors: sortedUnique(errors),
+  };
+}
+
+function summarizeChanges(baseState: GlobalState, finalState: GlobalState, plan: GlobalPlan): ChangeSummary[] {
+  const byRepoOperations = new Map<string, string[]>();
+
+  for (const task of [...plan.tasks].sort((left, right) => left.id.localeCompare(right.id))) {
+    const operations = byRepoOperations.get(task.repoId) ?? [];
+    operations.push(task.action);
+    byRepoOperations.set(task.repoId, operations);
+  }
+
+  return [...Object.keys(finalState)]
+    .sort((left, right) => left.localeCompare(right))
+    .map((repoId) => {
+      const changed = stableStringify(baseState[repoId] ?? {}) !== stableStringify(finalState[repoId] ?? {});
+      return {
+        unitId: repoId,
+        filesChanged: changed ? [".choir/state.json"] : [],
+        operations: sortedUnique(byRepoOperations.get(repoId) ?? []),
+      } satisfies ChangeSummary;
+    })
+    .filter((entry) => entry.filesChanged.length > 0 || entry.operations.length > 0);
+}
+
+function filterPlanForUnits(plan: GlobalPlan, units: string[]): GlobalPlan {
+  const selectedUnits = sortedUnique(units);
+  if (selectedUnits.length === 0) {
+    return cloneUnknown(plan);
+  }
+
+  const taskById = new Map(plan.tasks.map((task) => [task.id, task] as const));
+  const required = new Set(
+    plan.tasks
+      .filter((task) => selectedUnits.includes(task.repoId))
+      .map((task) => task.id)
+  );
+
+  const queue = [...required].sort((left, right) => left.localeCompare(right));
+  while (queue.length > 0) {
+    const taskId = queue.shift() as string;
+    const task = taskById.get(taskId);
+    if (!task) {
+      continue;
+    }
+
+    for (const dependencyId of [...task.dependsOn].sort((left, right) => left.localeCompare(right))) {
+      if (required.has(dependencyId)) {
+        continue;
+      }
+
+      required.add(dependencyId);
+      queue.push(dependencyId);
+      queue.sort((left, right) => left.localeCompare(right));
+    }
+  }
+
+  const tasks = plan.tasks
+    .filter((task) => required.has(task.id))
+    .map((task) => ({
+      ...task,
+      dependsOn: task.dependsOn.filter((dependencyId) => required.has(dependencyId)).sort((left, right) => left.localeCompare(right)),
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const id = hashId("global-plan", {
+    base: plan.id,
+    units: selectedUnits,
+    tasks: tasks.map((task) => task.id),
+  });
+
+  return {
+    id,
+    tasks,
+  };
+}
+
+async function runGlobalPlanInternal(
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions,
+  mode: "simulation" | "execution",
+  units?: string[]
+): Promise<InternalRunResult> {
+  const validation = validateGlobalPlan(plan);
+  if (!validation.valid) {
+    const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
+    const baseStates = stateForRepos(normalizedRepos);
+    return {
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
+      baseStates,
+      policyResult: {
+        allowed: false,
+        requiresApproval: false,
+        violations: validation.errors,
+        policyDecisions: ["deny:plan-validation"],
+        appliedPolicyIds: [],
+      },
+      orderedTaskIds: [],
+      plan,
+      violations: validation.errors,
+      stepsExecuted: [],
+      unitsAffected: [],
+    };
+  }
+
+  const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
+  const effectivePlan = units && units.length > 0 ? filterPlanForUnits(plan, units) : cloneUnknown(plan);
+  const policyResult = evaluateGlobalPolicies(effectivePlan, flattenPolicies(options.policies), normalizedRepos);
+  const ordered = orderPlan(effectivePlan);
+  const batches = batchTasks(effectivePlan);
+
+  const states = stateForRepos(normalizedRepos);
+  const snapshot = cloneState(states);
+  const validateState = options.validateState ?? (() => true);
+  const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
+  const stepsExecuted: string[] = [];
+  const unitsAffected = new Set<string>();
+
+  if (!policyResult.allowed) {
+    return {
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(snapshot),
+      baseStates: snapshot,
+      policyResult,
+      orderedTaskIds: ordered.orderedTaskIds,
+      plan: effectivePlan,
+      violations: policyResult.violations,
+      stepsExecuted,
+      unitsAffected: [],
+    };
+  }
+
+  try {
+    for (const batch of batches) {
+      const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
+      for (const task of sortedTasks) {
+        const currentState = cloneUnknown(states[task.repoId] ?? {});
+        const nextState = await executeTask(task, currentState, task.repoId, cloneState(states), mode);
+        states[task.repoId] = cloneUnknown(nextState);
+        stepsExecuted.push(task.id);
+        unitsAffected.add(task.repoId);
+
+        if (!validateState(states[task.repoId], task.repoId)) {
+          throw new Error(`State validation failed after task ${task.id}`);
+        }
+      }
+    }
+
+    const consistency = validateGlobalConsistency(states, normalizedRepos);
+    if (!consistency.valid) {
+      return {
+        success: false,
+        rolledBack: true,
+        finalStates: cloneState(snapshot),
+        baseStates: snapshot,
+        policyResult,
+        orderedTaskIds: ordered.orderedTaskIds,
+        plan: effectivePlan,
+        violations: consistency.errors,
+        stepsExecuted,
+        unitsAffected: sortedUnique([...unitsAffected]),
+      };
+    }
+
+    return {
+      success: true,
+      rolledBack: false,
+      finalStates: cloneState(states),
+      baseStates: snapshot,
+      policyResult,
+      orderedTaskIds: ordered.orderedTaskIds,
+      plan: effectivePlan,
+      violations: [],
+      stepsExecuted,
+      unitsAffected: sortedUnique([...unitsAffected]),
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      rolledBack: true,
+      finalStates: cloneState(snapshot),
+      baseStates: snapshot,
+      policyResult,
+      orderedTaskIds: ordered.orderedTaskIds,
+      plan: effectivePlan,
+      violations: sortedUnique([...policyResult.violations, reason]),
+      stepsExecuted,
+      unitsAffected: sortedUnique([...unitsAffected]),
+    };
+  }
+}
+
+export async function simulatePlan(
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions
+): Promise<SimulationResult> {
+  const internal = await runGlobalPlanInternal(plan, options, "simulation");
+  const finalState = cloneState(internal.finalStates);
+  const baseState = cloneState(internal.baseStates);
+
+  return {
+    finalState,
+    changes: summarizeChanges(baseState, finalState, internal.plan),
+    violations: sortedUnique([...internal.violations, ...internal.policyResult.violations]),
+    policyDecisions: [cloneUnknown(internal.policyResult)],
+    success: internal.success,
+    trace: {
+      stepsExecuted: [...internal.stepsExecuted],
+      unitsAffected: [...internal.unitsAffected],
+      replayable: true,
+    },
+    context: {
+      baseState,
+      simulatedState: cloneState(finalState),
+      plan: cloneUnknown(internal.plan),
+      mode: "simulation",
+    },
+  };
+}
+
+export async function simulateUnits(
+  units: string[],
+  plan: GlobalPlan,
+  options: ExecuteGlobalPlanOptions
+): Promise<SimulationResult> {
+  const internal = await runGlobalPlanInternal(plan, options, "simulation", units);
+  const finalState = cloneState(internal.finalStates);
+  const baseState = cloneState(internal.baseStates);
+
+  return {
+    finalState,
+    changes: summarizeChanges(baseState, finalState, internal.plan),
+    violations: sortedUnique([...internal.violations, ...internal.policyResult.violations]),
+    policyDecisions: [cloneUnknown(internal.policyResult)],
+    success: internal.success,
+    trace: {
+      stepsExecuted: [...internal.stepsExecuted],
+      unitsAffected: [...internal.unitsAffected],
+      replayable: true,
+    },
+    context: {
+      baseState,
+      simulatedState: cloneState(finalState),
+      plan: cloneUnknown(internal.plan),
+      mode: "simulation",
+    },
+  };
+}
+
+function strategyMetricsFromSimulation(
+  simulation: SimulationResult,
+  costModel: CostModel
+): { risk: number; changes: number; violations: number } {
+  const changes = simulation.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
+  const violations = simulation.violations.length;
+  const risk = (changes * costModel.changeCost) + (violations * costModel.riskScore) + (simulation.success ? 0 : costModel.riskScore);
+  return {
+    risk,
+    changes,
+    violations,
+  };
+}
+
+export async function compareStrategies(
+  strategies: GlobalPlan[],
+  options: ExecuteGlobalPlanOptions & { costModel?: CostModel }
+): Promise<ComparisonResult> {
+  const orderedPlans = [...strategies].sort((left, right) => left.id.localeCompare(right.id));
+  const costModel = options.costModel ?? {
+    changeCost: 1,
+    riskScore: 5,
+  };
+
+  if (orderedPlans.length === 0) {
+    throw new Error("No strategies provided for comparison");
+  }
+
+  const evaluated: Array<{ id: string; metrics: { risk: number; changes: number; violations: number } }> = [];
+
+  for (const strategy of orderedPlans) {
+    const simulation = await simulatePlan(strategy, options);
+    evaluated.push({
+      id: strategy.id,
+      metrics: strategyMetricsFromSimulation(simulation, costModel),
+    });
+  }
+
+  const best = [...evaluated].sort((left, right) =>
+    left.metrics.violations - right.metrics.violations
+    || left.metrics.risk - right.metrics.risk
+    || left.metrics.changes - right.metrics.changes
+    || left.id.localeCompare(right.id)
+  )[0] as { id: string; metrics: { risk: number; changes: number; violations: number } };
+
+  return {
+    bestStrategy: best.id,
+    metrics: best.metrics,
+  };
 }
 
 function normalizeTaskId(value: string): string {
@@ -985,66 +1419,45 @@ export async function executeGlobalPlan(
   plan: GlobalPlan,
   options: ExecuteGlobalPlanOptions
 ): Promise<GlobalExecutionResult> {
-  const validation = validateGlobalPlan(plan);
-  if (!validation.valid) {
-    throw new Error(`Global plan invalid: ${validation.errors.join("; ")}`);
-  }
-
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
-  const policyResult = evaluateGlobalPolicies(plan, flattenPolicies(options.policies), normalizedRepos);
-  if (!policyResult.allowed) {
-    blockGlobalExecution(policyResult);
+  const simulation = await simulatePlan(plan, options);
+  const simulationPolicy = simulation.policyDecisions[0];
+
+  if (simulationPolicy && !simulationPolicy.allowed) {
+    blockGlobalExecution(simulationPolicy);
   }
 
-  const ordered = orderPlan(plan);
-  const batches = batchTasks(plan);
-  const states = Object.fromEntries(normalizedRepos.map((repo) => [repo.id, cloneUnknown(repo.state)])) as Record<string, SystemState>;
-  const snapshot = cloneUnknown(states);
-  const validateState = options.validateState ?? (() => true);
-  const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
-
-  try {
-    for (const batch of batches) {
-      const sortedTasks = [...batch.tasks].sort((left, right) => left.id.localeCompare(right.id));
-      const results = await Promise.all(sortedTasks.map(async (task) => {
-        const currentState = cloneUnknown(states[task.repoId] ?? {});
-        const nextState = await executeTask(task, currentState, task.repoId, cloneUnknown(states));
-        return {
-          task,
-          nextState,
-        };
-      }));
-
-      for (const result of results.sort((left, right) => left.task.id.localeCompare(right.task.id))) {
-        states[result.task.repoId] = cloneUnknown(result.nextState);
-        if (!validateState(states[result.task.repoId], result.task.repoId)) {
-          throw new Error(`State validation failed after task ${result.task.id}`);
-        }
-      }
-    }
-
-    const convergence = normalizedRepos.every((repo) => validateState(states[repo.id], repo.id));
-    const audit: GlobalAudit = {
-      planId: plan.id,
-      reposInvolved: normalizedRepos.map((repo) => repo.id),
-      policiesApplied: policyResult.appliedPolicyIds,
-      violations: policyResult.violations,
-    };
-
+  if (!simulation.success) {
+    const baseStates = stateForRepos(normalizedRepos);
     return {
-      success: true,
-      rolledBack: false,
-      finalStates: states,
-      audit,
+      success: false,
+      rolledBack: true,
+      finalStates: rollbackAllRepos(baseStates),
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: simulationPolicy?.appliedPolicyIds ?? [],
+        violations: sortedUnique([
+          ...simulation.violations,
+          "Execution blocked: simulation gate failed",
+        ]),
+      },
       trace: {
         plan,
-        executionOrder: ordered.orderedTaskIds,
-        policyDecisions: policyResult.policyDecisions,
-        convergence,
+        executionOrder: simulation.trace.stepsExecuted,
+        policyDecisions: simulationPolicy?.policyDecisions ?? [],
+        convergence: false,
       },
     };
-  } catch (error) {
-    const rolledBackStates = rollbackAllRepos(snapshot);
+  }
+
+  const execution = await runGlobalPlanInternal(plan, options, "execution");
+  const expectedState = simulation.finalState;
+  const actualState = execution.finalStates;
+  const equivalent = statesEqual(expectedState, actualState);
+
+  if (!equivalent) {
+    const rolledBackStates = rollbackAllRepos(execution.baseStates);
     return {
       success: false,
       rolledBack: true,
@@ -1052,15 +1465,36 @@ export async function executeGlobalPlan(
       audit: {
         planId: plan.id,
         reposInvolved: normalizedRepos.map((repo) => repo.id),
-        policiesApplied: policyResult.appliedPolicyIds,
-        violations: [...policyResult.violations, error instanceof Error ? error.message : String(error)],
+        policiesApplied: execution.policyResult.appliedPolicyIds,
+        violations: sortedUnique([
+          ...execution.policyResult.violations,
+          "Simulation and execution diverged",
+        ]),
       },
       trace: {
         plan,
-        executionOrder: ordered.orderedTaskIds,
-        policyDecisions: policyResult.policyDecisions,
+        executionOrder: execution.orderedTaskIds,
+        policyDecisions: execution.policyResult.policyDecisions,
         convergence: false,
       },
     };
   }
+
+  return {
+    success: execution.success,
+    rolledBack: execution.rolledBack,
+    finalStates: cloneState(execution.finalStates),
+    audit: {
+      planId: plan.id,
+      reposInvolved: normalizedRepos.map((repo) => repo.id),
+      policiesApplied: execution.policyResult.appliedPolicyIds,
+      violations: sortedUnique([...execution.policyResult.violations, ...execution.violations]),
+    },
+    trace: {
+      plan: cloneUnknown(execution.plan),
+      executionOrder: execution.orderedTaskIds,
+      policyDecisions: execution.policyResult.policyDecisions,
+      convergence: execution.success,
+    },
+  };
 }

@@ -206,6 +206,7 @@ import {
   batchTasks as batchGlobalTasks,
   buildGlobalContext,
   buildGlobalDependencyGraph,
+  compareStrategies,
   createGlobalPlanningCache,
   detectPolicyDrift,
   evaluateGlobalPolicies,
@@ -214,6 +215,8 @@ import {
   OrgPolicy,
   propagatePolicies,
   Repo,
+  simulatePlan,
+  simulateUnits,
   synthesizeGlobalPlan,
   validateGlobalPlan,
 } from "../../core/globalOrchestration.js";
@@ -650,6 +653,26 @@ const pass2: TestPass = {
           symbol: "queryResult",
         });
 
+        const simulate = parseCommand("choir simulate");
+        assert.deepStrictEqual(simulate.ast, {
+          type: "simulate",
+        });
+
+        const simulatePlanRef = parseCommand("choir simulate plan plan-alpha");
+        assert.deepStrictEqual(simulatePlanRef.ast, {
+          type: "simulate",
+          planRef: {
+            type: "plan-ref",
+            identifier: "plan-alpha",
+          },
+        });
+
+        const simulateUnitsAst = parseCommand("choir simulate units packages.core,apps.web");
+        assert.deepStrictEqual(simulateUnitsAst.ast, {
+          type: "simulate",
+          units: ["packages.core", "apps.web"],
+        });
+
         assert.strictEqual(routeAST(rename.ast), "conductor");
       },
     },
@@ -663,6 +686,7 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir plan for unquoted"), /Expected quoted string/);
         assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected optional plan reference/);
         assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
+        assert.throws(() => parseCommand("choir simulate units"), /Expected identifier/);
       },
     },
     {
@@ -1491,6 +1515,7 @@ const pass2: TestPass = {
           "analyze",
           "plan",
           "refactor",
+          "simulate",
           "preview",
           "execute",
           "status",
@@ -1514,6 +1539,9 @@ const pass2: TestPass = {
 
         const planTail = getDeterministicCompletions("choir plan ").map((item) => item.label);
         assert.deepStrictEqual(planTail, ["for", "then"]);
+
+        const simulateTail = getDeterministicCompletions("choir simulate ").map((item) => item.label);
+        assert.deepStrictEqual(simulateTail, ["plan", "units", "then"]);
 
         const policyTail = getDeterministicCompletions("choir policy ").map((item) => item.label);
         assert.deepStrictEqual(policyTail, ["status"]);
@@ -4858,6 +4886,154 @@ const pass6: TestPass = {
         const changedPlan = synthesizeGlobalPlan(changedContext, { cache });
 
         assert.notStrictEqual(changedPlan.id, planA.id);
+      },
+    },
+    {
+      id: "6.10a",
+      name: "global simulation is deterministic and does not mutate repo input state",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { meta: { value: "a0" } },
+          },
+          {
+            id: "repo-b",
+            dependencies: ["repo-a"],
+            state: { meta: { value: "b0" } },
+          },
+        ];
+
+        const plan = {
+          id: "sim-plan-1",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=a1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.value=b1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const before = JSON.parse(JSON.stringify(repos));
+        const first = await simulatePlan(plan, { repos, policies: [] });
+        const second = await simulatePlan(plan, { repos, policies: [] });
+
+        assert.strictEqual(first.success, true);
+        assert.deepStrictEqual(first.finalState, second.finalState);
+        assert.deepStrictEqual(first.trace.stepsExecuted, second.trace.stepsExecuted);
+        assert.deepStrictEqual(repos, before);
+      },
+    },
+    {
+      id: "6.10b",
+      name: "strategy comparison ranks deterministic outcomes by real simulated metrics",
+      run: async () => {
+        const repos: Repo[] = [
+          {
+            id: "repo-a",
+            dependencies: [],
+            state: { meta: { value: "a0" } },
+          },
+        ];
+
+        const safePlan = {
+          id: "strategy-safe",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=a1", dependsOn: [] }],
+        };
+
+        const riskyPlan = {
+          id: "strategy-risky",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "danger:mutate", dependsOn: [] }],
+        };
+
+        const result = await compareStrategies([riskyPlan, safePlan], {
+          repos,
+          policies: [{
+            id: "org-deny-danger",
+            source: "org",
+            rules: [{
+              id: "deny-danger",
+              kind: "deny-action-prefix",
+              effect: "deny",
+              actionPrefix: "danger:",
+            }],
+          }],
+        });
+
+        assert.strictEqual(result.bestStrategy, "strategy-safe");
+        assert.strictEqual(result.metrics.violations, 0);
+      },
+    },
+    {
+      id: "6.10c",
+      name: "partial simulation includes selected units and required dependencies only",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: {} },
+          { id: "repo-b", dependencies: ["repo-a"], state: {} },
+          { id: "repo-c", dependencies: [], state: {} },
+        ];
+
+        const plan = {
+          id: "sim-partial",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+            { id: "repo-c:t1", repoId: "repo-c", action: "set:meta.c=1", dependsOn: [] },
+          ],
+        };
+
+        const result = await simulateUnits(["repo-b"], plan, { repos, policies: [] });
+        assert.deepStrictEqual(result.trace.stepsExecuted, ["repo-a:t1", "repo-b:t1"]);
+        assert.deepStrictEqual(result.trace.unitsAffected, ["repo-a", "repo-b"]);
+      },
+    },
+    {
+      id: "6.10d",
+      name: "execution is blocked when simulation gate fails",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: {} },
+        ];
+
+        const plan = {
+          id: "sim-gate-fail",
+          tasks: [{ id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] }],
+        };
+
+        const result = await executeGlobalPlan(plan, {
+          repos,
+          policies: [],
+          validateState: () => false,
+        });
+
+        assert.strictEqual(result.success, false);
+        assert.strictEqual(result.rolledBack, true);
+        assert.ok(result.audit.violations.some((entry) => entry.includes("simulation gate")));
+      },
+    },
+    {
+      id: "6.10e",
+      name: "simulation and execution converge to identical final state",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { a: "0" } } },
+          { id: "repo-b", dependencies: ["repo-a"], state: { meta: { b: "0" } } },
+        ];
+
+        const plan = {
+          id: "sim-eq",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.a=1", dependsOn: [] },
+            { id: "repo-b:t1", repoId: "repo-b", action: "set:meta.b=1", dependsOn: ["repo-a:t1"] },
+          ],
+        };
+
+        const simulated = await simulatePlan(plan, { repos, policies: [] });
+        const executed = await executeGlobalPlan(plan, { repos, policies: [] });
+
+        assert.strictEqual(simulated.success, true);
+        assert.strictEqual(executed.success, true);
+        assert.deepStrictEqual(executed.finalStates, simulated.finalState);
       },
     },
     {

@@ -33,6 +33,13 @@ import { formatCIRunResult, runCI } from "./core/ci.js";
 import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import { detectEnvironment } from "./core/policyEngine.js";
+import {
+    GlobalPlan,
+    Repo,
+    compareStrategies,
+    simulatePlan as simulateGlobalPlan,
+    simulateUnits as simulateGlobalUnits,
+} from "./core/globalOrchestration.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import {
     formatDSL,
@@ -60,6 +67,7 @@ import {
     renderReview,
     saveInitSession,
 } from "./core/initWizard.js";
+import { Plan, Task } from "./schema.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
 
@@ -95,6 +103,91 @@ function registerParticipant(
 
 function getWorkspaceRoot(): string | null {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+}
+
+function sortedUnique(values: string[]): string[] {
+    return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function deriveSimulationUnit(task: Task): string {
+    const files = [...(task.scope?.files ?? [])]
+        .map((file) => file.replace(/\\/g, "/"))
+        .sort((left, right) => left.localeCompare(right));
+
+    const first = files[0];
+    if (!first) {
+        return "workspace:root";
+    }
+
+    const segments = first.split("/").filter((entry) => entry.length > 0);
+    if (segments.length >= 2 && ["packages", "apps", "services", "libs"].includes(segments[0])) {
+        return `${segments[0]}:${segments[1]}`;
+    }
+
+    return "workspace:root";
+}
+
+function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
+    const knownTaskIds = new Set(plan.tasks.map((task) => task.id));
+    const tasks = [...plan.tasks]
+        .sort((left, right) => left.id.localeCompare(right.id))
+        .map((task) => ({
+            id: `${plan.id}:${task.id}`,
+            repoId: deriveSimulationUnit(task),
+            action: `${task.type}:${task.id}`,
+            dependsOn: sortedUnique((task.dependsOn ?? [])
+                .filter((dependencyId) => knownTaskIds.has(dependencyId))
+                .map((dependencyId) => `${plan.id}:${dependencyId}`)),
+        }));
+
+    return {
+        id: `global-${plan.id}`,
+        tasks,
+    };
+}
+
+function buildSimulationRepos(plans: GlobalPlan[]): Repo[] {
+    const taskById = new Map(plans.flatMap((plan) => plan.tasks.map((task) => [task.id, task] as const)));
+    const repoDependencies = new Map<string, Set<string>>();
+
+    for (const plan of plans) {
+        for (const task of plan.tasks) {
+            if (!repoDependencies.has(task.repoId)) {
+                repoDependencies.set(task.repoId, new Set<string>());
+            }
+
+            for (const dependencyId of task.dependsOn) {
+                const dependency = taskById.get(dependencyId);
+                if (!dependency) {
+                    continue;
+                }
+
+                if (dependency.repoId !== task.repoId) {
+                    repoDependencies.get(task.repoId)?.add(dependency.repoId);
+                }
+            }
+        }
+    }
+
+    return [...repoDependencies.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([repoId, dependencies]) => ({
+            id: repoId,
+            dependencies: sortedUnique([...dependencies]),
+            state: {},
+        }));
+}
+
+function riskLabel(violations: number, riskScore: number): "LOW" | "MEDIUM" | "HIGH" {
+    if (violations > 0) {
+        return "HIGH";
+    }
+
+    if (riskScore >= 8) {
+        return "MEDIUM";
+    }
+
+    return "LOW";
 }
 
 function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace): void {
@@ -137,6 +230,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir define goal \"A\" then define constraint \"B\"",
         "- choir plan for \"service boundaries\"",
         "- choir plan approve <planId>",
+        "- choir simulate",
+        "- choir simulate plan <planId>",
+        "- choir simulate units <unitId>,<unitId>",
         "- choir refactor rename <symbol> <newName>",
         "- choir refactor move <symbol> <targetUnit>",
         "- choir refactor extract <symbol> <targetUnit>",
@@ -667,6 +763,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "macro-list"
                     || action.type === "macro-show"
                     || action.type === "macro-run"
+                    || action.type === "simulate"
                     || action.type === "refactor-rename"
                     || action.type === "refactor-move"
                     || action.type === "refactor-extract"
@@ -674,7 +771,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     || action.type === "graph"
                 )
             ) {
-                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|refactor` cannot be chained with `then`.");
+                stream.markdown("Invalid Choir DSL command. `export|approve|reject|policy status|import|library|ci|abstraction|audit|macro|graph|simulate|refactor` cannot be chained with `then`.");
                 return;
             }
 
@@ -897,6 +994,84 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     const suffix = parsed.ast.nodeId ? ` ${parsed.ast.nodeId}` : "";
                     stream.markdown(`Graph opened in mode: ${parsed.ast.mode}${suffix}`);
+                    return;
+                }
+
+                if (
+                    parsed.ast.type === "simulate"
+                ) {
+                    const simulateNode = parsed.ast;
+                    const configuredPlans = [...control.execution.plans]
+                        .sort((left, right) => left.id.localeCompare(right.id));
+
+                    if (configuredPlans.length === 0) {
+                        stream.markdown("Simulation unavailable: no execution plans defined in control plane.");
+                        return;
+                    }
+
+                    const selectedPlans = simulateNode.planRef
+                        ? configuredPlans.filter((plan) => plan.id === simulateNode.planRef?.identifier)
+                        : configuredPlans;
+
+                    if (selectedPlans.length === 0) {
+                        stream.markdown(`Simulation plan not found: ${simulateNode.planRef?.identifier}`);
+                        return;
+                    }
+
+                    const strategyPlans = selectedPlans.map((plan) => toGlobalPlanFromPlan(plan));
+                    const repos = buildSimulationRepos(strategyPlans);
+                    const simulationOptions = {
+                        repos,
+                        policies: [],
+                    };
+
+                    let chosenPlan = strategyPlans[0] as GlobalPlan;
+                    let comparisonMetrics: { risk: number; changes: number; violations: number } | null = null;
+
+                    if (!simulateNode.planRef && strategyPlans.length > 1) {
+                        const comparison = await compareStrategies(strategyPlans, simulationOptions);
+                        chosenPlan = strategyPlans.find((plan) => plan.id === comparison.bestStrategy) ?? chosenPlan;
+                        comparisonMetrics = comparison.metrics;
+                    }
+
+                    const simulated = simulateNode.units && simulateNode.units.length > 0
+                        ? await simulateGlobalUnits(simulateNode.units, chosenPlan, simulationOptions)
+                        : await simulateGlobalPlan(chosenPlan, simulationOptions);
+
+                    const changeLines = simulated.changes.length === 0
+                        ? ["- none"]
+                        : simulated.changes
+                            .sort((left, right) => left.unitId.localeCompare(right.unitId))
+                            .map((entry) => `- ${entry.unitId}: ${entry.filesChanged.length} files`);
+
+                    const violationLines = simulated.violations.length === 0
+                        ? ["- none"]
+                        : simulated.violations.map((entry) => `- ${entry}`);
+
+                    const fallbackChanges = simulated.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
+                    const fallbackRisk = (simulated.violations.length * 5) + fallbackChanges;
+                    const metrics = comparisonMetrics ?? {
+                        risk: fallbackRisk,
+                        changes: fallbackChanges,
+                        violations: simulated.violations.length,
+                    };
+
+                    stream.markdown([
+                        simulated.success ? "Simulation successful" : "Simulation failed",
+                        `- strategy: ${chosenPlan.id}`,
+                        simulateNode.units && simulateNode.units.length > 0 ? `- units: ${simulateNode.units.join(", ")}` : "- units: all",
+                        "",
+                        "Changes:",
+                        ...changeLines,
+                        "",
+                        "Violations:",
+                        ...violationLines,
+                        "",
+                        `Risk: ${riskLabel(metrics.violations, metrics.risk)}`,
+                        `- riskScore: ${metrics.risk}`,
+                        `- changes: ${metrics.changes}`,
+                        `- violations: ${metrics.violations}`,
+                    ].join("\n"));
                     return;
                 }
 

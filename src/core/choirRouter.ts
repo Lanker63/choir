@@ -5,6 +5,7 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
   | <analyze>
   | <plan>
   | <refactor>
+  | <simulate>
   | <preview>
   | <execute>
   | <status>
@@ -35,6 +36,9 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
              | "refactor" "move" <identifier> <identifier>
              | "refactor" "extract" <identifier> <identifier>
              | "refactor" "inline" <identifier>
+
+<simulate> ::= "simulate" [<plan-ref>]
+             | "simulate" "units" <identifier> ("," <identifier>)*
 
 <preview> ::= "preview" [<plan-ref>]
 
@@ -109,6 +113,7 @@ export const CHOIR_ACTION_KEYWORDS = [
   "analyze",
   "plan",
   "refactor",
+  "simulate",
   "preview",
   "execute",
   "status",
@@ -201,6 +206,12 @@ export type RefactorExtractNode = {
 export type RefactorInlineNode = {
   type: "refactor-inline";
   symbol: string;
+};
+
+export type SimulateNode = {
+  type: "simulate";
+  planRef?: PlanRef;
+  units?: string[];
 };
 
 export type PlanApproveNode = {
@@ -329,6 +340,7 @@ export type ActionNode =
   | RefactorMoveNode
   | RefactorExtractNode
   | RefactorInlineNode
+  | SimulateNode
   | PlanApproveNode
   | PreviewNode
   | ExecuteNode
@@ -607,6 +619,8 @@ class Parser {
         return this.parsePlan();
       case "refactor":
         return this.parseRefactor();
+      case "simulate":
+        return this.parseSimulate();
       case "preview":
         return this.parsePreview();
       case "execute":
@@ -851,6 +865,37 @@ class Parser {
     }
 
     throw new Error("Expected refactor command: rename|move|extract|inline");
+  }
+
+  private parseSimulate(): SimulateNode {
+    this.expectKeyword("simulate");
+    const next = this.peek();
+
+    if (!next || (next.type === "keyword" && next.value === "then")) {
+      return { type: "simulate" };
+    }
+
+    if (next.type === "keyword" && next.value === "plan") {
+      return {
+        type: "simulate",
+        planRef: this.parsePlanRef(),
+      };
+    }
+
+    const mode = this.expectIdentifierLike().toLowerCase();
+    if (mode !== "units") {
+      throw new Error("Expected simulate command: plan <identifier> | units <identifier>(,<identifier>)*");
+    }
+
+    const units: string[] = [this.expectIdentifierLike()];
+    while (this.consumeSymbol(",")) {
+      units.push(this.expectIdentifierLike());
+    }
+
+    return {
+      type: "simulate",
+      units,
+    };
   }
 
   private parsePlanRef(): PlanRef {
@@ -1228,6 +1273,13 @@ function validateActionNode(node: ActionNode): boolean {
     return CHOIR_IDENTIFIER_PATTERN.test(node.symbol);
   }
 
+  if (node.type === "simulate") {
+    const planRefValid = node.planRef === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.planRef.identifier);
+    const unitsValid = node.units === undefined
+      || (node.units.length > 0 && node.units.every((unit) => CHOIR_IDENTIFIER_PATTERN.test(unit)));
+    return planRefValid && unitsValid;
+  }
+
   if (node.type === "plan-approve") {
     return CHOIR_IDENTIFIER_PATTERN.test(node.planId);
   }
@@ -1349,6 +1401,7 @@ export function routeActionToRole(action: ActionNode): RoutedRole {
       return "analyst";
     case "plan":
     case "preview":
+    case "simulate":
     case "refactor-rename":
     case "refactor-move":
     case "refactor-extract":
@@ -1435,6 +1488,11 @@ async function compileAction<TContext>(
     case "refactor-inline":
       trace.steps.push("system.refactor.inline");
       trace.compiledActions.push("system.refactor.inline");
+      return;
+
+    case "simulate":
+      trace.steps.push("system.simulate");
+      trace.compiledActions.push("system.simulate");
       return;
 
     case "plan-approve":

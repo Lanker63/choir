@@ -45,6 +45,10 @@ type ParserState =
   | "analyze-target"
   | "plan-tail"
   | "plan-target-string"
+  | "simulate-tail"
+  | "simulate-id"
+  | "simulate-units-key"
+  | "simulate-units-after"
   | "preview-tail"
   | "preview-id"
   | "execute-tail"
@@ -122,6 +126,8 @@ const KEYWORD_HOVER: Record<string, string> = {
   hotspots: "Analyze high-risk change hotspots.",
   summary: "Analyze a deterministic summary of workspace and violation state.",
   plan: "Create or reference an execution plan.",
+  simulate: "Run deterministic simulation before execution.",
+  units: "Scope simulation to selected units plus dependencies.",
   for: "Attach a quoted target to plan creation.",
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
@@ -305,6 +311,7 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
 
     if (
       state === "plan-tail"
+      || state === "simulate-tail"
       || state === "preview-tail"
       || state === "execute-tail"
       || state === "export-section-or-end"
@@ -312,6 +319,7 @@ function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
       || state === "audit-query-after-filter"
       || state === "macro-args-or-end"
       || state === "macro-after-arg"
+      || state === "simulate-units-after"
     ) {
       if (!closure.has("expect-then-or-end")) {
         closure.add("expect-then-or-end");
@@ -349,6 +357,13 @@ function transition(state: ParserState, token: Token): ParserState[] {
   }
 
   if (token.type === "identifier") {
+    if (
+      state === "simulate-id"
+      || state === "simulate-units-key"
+    ) {
+      return state === "simulate-units-key" ? ["simulate-units-after"] : ["expect-then-or-end"];
+    }
+
     if (
       state === "preview-id"
       || state === "execute-id"
@@ -409,6 +424,15 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return [];
     }
 
+    if (state === "simulate-tail") {
+      const lower = token.value.toLowerCase();
+      if (lower === "units") {
+        return ["simulate-units-key"];
+      }
+
+      return [];
+    }
+
     return [];
   }
 
@@ -437,6 +461,10 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["audit-query-key"];
     }
 
+    if (state === "simulate-units-after" && token.value === ",") {
+      return ["simulate-units-key"];
+    }
+
     return [];
   }
 
@@ -460,6 +488,18 @@ function transition(state: ParserState, token: Token): ParserState[] {
 
       return [];
     }
+
+    if (state === "simulate-tail") {
+      if (token.value === "plan") {
+        return ["simulate-id"];
+      }
+
+      if (token.value === "units") {
+        return ["simulate-units-key"];
+      }
+
+      return [];
+    }
   }
 
   if (state === "expect-root") {
@@ -479,6 +519,9 @@ function transition(state: ParserState, token: Token): ParserState[] {
     }
     if (token.value === "plan") {
       return ["plan-tail"];
+    }
+    if (token.value === "simulate") {
+      return ["simulate-tail"];
     }
     if (token.value === "preview") {
       return ["preview-tail"];
@@ -584,6 +627,18 @@ function transition(state: ParserState, token: Token): ParserState[] {
     return token.value === CHOIR_PLAN_FOR_KEYWORD ? ["plan-target-string"] : [];
   }
 
+  if (state === "simulate-tail") {
+    if (token.value === CHOIR_PLAN_REF_KEYWORD) {
+      return ["simulate-id"];
+    }
+
+    if (token.value === "units") {
+      return ["simulate-units-key"];
+    }
+
+    return [];
+  }
+
   if (state === "preview-tail") {
     return token.value === CHOIR_PLAN_REF_KEYWORD ? ["preview-id"] : [];
   }
@@ -636,6 +691,21 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
 
   if (state === "plan-tail") {
     return [{ type: "keyword", value: CHOIR_PLAN_FOR_KEYWORD }];
+  }
+
+  if (state === "simulate-tail") {
+    return [
+      { type: "keyword", value: CHOIR_PLAN_REF_KEYWORD },
+      { type: "keyword", value: "units" },
+    ];
+  }
+
+  if (state === "simulate-id" || state === "simulate-units-key") {
+    return [{ type: "identifier" }];
+  }
+
+  if (state === "simulate-units-after") {
+    return [{ type: "symbol", value: "," }];
   }
 
   if (state === "preview-tail" || state === "execute-tail") {

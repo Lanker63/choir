@@ -144,6 +144,21 @@ Hard constraints:
 - simulation mode never commits
 - rollback restores pre-execution state on failure
 
+## Org-Wide Simulation Contract
+
+- Simulation reuses execution logic with isolated state layer:
+
+```text
+execution(mode=simulation) == execution(mode=execution)
+```
+
+- Simulation never mutates real workspace or persisted state.
+- Simulation evaluates the same validation and policy pipeline as execution.
+- Simulation output includes deterministic final state projection, per-unit change summary, violations, and replayable trace.
+- Partial simulation must include dependency closure for selected units.
+- Execution is blocked when simulation fails.
+- If simulated and executed outcomes diverge, execution fails closed.
+
 ## Refactor Contract (PASS 1)
 
 - Refactor operations are AST/symbol-based. Raw string replacement refactors are forbidden.

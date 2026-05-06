@@ -56,7 +56,7 @@ Entry point: @choir
 
 Core flow:
 
-- define, analyze, plan, preview, execute, status
+- define, analyze, plan, simulate, preview, execute, status
 - approve/reject policy-gated diffs
 - export deterministic DSL projections
 
@@ -93,13 +93,14 @@ Additional commands:
 ```bnf
 <command> ::= "choir" <action> ("then" <action>)*
 
-<action> ::= <define> | <analyze> | <plan> | <preview> | <execute> | <status>
+<action> ::= <define> | <analyze> | <plan> | <simulate> | <preview> | <execute> | <status>
            | <refactor> | <export> | <approve> | <reject> | <policy-status>
            | <graph> | <import> | <library> | <ci> | <audit> | <macro> | <abstraction>
 
 <define> ::= "define" ("mission" | "vision" | "goal" | "constraint" | "non-goal") <string>
 <analyze> ::= "analyze" ("workspace" | "hotspots" | "summary")
 <plan> ::= "plan" ["for" <string>] | "plan" "approve" <identifier>
+<simulate> ::= "simulate" ["plan" <identifier>] | "simulate" "units" <identifier> ("," <identifier>)*
 <refactor> ::= "refactor" "rename" <identifier> <identifier>
              | "refactor" "move" <identifier> <identifier>
              | "refactor" "extract" <identifier> <identifier>
@@ -144,6 +145,13 @@ Refactor safety notes (PASS 1):
 - Refactors run through the same deterministic preview/validation/commit pipeline.
 - Rename and inline are executable with rollback snapshots.
 - Move and extract are accepted at DSL parse/plan level, but execution is intentionally fail-closed until full transformation support lands.
+
+Org-wide simulation notes:
+
+- `choir simulate` runs deterministic, non-mutating simulation with the same execution logic as real execution.
+- `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
+- Simulation is an execution gate: failed simulation blocks execution.
+- Execution enforces simulation equivalence and fails closed on divergence.
 
 ## Workspace Detection
 
