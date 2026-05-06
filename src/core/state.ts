@@ -53,6 +53,7 @@ export type ExecutionState = {
 export type ApprovalRecord = {
   id: string;
   diffHash: string;
+  previewHash?: string;
   approvedBy: string;
   timestamp: string;
 };
@@ -60,6 +61,7 @@ export type ApprovalRecord = {
 export type PendingApprovalRecord = {
   id: string;
   diffHash: string;
+  previewHash?: string;
   diffs: YAMLDiff[];
   createdAt: string;
   command: string;
@@ -924,6 +926,9 @@ function parseApprovalRecord(value: unknown): ApprovalRecord | null {
 
   const id = typeof value.id === "string" ? value.id.trim() : "";
   const diffHash = typeof value.diffHash === "string" ? value.diffHash.trim() : "";
+  const previewHash = typeof value.previewHash === "string" && value.previewHash.trim().length > 0
+    ? value.previewHash.trim()
+    : undefined;
   const approvedBy = typeof value.approvedBy === "string" ? value.approvedBy.trim() : "";
   const timestamp = typeof value.timestamp === "string" ? value.timestamp.trim() : "";
 
@@ -934,6 +939,7 @@ function parseApprovalRecord(value: unknown): ApprovalRecord | null {
   return {
     id,
     diffHash,
+    ...(previewHash ? { previewHash } : {}),
     approvedBy,
     timestamp,
   };
@@ -946,6 +952,9 @@ function parsePendingApprovalRecord(value: unknown): PendingApprovalRecord | nul
 
   const id = typeof value.id === "string" ? value.id.trim() : "";
   const diffHash = typeof value.diffHash === "string" ? value.diffHash.trim() : "";
+  const previewHash = typeof value.previewHash === "string" && value.previewHash.trim().length > 0
+    ? value.previewHash.trim()
+    : undefined;
   const createdAt = typeof value.createdAt === "string" ? value.createdAt.trim() : "";
   const command = typeof value.command === "string" ? value.command.trim() : "";
   const diffs = Array.isArray(value.diffs) ? value.diffs as YAMLDiff[] : [];
@@ -957,6 +966,7 @@ function parsePendingApprovalRecord(value: unknown): PendingApprovalRecord | nul
   return {
     id,
     diffHash,
+    ...(previewHash ? { previewHash } : {}),
     diffs: [...diffs].sort((left, right) =>
       left.path.localeCompare(right.path)
       || left.operation.localeCompare(right.operation)
@@ -967,26 +977,30 @@ function parsePendingApprovalRecord(value: unknown): PendingApprovalRecord | nul
 }
 
 function materializeApprovals(records: ApprovalRecord[]): ApprovalRecord[] {
-  const byDiffHash = new Map<string, ApprovalRecord>();
+  const byApprovalHash = new Map<string, ApprovalRecord>();
 
   for (const record of records) {
     if (!record.id || !record.diffHash || !record.approvedBy || !record.timestamp) {
       continue;
     }
 
-    if (!byDiffHash.has(record.diffHash)) {
-      byDiffHash.set(record.diffHash, {
+    const approvalHash = record.previewHash ?? record.diffHash;
+
+    if (!byApprovalHash.has(approvalHash)) {
+      byApprovalHash.set(approvalHash, {
         id: record.id,
         diffHash: record.diffHash,
+        ...(record.previewHash ? { previewHash: record.previewHash } : {}),
         approvedBy: record.approvedBy,
         timestamp: record.timestamp,
       });
     }
   }
 
-  return [...byDiffHash.values()].sort((left, right) =>
+  return [...byApprovalHash.values()].sort((left, right) =>
     left.id.localeCompare(right.id)
     || left.diffHash.localeCompare(right.diffHash)
+    || (left.previewHash ?? "").localeCompare(right.previewHash ?? "")
     || left.timestamp.localeCompare(right.timestamp)
   );
 }
@@ -1002,6 +1016,7 @@ function materializePendingApprovals(records: PendingApprovalRecord[]): PendingA
     byId.set(record.id, {
       id: record.id,
       diffHash: record.diffHash,
+      ...(record.previewHash ? { previewHash: record.previewHash } : {}),
       diffs: [...record.diffs].sort((left, right) =>
         left.path.localeCompare(right.path)
         || left.operation.localeCompare(right.operation)
@@ -2086,6 +2101,11 @@ export function hasApprovalForDiff(root: string, diffHash: string): boolean {
   return state.approvals.some((entry) => entry.diffHash === diffHash);
 }
 
+export function hasApprovalForPreview(root: string, previewHash: string): boolean {
+  const state = readStatePlane(root) ?? createEmptyStatePlane();
+  return state.approvals.some((entry) => (entry.previewHash ?? entry.diffHash) === previewHash);
+}
+
 export function listPendingApprovals(root: string): PendingApprovalRecord[] {
   const state = readStatePlane(root) ?? createEmptyStatePlane();
   return [...state.pendingApprovals];
@@ -2103,6 +2123,28 @@ export function upsertPendingApproval(root: string, pending: PendingApprovalReco
 
   const statePath = persistStatePlane(root, nextState, { action: "upsert-pending-approval" });
   return { statePath, state: nextState };
+}
+
+export function upsertPendingPreviewApproval(
+  root: string,
+  previewHash: string,
+  command: string
+): { statePath: string; state: StatePlane; pendingId: string } {
+  const normalizedHash = previewHash.replace(/[^a-zA-Z0-9]/g, "");
+  const pendingId = `preview-${normalizedHash.slice(-12)}`;
+  const result = upsertPendingApproval(root, {
+    id: pendingId,
+    diffHash: previewHash,
+    previewHash,
+    diffs: [],
+    createdAt: new Date().toISOString(),
+    command,
+  });
+
+  return {
+    ...result,
+    pendingId,
+  };
 }
 
 export function approvePendingDiff(
@@ -2123,6 +2165,7 @@ export function approvePendingDiff(
   const approval: ApprovalRecord = {
     id,
     diffHash: pending.diffHash,
+    ...(pending.previewHash ? { previewHash: pending.previewHash } : {}),
     approvedBy,
     timestamp,
   };

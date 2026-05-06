@@ -11,6 +11,7 @@ import {
 } from "./deterministicCore.js";
 import { SystemState } from "./distributedSync.js";
 import { recordCommittedTransaction } from "./persistentStateAudit.js";
+import { hasApprovalForPreview, upsertPendingPreviewApproval } from "./state.js";
 
 export type RepoTask = {
   id: string;
@@ -71,6 +72,7 @@ export type PolicyEffect = "allow" | "require-approval" | "deny";
 export type GlobalPolicyRule =
   | {
     id: string;
+    priority?: number;
     kind: "deny-action-prefix";
     effect: PolicyEffect;
     actionPrefix: string;
@@ -78,6 +80,7 @@ export type GlobalPolicyRule =
   }
   | {
     id: string;
+    priority?: number;
     kind: "require-repo-action-prefix";
     effect: PolicyEffect;
     actionPrefix: string;
@@ -85,6 +88,7 @@ export type GlobalPolicyRule =
   }
   | {
     id: string;
+    priority?: number;
     kind: "cross-repo-action-compatibility";
     effect: PolicyEffect;
     upstreamPrefix: string;
@@ -92,6 +96,7 @@ export type GlobalPolicyRule =
   }
   | {
     id: string;
+    priority?: number;
     kind: "require-state-path";
     effect: PolicyEffect;
     path: string;
@@ -170,10 +175,12 @@ export type ExecuteGlobalPlanOptions = {
   repos: Repo[];
   policies: CompiledPolicy[];
   stateRoot?: string;
+  approvedPreviewHash?: string;
   approveExecution?: (input: {
     planId: string;
     policyResult: PolicyResult;
     mode: "simulation" | "execution";
+    previewHash: string;
   }) => boolean | Promise<boolean>;
   validateState?: (state: SystemState, repoId: string) => boolean;
   executeTask?: (
@@ -910,11 +917,11 @@ export function validateTransaction(ctx: TransactionContext, input?: Transaction
   const errors: string[] = [];
 
   if (input?.policyResult) {
-    if (!input.policyResult.allowed) {
+    const denied = !input.policyResult.allowed && !input.policyResult.requiresApproval;
+    if (denied) {
       errors.push("Transaction validation failed: policy denied execution");
+      errors.push(...input.policyResult.violations);
     }
-
-    errors.push(...input.policyResult.violations);
   }
 
   if (input?.graph && input.executionState) {
@@ -1526,11 +1533,12 @@ export async function executeTransaction(
   const effectivePlan = units && units.length > 0 ? filterPlanForUnits(plan, units) : cloneUnknown(plan);
   const policyResult = evaluateGlobalPolicies(effectivePlan, flattenPolicies(options.policies), normalizedRepos);
   const ordered = orderPlan(effectivePlan);
+  const baseState = stateForRepos(normalizedRepos);
+  const requiredPreviewHash = executionPreviewHash(effectivePlan, baseState, policyResult, ordered.orderedTaskIds);
   const batches = batchTasks(effectivePlan);
   const stages = executionStagesFromBatches(batches);
   const batchById = new Map(batches.map((batch) => [batch.id, batch] as const));
 
-  const baseState = stateForRepos(normalizedRepos);
   const validateState = options.validateState ?? (() => true);
   const executeTask = options.executeTask ?? (async (task, state) => defaultTaskExecutor(task, state));
   const executionState = createExecutionState(normalizedRepos.map((repo) => repo.id));
@@ -1628,7 +1636,8 @@ export async function executeTransaction(
     }
   }
 
-  if (!policyResult.allowed) {
+  const policyDenied = !policyResult.allowed && !policyResult.requiresApproval;
+  if (policyDenied) {
     abortTransaction(tx);
     if (lockOwnerToken) {
       releaseLocks(lockOwnerToken);
@@ -1652,11 +1661,15 @@ export async function executeTransaction(
   }
 
   if (mode === "execution" && policyResult.requiresApproval) {
-    const approved = await options.approveExecution?.({
-      planId: effectivePlan.id,
-      policyResult,
-      mode,
-    });
+    const preApproved = options.approvedPreviewHash === requiredPreviewHash;
+    const approved = preApproved
+      ? true
+      : await options.approveExecution?.({
+        planId: effectivePlan.id,
+        policyResult,
+        mode,
+        previewHash: requiredPreviewHash,
+      });
     if (!approved) {
       abortTransaction(tx);
       if (lockOwnerToken) {
@@ -1671,7 +1684,10 @@ export async function executeTransaction(
         policyResult,
         orderedTaskIds: ordered.orderedTaskIds,
         plan: effectivePlan,
-        violations: sortedUnique([...policyResult.violations, "Execution requires approval and was denied"]),
+        violations: sortedUnique([
+          ...policyResult.violations,
+          `Execution requires approval and was denied (previewHash=${requiredPreviewHash})`,
+        ]),
         stepsExecuted,
         unitsAffected: [],
         executionState,
@@ -1884,7 +1900,7 @@ export async function executeTransaction(
     const finalValidation = validatePhase(tx, {
       repos: normalizedRepos,
       policyResult,
-      violations: policyResult.violations,
+      violations: policyDenied ? policyResult.violations : [],
     });
 
     if (!finalValidation.valid) {
@@ -2893,9 +2909,30 @@ export function batchTasks(plan: GlobalPlan): TaskBatch[] {
 }
 
 function flattenPolicies(policies: CompiledPolicy[]): GlobalPolicyRule[] {
-  return policies
-    .flatMap((policy) => policy.rules)
-    .sort((left, right) => left.id.localeCompare(right.id));
+  const sourceRank = (source: PolicySourceLayer): number => {
+    if (source === "org") return 0;
+    if (source === "team") return 1;
+    if (source === "repo") return 2;
+    return 3;
+  };
+  const priority = (rule: GlobalPolicyRule): number =>
+    typeof rule.priority === "number" && Number.isFinite(rule.priority) ? rule.priority : 0;
+
+  return [...policies]
+    .sort((left, right) =>
+      sourceRank(left.source) - sourceRank(right.source)
+      || left.id.localeCompare(right.id)
+    )
+    .flatMap((policy) =>
+      [...policy.rules].sort((left, right) =>
+        priority(right) - priority(left)
+        || left.id.localeCompare(right.id)
+      )
+    )
+    .sort((left, right) =>
+      priority(right) - priority(left)
+      || left.id.localeCompare(right.id)
+    );
 }
 
 function taskMapByRepo(plan: GlobalPlan): Map<string, GlobalPlanTask[]> {
@@ -3007,7 +3044,12 @@ function evaluateRule(
 }
 
 export function evaluateGlobalPolicies(plan: GlobalPlan, policies: GlobalPolicyRule[], repos: Repo[]): PolicyResult {
-  const orderedRules = [...policies].sort((left, right) => left.id.localeCompare(right.id));
+  const priority = (rule: GlobalPolicyRule): number =>
+    typeof rule.priority === "number" && Number.isFinite(rule.priority) ? rule.priority : 0;
+  const orderedRules = [...policies].sort((left, right) =>
+    priority(right) - priority(left)
+    || left.id.localeCompare(right.id)
+  );
   const byRepo = taskMapByRepo(plan);
   const decisions: string[] = [];
   const violations: string[] = [];
@@ -3040,9 +3082,13 @@ export function evaluateGlobalPolicies(plan: GlobalPlan, policies: GlobalPolicyR
     decisions.push(`allow-with-violation:${rule.id}`);
   }
 
+  const decision: "allow" | "require-approval" | "deny" = denied
+    ? "deny"
+    : (requiresApproval ? "require-approval" : "allow");
+
   return {
-    allowed: !denied && !requiresApproval,
-    requiresApproval,
+    allowed: decision === "allow",
+    requiresApproval: decision === "require-approval",
     violations: sortedUnique(violations),
     policyDecisions: decisions,
     appliedPolicyIds: sortedUnique(appliedPolicyIds),
@@ -3278,6 +3324,22 @@ function rollbackAllRepos(snapshot: Record<string, SystemState>): Record<string,
   return cloneUnknown(snapshot);
 }
 
+function executionPreviewHash(
+  plan: GlobalPlan,
+  baseState: GlobalState,
+  policyResult: PolicyResult,
+  orderedTaskIds: string[]
+): string {
+  return hashId("execution-preview", {
+    planId: plan.id,
+    plan: normalizePlan(plan),
+    orderedTaskIds,
+    baseStateHash: hashState(baseState),
+    policyDecisions: [...policyResult.policyDecisions],
+    policyViolations: [...policyResult.violations],
+  });
+}
+
 async function executeIsolatedRollback(
   failedUnit: string,
   graph: DependencyGraph,
@@ -3327,16 +3389,16 @@ export async function executeGlobalPlan(
   options: ExecuteGlobalPlanOptions
 ): Promise<GlobalExecutionResult> {
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
+  const baseStates = stateForRepos(normalizedRepos);
   const dependencyGraph = buildRollbackDependencyGraph(plan);
   const simulation = await simulatePlan(plan, options);
   const simulationPolicy = simulation.policyDecisions[0];
 
-  if (simulationPolicy && !simulationPolicy.allowed) {
+  if (simulationPolicy && !simulationPolicy.allowed && !simulationPolicy.requiresApproval) {
     blockGlobalExecution(simulationPolicy);
   }
 
   if (!simulation.success) {
-    const baseStates = stateForRepos(normalizedRepos);
     return {
       success: false,
       rolledBack: false,
@@ -3360,7 +3422,53 @@ export async function executeGlobalPlan(
     };
   }
 
-  const execution = await runGlobalPlanInternal(plan, options, "execution");
+  let approvedPreviewHash: string | undefined;
+  if (simulationPolicy?.requiresApproval) {
+    const previewHash = executionPreviewHash(plan, baseStates, simulationPolicy, simulation.trace.stepsExecuted);
+    const callbackApproved = await options.approveExecution?.({
+      planId: plan.id,
+      policyResult: simulationPolicy,
+      mode: "execution",
+      previewHash,
+    });
+    const stateApproved = options.stateRoot ? hasApprovalForPreview(options.stateRoot, previewHash) : false;
+    const approved = callbackApproved === true || stateApproved;
+
+    if (!approved) {
+      if (options.stateRoot) {
+        upsertPendingPreviewApproval(options.stateRoot, previewHash, `execute ${plan.id}`);
+      }
+
+      return {
+        success: false,
+        rolledBack: false,
+        finalStates: cloneState(baseStates),
+        audit: {
+          planId: plan.id,
+          reposInvolved: normalizedRepos.map((repo) => repo.id),
+          policiesApplied: simulationPolicy.appliedPolicyIds,
+          violations: sortedUnique([
+            ...simulationPolicy.violations,
+            `Execution requires approval and was denied (previewHash=${previewHash})`,
+          ]),
+        },
+        trace: {
+          plan,
+          executionOrder: simulation.trace.stepsExecuted,
+          policyDecisions: simulationPolicy.policyDecisions,
+          convergence: false,
+          deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
+        },
+      };
+    }
+
+    approvedPreviewHash = previewHash;
+  }
+
+  const execution = await runGlobalPlanInternal(plan, {
+    ...options,
+    approvedPreviewHash,
+  }, "execution");
 
   if (!execution.success) {
     const failedUnit = execution.failure?.unitId ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";

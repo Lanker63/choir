@@ -39,6 +39,7 @@ import { StatePlane, createEmptyStatePlane } from "./state.js";
 import { runCompilerVerification } from "./compilerVerification.js";
 import { runTransactionVerification } from "./transactionVerification.js";
 import { runStateVerification } from "./stateVerification.js";
+import { runPolicyVerification } from "./policyVerification.js";
 
 export type VerificationCase = {
   name: string;
@@ -69,6 +70,7 @@ export type VerificationReport = {
     replay: boolean;
     simulation: boolean;
     rollback: boolean;
+    policy: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -684,7 +686,15 @@ async function executeSuite(
 
 function runFingerprint(
   cases: VerificationCaseResult[],
-  metrics: { compiler: boolean; transactions: boolean; state: boolean; strategy: boolean; memory: boolean; adaptive: boolean }
+  metrics: {
+    policy: boolean;
+    compiler: boolean;
+    transactions: boolean;
+    state: boolean;
+    strategy: boolean;
+    memory: boolean;
+    adaptive: boolean;
+  }
 ): string {
   return stableStringify({
     cases: cases.map((entry) => ({
@@ -767,6 +777,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const transactionReport = await runTransactionVerification();
     const transactions = transactionReport.passed;
     failures.push(...transactionReport.failures.map((failure) => `transactions: ${failure}`));
+    const policyReport = await runPolicyVerification();
+    const policy = policyReport.passed;
+    failures.push(...policyReport.failures.map((failure) => `policy: ${failure}`));
     const compilerReport = await runCompilerVerification();
     const compiler = compilerReport.passed;
     failures.push(...compilerReport.failures.map((failure) => `compiler: ${failure}`));
@@ -783,7 +796,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { compiler, transactions, state, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, { policy, compiler, transactions, state, strategy, memory, adaptive });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
@@ -793,10 +806,12 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunMemory = verifyMemoryReuse(await createMemoryContext(rerunMemoryRoot));
         const rerunAdaptiveRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
+        const rerunPolicy = (await runPolicyVerification()).passed;
         const rerunCompiler = (await runCompilerVerification()).passed;
         const rerunTransactions = (await runTransactionVerification()).passed;
         const rerunState = (await runStateVerification()).passed;
         const rerunFingerprint = runFingerprint(rerunCases, {
+          policy: rerunPolicy,
           compiler: rerunCompiler,
           transactions: rerunTransactions,
           state: rerunState,
@@ -820,13 +835,27 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const casesPass = caseResults.every((entry) => allAssertionsPass(entry));
 
     report = {
-      passed: casesPass && failures.length === 0 && determinism && replay && simulation && rollback && compiler && transactions && state && strategy && memory && adaptive && flakeFree,
+      passed: casesPass
+        && failures.length === 0
+        && determinism
+        && replay
+        && simulation
+        && rollback
+        && policy
+        && compiler
+        && transactions
+        && state
+        && strategy
+        && memory
+        && adaptive
+        && flakeFree,
       failures,
       metrics: {
         determinism,
         replay,
         simulation,
         rollback,
+        policy,
         compiler,
         transactions,
         state,
@@ -858,6 +887,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- replay: ${report.metrics.replay}`,
     `- simulation: ${report.metrics.simulation}`,
     `- rollback: ${report.metrics.rollback}`,
+    `- policy: ${report.metrics.policy}`,
     `- compiler: ${report.metrics.compiler}`,
     `- transactions: ${report.metrics.transactions}`,
     `- state: ${report.metrics.state}`,

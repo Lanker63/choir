@@ -165,6 +165,7 @@
     "verify:determinism": "npm run build:extension && node out/tests/verification/determinism.js",
     "verify:transactions": "npm run build:extension && node out/tests/verification/transactions.js",
     "verify:state": "npm run build:extension && node out/tests/verification/state.js",
+    "verify:policy": "npm run build:extension && node out/tests/verification/policy.js",
     "verify:compiler": "npm run build:extension && node out/tests/verification/compiler.js",
     "verify:contracts": "npm run build:extension && CHOIR_CONTRACT_MODE=quick node out/tests/verification/contracts.js",
     "verify:contracts:full": "npm run build:extension && CHOIR_CONTRACT_MODE=full node out/tests/verification/contracts.js",

@@ -22,7 +22,7 @@ export type PanelChatCommand = {
 
 export type VerifyChatCommand = {
   type: "verify";
-  mode: "full" | "quick" | "property" | "chaos" | "contracts" | "determinism" | "transactions" | "state" | "compiler";
+  mode: "full" | "quick" | "property" | "chaos" | "contracts" | "determinism" | "transactions" | "state" | "policy" | "compiler";
   chaosMode?: "none" | "light" | "moderate" | "extreme";
 };
 
@@ -187,6 +187,13 @@ export function parseVerifyChatCommand(input: string): VerifyChatCommand | null 
     return {
       type: "verify",
       mode: "state",
+    };
+  }
+
+  if (/^(?:@choir\s+)?verify\s+--policy\s*$/i.test(normalized)) {
+    return {
+      type: "verify",
+      mode: "policy",
     };
   }
 

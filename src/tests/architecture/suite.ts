@@ -1846,6 +1846,11 @@ const pass2: TestPass = {
           mode: "state",
         });
 
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --policy"), {
+          type: "verify",
+          mode: "policy",
+        });
+
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --compiler"), {
           type: "verify",
           mode: "compiler",
