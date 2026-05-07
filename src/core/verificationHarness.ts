@@ -41,6 +41,8 @@ import { runTransactionVerification } from "./transactionVerification.js";
 import { runStateVerification } from "./stateVerification.js";
 import { runPolicyVerification } from "./policyVerification.js";
 import { runOrchestrationVerification } from "./orchestrationVerification.js";
+import { runProductionVerification } from "./productionVerification.js";
+import { resetProductionReadiness } from "./productionReadiness.js";
 
 export type VerificationCase = {
   name: string;
@@ -73,6 +75,7 @@ export type VerificationReport = {
     rollback: boolean;
     policy: boolean;
     orchestration: boolean;
+    production: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -691,6 +694,7 @@ function runFingerprint(
   metrics: {
     policy: boolean;
     orchestration: boolean;
+    production: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -774,6 +778,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
   let report: VerificationReport;
 
   try {
+    resetProductionReadiness();
     const caseResults = await executeSuite(suite, parallelCaseExecution);
     const failures = caseResults.flatMap((entry) => entry.failures.map((failure) => `${entry.name}: ${failure}`));
 
@@ -786,6 +791,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const orchestrationReport = await runOrchestrationVerification();
     const orchestration = orchestrationReport.passed;
     failures.push(...orchestrationReport.failures.map((failure) => `orchestration: ${failure}`));
+    const productionReport = await runProductionVerification();
+    const production = productionReport.passed;
+    failures.push(...productionReport.failures.map((failure) => `production: ${failure}`));
     const compilerReport = await runCompilerVerification();
     const compiler = compilerReport.passed;
     failures.push(...compilerReport.failures.map((failure) => `compiler: ${failure}`));
@@ -802,10 +810,11 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { policy, orchestration, compiler, transactions, state, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, { policy, orchestration, production, compiler, transactions, state, strategy, memory, adaptive });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
+        resetProductionReadiness();
         const rerunCases = await executeSuite(suite, parallelCaseExecution);
         const rerunStrategy = await verifyStrategySelection(buildStrategyCandidates(deterministicCase.input), deterministicCase.input);
         const rerunMemoryRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-memory-${run}-`));
@@ -814,12 +823,14 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
         const rerunPolicy = (await runPolicyVerification()).passed;
         const rerunOrchestration = (await runOrchestrationVerification()).passed;
+        const rerunProduction = (await runProductionVerification()).passed;
         const rerunCompiler = (await runCompilerVerification()).passed;
         const rerunTransactions = (await runTransactionVerification()).passed;
         const rerunState = (await runStateVerification()).passed;
         const rerunFingerprint = runFingerprint(rerunCases, {
           policy: rerunPolicy,
           orchestration: rerunOrchestration,
+          production: rerunProduction,
           compiler: rerunCompiler,
           transactions: rerunTransactions,
           state: rerunState,
@@ -851,6 +862,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         && rollback
         && policy
         && orchestration
+        && production
         && compiler
         && transactions
         && state
@@ -866,6 +878,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         rollback,
         policy,
         orchestration,
+        production,
         compiler,
         transactions,
         state,
@@ -899,6 +912,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- rollback: ${report.metrics.rollback}`,
     `- policy: ${report.metrics.policy}`,
     `- orchestration: ${report.metrics.orchestration}`,
+    `- production: ${report.metrics.production}`,
     `- compiler: ${report.metrics.compiler}`,
     `- transactions: ${report.metrics.transactions}`,
     `- state: ${report.metrics.state}`,

@@ -18,6 +18,42 @@ export type Dashboard = {
   recommendations: string[];
 };
 
+export type ProductionView = {
+  health: {
+    healthy: boolean;
+    checks: {
+      determinismIntact: boolean;
+      replayConsistency: boolean;
+      auditChainValid: boolean;
+      policyEnforcementActive: boolean;
+    };
+    failures: string[];
+  };
+  metrics: Array<{
+    name: string;
+    value: number;
+    tags: Record<string, string>;
+  }>;
+  alerts: Array<{
+    id: string;
+    severity: "low" | "medium" | "high" | "critical";
+    condition: string;
+  }>;
+  incidents: Array<{
+    id: string;
+    cause: string;
+    affectedUnits: string[];
+    resolution: string;
+  }>;
+  slos: Array<{
+    name: string;
+    target: number;
+    actual: number;
+    met: boolean;
+  }>;
+  failureHotspots: string[];
+};
+
 export type WorkflowStep =
   | "define-intent"
   | "plan"
@@ -149,6 +185,7 @@ export type ProductSnapshot = {
   macroUI: MacroUI;
   roleView: RoleView;
   pendingApprovals: Array<{ id: string; command: string; diffHash: string; createdAt: string }>;
+  production?: ProductionView;
   traces: UITrace[];
   controlPlane: object;
   timeline: TimelineUI;

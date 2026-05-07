@@ -54,6 +54,7 @@ import {
 import {
   detectEnvironment,
 } from "../core/policyEngine.js";
+import { getProductionSnapshot } from "../core/productionReadiness.js";
 import type { Role } from "../core/policyEngine.js";
 import {
   formatDSL,
@@ -496,6 +497,7 @@ export class ChoirProductService {
       pendingApprovals: pending.length,
       hasApprovedPlan,
     });
+    const production = getProductionSnapshot(root);
 
     const auditView: AuditView = {
       events: recentActions,
@@ -525,6 +527,19 @@ export class ChoirProductService {
       macroUI: this.buildMacroUI(root),
       roleView: ROLE_VIEW,
       pendingApprovals: pending,
+      production: {
+        health: production.health,
+        metrics: production.metrics,
+        alerts: production.alerts,
+        incidents: production.incidents.map((incident) => ({
+          id: incident.id,
+          cause: incident.cause,
+          affectedUnits: incident.affectedUnits,
+          resolution: incident.resolution,
+        })),
+        slos: production.slos,
+        failureHotspots: production.failureHotspots,
+      },
       traces: [...this.traces].reverse(),
       controlPlane: controlPlaneToChoirConfig(control),
       timeline: replayView.timeline,

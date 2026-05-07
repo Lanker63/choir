@@ -27,6 +27,7 @@ import {
 import {
   StrategyOutcome,
 } from "./strategyPlanner.js";
+import { resetProductionReadiness } from "./productionReadiness.js";
 import {
   buildSignature,
   canReuse,
@@ -1125,6 +1126,8 @@ async function runDeterministicPass(
   seed: number,
   mode: ChaosMode
 ): Promise<PropertyRunResult> {
+  resetProductionReadiness();
+
   let failures = 0;
   const invariantsBroken = new Set<string>();
   let minimalFailureCase: object | undefined;

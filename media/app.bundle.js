@@ -1,9 +1,13 @@
-const C={architect:["define-intent","approve","audit"],analyst:["audit"],conductor:["define-intent","plan","preview","approve","audit"],enforcer:["execute","audit"]},j={dashboard:"Dashboard",workspace:"Workspace","plan-view":"Plan View","timeline-view":"Time Travel","policy-view":"Policy View","audit-view":"Audit View","macro-library":"Macro/Abstraction"},L=window.vscode;if(!L)throw new Error("VSCode API not available in webview context.");const I=document.getElementById("roleSelect"),x=document.getElementById("dslInput"),P=document.getElementById("runDslBtn"),S=document.getElementById("refreshBtn"),g=document.getElementById("surfaceTabs"),p=document.getElementById("surfaceContainer"),B=document.getElementById("consoleOutput");if(!(I instanceof HTMLSelectElement)||!(x instanceof HTMLInputElement)||!(P instanceof HTMLButtonElement)||!(S instanceof HTMLButtonElement)||!(g instanceof HTMLElement)||!(p instanceof HTMLElement)||!(B instanceof HTMLElement))throw new Error("Choir Control Center webview is missing required elements.");let t=null,u="dashboard",y={},b;function s(){const e=I.value;return e==="architect"||e==="analyst"||e==="conductor"||e==="enforcer"?e:"conductor"}function i(e){return e.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;")}function E(e){const a=new Date().toISOString(),n=B.textContent??"";B.textContent=`[${a}] ${e}
-${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F(){if(!t?.timeline.playing){D();return}typeof b<"u"||(b=window.setInterval(()=>{if(!t?.timeline.playing||!t.timeline.canStepForward){o({type:"replay-control",role:s(),control:"pause"});return}o({type:"replay-control",role:s(),control:"step-forward"})},900))}function o(e){L.postMessage({type:"action",payload:e})}function v(e,a){return C[e].includes(a)}function A(e){return e==="stable"||e==="allow"?`<span class="chip success">${i(e)}</span>`:e==="needs-attention"||e==="deny"?`<span class="chip danger">${i(e)}</span>`:`<span class="chip warn">${i(e)}</span>`}function V(){if(!t){g.innerHTML="";return}const e=t.availableSurfaces;e.includes(u)||(u=e[0]??"dashboard"),g.innerHTML=e.map(a=>`<button type="button" class="surface-tab ${a===u?"active":""}" data-surface="${a}">${j[a]}</button>`).join(""),g.querySelectorAll(".surface-tab").forEach(a=>{a.addEventListener("click",()=>{const n=a.dataset.surface;n&&(u=n,H())})})}function N(){if(!t)return"";const e=t.dashboard.recommendations.length>0?t.dashboard.recommendations.map(n=>`<li>${i(n)}</li>`).join(""):"<li>No recommendations. System is aligned.</li>",a=t.dashboard.recentActions.length>0?t.dashboard.recentActions.map(n=>`<li><span class="mono">${i(n.timestamp)}</span> ${i(n.action)} (${i(n.result)})</li>`).join(""):"<li>No audit events yet.</li>";return`
+const C={architect:["define-intent","approve","audit"],analyst:["audit"],conductor:["define-intent","plan","preview","approve","audit"],enforcer:["execute","audit"]},j={dashboard:"Dashboard",workspace:"Workspace","plan-view":"Plan View","timeline-view":"Time Travel","policy-view":"Policy View","audit-view":"Audit View","macro-library":"Macro/Abstraction"},T=window.vscode;if(!T)throw new Error("VSCode API not available in webview context.");const $=document.getElementById("roleSelect"),x=document.getElementById("dslInput"),S=document.getElementById("runDslBtn"),A=document.getElementById("refreshBtn"),g=document.getElementById("surfaceTabs"),m=document.getElementById("surfaceContainer"),B=document.getElementById("consoleOutput");if(!($ instanceof HTMLSelectElement)||!(x instanceof HTMLInputElement)||!(S instanceof HTMLButtonElement)||!(A instanceof HTMLButtonElement)||!(g instanceof HTMLElement)||!(m instanceof HTMLElement)||!(B instanceof HTMLElement))throw new Error("Choir Control Center webview is missing required elements.");let t=null,p="dashboard",y={},h;function o(){const e=$.value;return e==="architect"||e==="analyst"||e==="conductor"||e==="enforcer"?e:"conductor"}function n(e){return e.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;")}function E(e){const a=new Date().toISOString(),i=B.textContent??"";B.textContent=`[${a}] ${e}
+${i}`}function F(){typeof h<"u"&&(window.clearInterval(h),h=void 0)}function D(){if(!t?.timeline.playing){F();return}typeof h<"u"||(h=window.setInterval(()=>{if(!t?.timeline.playing||!t.timeline.canStepForward){c({type:"replay-control",role:o(),control:"pause"});return}c({type:"replay-control",role:o(),control:"step-forward"})},900))}function c(e){T.postMessage({type:"action",payload:e})}function v(e,a){return C[e].includes(a)}function L(e){return e==="stable"||e==="allow"?`<span class="chip success">${n(e)}</span>`:e==="needs-attention"||e==="deny"?`<span class="chip danger">${n(e)}</span>`:`<span class="chip warn">${n(e)}</span>`}function N(){if(!t){g.innerHTML="";return}const e=t.availableSurfaces;e.includes(p)||(p=e[0]??"dashboard"),g.innerHTML=e.map(a=>`<button type="button" class="surface-tab ${a===p?"active":""}" data-surface="${a}">${j[a]}</button>`).join(""),g.querySelectorAll(".surface-tab").forEach(a=>{a.addEventListener("click",()=>{const i=a.dataset.surface;i&&(p=i,H())})})}function V(){if(!t)return"";const e=t.dashboard.recommendations.length>0?t.dashboard.recommendations.map(s=>`<li>${n(s)}</li>`).join(""):"<li>No recommendations. System is aligned.</li>",a=t.dashboard.recentActions.length>0?t.dashboard.recentActions.map(s=>`<li><span class="mono">${n(s.timestamp)}</span> ${n(s.action)} (${n(s.result)})</li>`).join(""):"<li>No audit events yet.</li>",i=t.production?L(t.production.health.healthy?"stable":"needs-attention"):'<span class="chip warn">unavailable</span>',u=t.production&&t.production.alerts.length>0?t.production.alerts.map(s=>`<li><span class="mono">${n(s.severity)}</span> ${n(s.condition)}</li>`).join(""):"<li>No active production alerts.</li>",f=t.production&&t.production.slos.length>0?t.production.slos.map(s=>`<li>${n(s.name)}: ${s.actual.toFixed(2)} / ${s.target.toFixed(2)} (${s.met?"met":"miss"})</li>`).join(""):"<li>No SLO evaluation available.</li>";return`
     <section class="grid">
       <article class="card">
         <div class="muted">System Health</div>
-        <div class="kpi">${A(t.dashboard.systemHealth)}</div>
+        <div class="kpi">${L(t.dashboard.systemHealth)}</div>
+      </article>
+      <article class="card">
+        <div class="muted">Production Health</div>
+        <div class="kpi">${i}</div>
       </article>
       <article class="card">
         <div class="muted">Active Plans</div>
@@ -21,12 +25,20 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
         <div class="muted">Recent Actions</div>
         <ul class="list">${a}</ul>
       </article>
+      <article class="card wide">
+        <div class="muted">Production Alerts</div>
+        <ul class="list">${u}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Production SLOs</div>
+        <ul class="list">${f}</ul>
+      </article>
     </section>
-  `}function O(){if(!t)return"";const e=s();return`
+  `}function O(){if(!t)return"";const e=o();return`
     <article class="card full">
       <div class="muted">Guided Workflow</div>
-      <div class="workflow">${["define-intent","plan","preview","approve","execute","audit"].map(n=>{const d=n,m=t?.workflow.current===d,f=t?.workflow.completed.includes(d);return`<span class="step ${m?"current":""} ${f?"done":""}">${i(n)}</span>`}).join("")}</div>
-      <p class="muted">Current step: ${i(t.workflow.current)}</p>
+      <div class="workflow">${["define-intent","plan","preview","approve","execute","audit"].map(i=>{const u=i,f=t?.workflow.current===u,s=t?.workflow.completed.includes(u);return`<span class="step ${f?"current":""} ${s?"done":""}">${n(i)}</span>`}).join("")}</div>
+      <p class="muted">Current step: ${n(t.workflow.current)}</p>
       <div class="grid">
         <div class="card">
           <label for="intentInput">Define Intent</label>
@@ -62,19 +74,19 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
         </div>
       </div>
     </article>
-  `}function U(){if(!t)return"";const e=t.planView.length>0?t.planView.map(n=>`
+  `}function U(){if(!t)return"";const e=t.planView.length>0?t.planView.map(i=>`
       <tr>
-        <td class="mono">${i(n.planId)}</td>
-        <td>${i(n.tasks.join(", "))}</td>
-        <td class="mono">${i(n.affectedFiles.join(", "))}</td>
-        <td>${n.estimatedImpact}</td>
+        <td class="mono">${n(i.planId)}</td>
+        <td>${n(i.tasks.join(", "))}</td>
+        <td class="mono">${n(i.affectedFiles.join(", "))}</td>
+        <td>${i.estimatedImpact}</td>
       </tr>
-    `).join(""):'<tr><td colspan="4" class="muted">No plans yet.</td></tr>',a=t.diffView.length>0?t.diffView.map(n=>`
+    `).join(""):'<tr><td colspan="4" class="muted">No plans yet.</td></tr>',a=t.diffView.length>0?t.diffView.map(i=>`
         <article class="card full">
-          <div class="mono">${i(n.file)}</div>
+          <div class="mono">${n(i.file)}</div>
           <div class="diff">
-            <pre>${i(n.before)}</pre>
-            <pre>${i(n.after)}</pre>
+            <pre>${n(i.before)}</pre>
+            <pre>${n(i.after)}</pre>
           </div>
         </article>
       `).join(""):'<article class="card full"><div class="muted">No preview diff loaded yet. Run Preview.</div></article>';return`
@@ -96,23 +108,23 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
       </article>
       ${a}
     </section>
-  `}function W(){if(!t)return"";const e=t.timeline.states,a=e.length>0?e.map(c=>`
+  `}function W(){if(!t)return"";const e=t.timeline.states,a=e.length>0?e.map(d=>`
         <button
           type="button"
-          class="timeline-node ${c.index===t?.timeline.currentIndex?"current":""}"
-          data-timeline-index="${c.index}"
-          title="${i(c.action)}">
-          <span class="timeline-label">${i(c.label)}</span>
-          <span class="timeline-action">${i(c.action)}</span>
+          class="timeline-node ${d.index===t?.timeline.currentIndex?"current":""}"
+          data-timeline-index="${d.index}"
+          title="${n(d.action)}">
+          <span class="timeline-label">${n(d.label)}</span>
+          <span class="timeline-action">${n(d.action)}</span>
         </button>
-      `).join(""):'<div class="muted">No transitions recorded yet.</div>',n=t.stateInspector,d=n.why.length>0?n.why.map(c=>`<li>${i(c)}</li>`).join(""):"<li>No transition explanation available.</li>",m=n.dependencyChain.length>0?n.dependencyChain.map(c=>`<li class="mono">${i(c)}</li>`).join(""):"<li>No dependency chain captured.</li>",f=t.stateDiff&&t.stateDiff.patches.length>0?t.stateDiff.patches.map(c=>`
+      `).join(""):'<div class="muted">No transitions recorded yet.</div>',i=t.stateInspector,u=i.why.length>0?i.why.map(d=>`<li>${n(d)}</li>`).join(""):"<li>No transition explanation available.</li>",f=i.dependencyChain.length>0?i.dependencyChain.map(d=>`<li class="mono">${n(d)}</li>`).join(""):"<li>No dependency chain captured.</li>",s=t.stateDiff&&t.stateDiff.patches.length>0?t.stateDiff.patches.map(d=>`
       <tr>
-        <td class="mono">${i(c.path)}</td>
-        <td>${i(c.op)}</td>
-        <td><pre class="mono compact">${i(JSON.stringify(c.before,null,2)??"null")}</pre></td>
-        <td><pre class="mono compact">${i(JSON.stringify(c.after,null,2)??"null")}</pre></td>
+        <td class="mono">${n(d.path)}</td>
+        <td>${n(d.op)}</td>
+        <td><pre class="mono compact">${n(JSON.stringify(d.before,null,2)??"null")}</pre></td>
+        <td><pre class="mono compact">${n(JSON.stringify(d.after,null,2)??"null")}</pre></td>
       </tr>
-    `).join(""):'<tr><td colspan="4" class="muted">No diff patches for current state.</td></tr>',h=t.replayTrace?`
+    `).join(""):'<tr><td colspan="4" class="muted">No diff patches for current state.</td></tr>',b=t.replayTrace?`
       <article class="card full">
         <div class="muted">Replay Trace</div>
         <p class="mono">visited=${t.replayTrace.visitedStates.length} · replayTime=${t.replayTrace.replayTime}ms · consistency=${t.replayTrace.consistencyCheck} · fallback=${t.replayTrace.fallbackUsed}</p>
@@ -133,17 +145,17 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
 
       <article class="card wide">
         <div class="muted">Why Did This Happen?</div>
-        <ul class="list">${d}</ul>
+        <ul class="list">${u}</ul>
       </article>
 
       <article class="card">
         <div class="muted">Dependency Chain</div>
-        <ul class="list">${m}</ul>
+        <ul class="list">${f}</ul>
       </article>
 
       <article class="card full">
         <div class="muted">State Inspector (Exact Replay State)</div>
-        <pre class="mono">${i(JSON.stringify({intent:n.intent,ast:n.ast,violations:n.violations,plans:n.plans},null,2))}</pre>
+        <pre class="mono">${n(JSON.stringify({intent:i.intent,ast:i.ast,violations:i.violations,plans:i.plans},null,2))}</pre>
       </article>
 
       <article class="card full">
@@ -157,19 +169,19 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
               <th>After</th>
             </tr>
           </thead>
-          <tbody>${f}</tbody>
+          <tbody>${s}</tbody>
         </table>
       </article>
 
-      ${h}
+      ${b}
     </section>
-  `}function q(){if(!t)return"";const e=t.policyView.map(n=>`
+  `}function q(){if(!t)return"";const e=t.policyView.map(i=>`
     <tr>
-      <td>${A(n.decision)}</td>
-      <td>${i(n.rulesMatched.join(", "))||"none"}</td>
-      <td>${i(n.source)}</td>
+      <td>${L(i.decision)}</td>
+      <td>${n(i.rulesMatched.join(", "))||"none"}</td>
+      <td>${n(i.source)}</td>
     </tr>
-  `).join(""),a=t.pendingApprovals.length>0?t.pendingApprovals.map(n=>`<li><span class="mono">${i(n.id)}</span> ${i(n.command)}</li>`).join(""):"<li>No pending approvals.</li>";return`
+  `).join(""),a=t.pendingApprovals.length>0?t.pendingApprovals.map(i=>`<li><span class="mono">${n(i.id)}</span> ${n(i.command)}</li>`).join(""):"<li>No pending approvals.</li>";return`
     <section class="grid">
       <article class="card full">
         <div class="muted">Policy Decision Trace</div>
@@ -191,10 +203,10 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
     </section>
   `}function G(){if(!t)return"";const e=t.auditView.events.length>0?t.auditView.events.map(a=>`
       <tr>
-        <td class="mono">${i(a.timestamp)}</td>
-        <td>${i(a.actor.role)}</td>
-        <td>${i(a.action)}</td>
-        <td>${i(a.result)}</td>
+        <td class="mono">${n(a.timestamp)}</td>
+        <td>${n(a.actor.role)}</td>
+        <td>${n(a.action)}</td>
+        <td>${n(a.result)}</td>
       </tr>
     `).join(""):'<tr><td colspan="4" class="muted">No events for current filters.</td></tr>';return`
     <section class="grid">
@@ -202,11 +214,11 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
         <div style="display:flex;gap:8px;align-items:end;">
           <div>
             <label for="auditRoleFilter">Role Filter</label>
-            <input id="auditRoleFilter" type="text" placeholder="architect|analyst|conductor|enforcer" value="${i(y.role??"")}" />
+            <input id="auditRoleFilter" type="text" placeholder="architect|analyst|conductor|enforcer" value="${n(y.role??"")}" />
           </div>
           <div>
             <label for="auditEnvFilter">Environment Filter</label>
-            <input id="auditEnvFilter" type="text" placeholder="local|ci|staging|production" value="${i(y.environment??"")}" />
+            <input id="auditEnvFilter" type="text" placeholder="local|ci|staging|production" value="${n(y.environment??"")}" />
           </div>
           <button id="applyAuditFilterBtn" class="ghost">Apply</button>
         </div>
@@ -226,7 +238,7 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
         </table>
       </article>
     </section>
-  `}function J(){if(!t)return"";const e=t.macroUI.libraries.length>0?t.macroUI.libraries.map(d=>`<li>${i(d)}</li>`).join(""):"<li>No libraries installed.</li>",a=t.macroUI.macros.length>0?t.macroUI.macros.map(d=>`<li class="mono">${i(d)}</li>`).join(""):"<li>No macros discovered.</li>",n=t.macroUI.abstractions.length>0?t.macroUI.abstractions.map(d=>`<li class="mono">${i(d)}</li>`).join(""):"<li>No abstractions discovered.</li>";return`
+  `}function J(){if(!t)return"";const e=t.macroUI.libraries.length>0?t.macroUI.libraries.map(u=>`<li>${n(u)}</li>`).join(""):"<li>No libraries installed.</li>",a=t.macroUI.macros.length>0?t.macroUI.macros.map(u=>`<li class="mono">${n(u)}</li>`).join(""):"<li>No macros discovered.</li>",i=t.macroUI.abstractions.length>0?t.macroUI.abstractions.map(u=>`<li class="mono">${n(u)}</li>`).join(""):"<li>No abstractions discovered.</li>";return`
     <section class="grid">
       <article class="card">
         <div class="muted">Libraries</div>
@@ -238,7 +250,7 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
       </article>
       <article class="card">
         <div class="muted">Abstractions</div>
-        <ul class="list">${n}</ul>
+        <ul class="list">${i}</ul>
       </article>
       <article class="card full">
         <label for="macroCommandInput">Macro/Abstraction Command</label>
@@ -250,8 +262,8 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
     </section>
   `}function _(){if(!t)return"";const e=t.traces.slice(0,8).map(a=>`
       <tr>
-        <td>${i(a.action)}</td>
-        <td class="mono">${i(a.resultingDSL)}</td>
+        <td>${n(a.action)}</td>
+        <td class="mono">${n(a.resultingDSL)}</td>
       </tr>
     `).join("");return`
     <section class="grid">
@@ -274,7 +286,7 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
       </article>
       <article class="card full">
         <div class="muted">Current Control Plane (Canonical Projection)</div>
-        <pre class="mono">${i(JSON.stringify(t.controlPlane,null,2))}</pre>
+        <pre class="mono">${n(JSON.stringify(t.controlPlane,null,2))}</pre>
       </article>
       <article class="card full">
         <div class="muted">Recent UI Traceability</div>
@@ -291,4 +303,4 @@ ${n}`}function D(){typeof b<"u"&&(window.clearInterval(b),b=void 0)}function F()
         </table>
       </article>
     </section>
-  `}function K(){const e=document.getElementById("runDefineBtn"),a=document.getElementById("runPlanBtn"),n=document.getElementById("runPreviewBtn"),d=document.getElementById("runApproveBtn"),m=document.getElementById("runExecuteBtn"),f=document.getElementById("runAuditBtn"),h=document.getElementById("applyAuditFilterBtn"),c=document.getElementById("runMacroCommandBtn"),$=document.getElementById("timelinePlayBtn"),T=document.getElementById("timelinePauseBtn"),k=document.getElementById("timelineStepBackBtn"),M=document.getElementById("timelineStepForwardBtn");e instanceof HTMLButtonElement&&e.addEventListener("click",()=>{const r=document.getElementById("intentInput"),l=r instanceof HTMLInputElement?r.value.trim():"";o({type:"run-workflow",role:s(),step:"define-intent",payload:{intent:l}})}),a instanceof HTMLButtonElement&&a.addEventListener("click",()=>{const r=document.getElementById("planGoalInput"),l=r instanceof HTMLInputElement?r.value.trim():"";o({type:"run-workflow",role:s(),step:"plan",payload:l.length>0?{goal:l}:{}})}),n instanceof HTMLButtonElement&&n.addEventListener("click",()=>{const r=document.getElementById("previewPlanInput"),l=r instanceof HTMLInputElement?r.value.trim():"";o({type:"run-workflow",role:s(),step:"preview",payload:l.length>0?{planId:l}:{}})}),d instanceof HTMLButtonElement&&d.addEventListener("click",()=>{const r=document.getElementById("approveInput"),l=r instanceof HTMLInputElement?r.value.trim():"";if(!l){E("Approve requires diff id or plan id.");return}const w=l.startsWith("diff-")?{diffId:l}:{planId:l};o({type:"run-workflow",role:s(),step:"approve",payload:w})}),m instanceof HTMLButtonElement&&m.addEventListener("click",()=>{const r=document.getElementById("executePlanInput"),l=r instanceof HTMLInputElement?r.value.trim():"";o({type:"run-workflow",role:s(),step:"execute",payload:l.length>0?{planId:l}:{}})}),f instanceof HTMLButtonElement&&f.addEventListener("click",()=>{o({type:"run-workflow",role:s(),step:"audit"})}),h instanceof HTMLButtonElement&&h.addEventListener("click",()=>{const r=document.getElementById("auditRoleFilter"),l=document.getElementById("auditEnvFilter");y={...r instanceof HTMLInputElement&&r.value.trim().length>0?{role:r.value.trim()}:{},...l instanceof HTMLInputElement&&l.value.trim().length>0?{environment:l.value.trim()}:{}},o({type:"refresh",role:s(),filters:y})}),c instanceof HTMLButtonElement&&c.addEventListener("click",()=>{const r=document.getElementById("macroCommandInput");if(!(r instanceof HTMLInputElement))return;const l=r.value.trim();l.length!==0&&o({type:"run-dsl",role:s(),dsl:l})}),$ instanceof HTMLButtonElement&&$.addEventListener("click",()=>{o({type:"replay-control",role:s(),control:"play"})}),T instanceof HTMLButtonElement&&T.addEventListener("click",()=>{o({type:"replay-control",role:s(),control:"pause"})}),k instanceof HTMLButtonElement&&k.addEventListener("click",()=>{o({type:"replay-control",role:s(),control:"step-backward"})}),M instanceof HTMLButtonElement&&M.addEventListener("click",()=>{o({type:"replay-control",role:s(),control:"step-forward"})}),document.querySelectorAll(".timeline-node[data-timeline-index]").forEach(r=>{r.addEventListener("click",()=>{const l=r.dataset.timelineIndex;if(!l)return;const w=Number.parseInt(l,10);Number.isFinite(w)&&o({type:"replay-control",role:s(),control:"jump",index:w})})})}function H(){if(!t){p.innerHTML="";return}u==="dashboard"?p.innerHTML=N():u==="workspace"?p.innerHTML=_():u==="plan-view"?p.innerHTML=U():u==="timeline-view"?p.innerHTML=W():u==="policy-view"?p.innerHTML=q():u==="audit-view"?p.innerHTML=G():p.innerHTML=J(),K()}function R(e){t=e,I.value=e.activeRole,V(),H(),F()}function z(e){e.ok?E(e.message):E(e.error?`${e.error.source}: ${e.error.message}`:e.message),R(e.snapshot)}window.addEventListener("message",e=>{const a=e.data;if(a.type==="snapshot"){R(a.payload);return}a.type==="action-result"&&z(a.payload)});P.addEventListener("click",()=>{const e=x.value.trim();e.length!==0&&o({type:"run-dsl",role:s(),dsl:e})});S.addEventListener("click",()=>{o({type:"refresh",role:s(),filters:y})});I.addEventListener("change",()=>{o({type:"refresh",role:s(),filters:y})});L.postMessage({type:"ready"});
+  `}function K(){const e=document.getElementById("runDefineBtn"),a=document.getElementById("runPlanBtn"),i=document.getElementById("runPreviewBtn"),u=document.getElementById("runApproveBtn"),f=document.getElementById("runExecuteBtn"),s=document.getElementById("runAuditBtn"),b=document.getElementById("applyAuditFilterBtn"),d=document.getElementById("runMacroCommandBtn"),I=document.getElementById("timelinePlayBtn"),k=document.getElementById("timelinePauseBtn"),M=document.getElementById("timelineStepBackBtn"),P=document.getElementById("timelineStepForwardBtn");e instanceof HTMLButtonElement&&e.addEventListener("click",()=>{const r=document.getElementById("intentInput"),l=r instanceof HTMLInputElement?r.value.trim():"";c({type:"run-workflow",role:o(),step:"define-intent",payload:{intent:l}})}),a instanceof HTMLButtonElement&&a.addEventListener("click",()=>{const r=document.getElementById("planGoalInput"),l=r instanceof HTMLInputElement?r.value.trim():"";c({type:"run-workflow",role:o(),step:"plan",payload:l.length>0?{goal:l}:{}})}),i instanceof HTMLButtonElement&&i.addEventListener("click",()=>{const r=document.getElementById("previewPlanInput"),l=r instanceof HTMLInputElement?r.value.trim():"";c({type:"run-workflow",role:o(),step:"preview",payload:l.length>0?{planId:l}:{}})}),u instanceof HTMLButtonElement&&u.addEventListener("click",()=>{const r=document.getElementById("approveInput"),l=r instanceof HTMLInputElement?r.value.trim():"";if(!l){E("Approve requires diff id or plan id.");return}const w=l.startsWith("diff-")?{diffId:l}:{planId:l};c({type:"run-workflow",role:o(),step:"approve",payload:w})}),f instanceof HTMLButtonElement&&f.addEventListener("click",()=>{const r=document.getElementById("executePlanInput"),l=r instanceof HTMLInputElement?r.value.trim():"";c({type:"run-workflow",role:o(),step:"execute",payload:l.length>0?{planId:l}:{}})}),s instanceof HTMLButtonElement&&s.addEventListener("click",()=>{c({type:"run-workflow",role:o(),step:"audit"})}),b instanceof HTMLButtonElement&&b.addEventListener("click",()=>{const r=document.getElementById("auditRoleFilter"),l=document.getElementById("auditEnvFilter");y={...r instanceof HTMLInputElement&&r.value.trim().length>0?{role:r.value.trim()}:{},...l instanceof HTMLInputElement&&l.value.trim().length>0?{environment:l.value.trim()}:{}},c({type:"refresh",role:o(),filters:y})}),d instanceof HTMLButtonElement&&d.addEventListener("click",()=>{const r=document.getElementById("macroCommandInput");if(!(r instanceof HTMLInputElement))return;const l=r.value.trim();l.length!==0&&c({type:"run-dsl",role:o(),dsl:l})}),I instanceof HTMLButtonElement&&I.addEventListener("click",()=>{c({type:"replay-control",role:o(),control:"play"})}),k instanceof HTMLButtonElement&&k.addEventListener("click",()=>{c({type:"replay-control",role:o(),control:"pause"})}),M instanceof HTMLButtonElement&&M.addEventListener("click",()=>{c({type:"replay-control",role:o(),control:"step-backward"})}),P instanceof HTMLButtonElement&&P.addEventListener("click",()=>{c({type:"replay-control",role:o(),control:"step-forward"})}),document.querySelectorAll(".timeline-node[data-timeline-index]").forEach(r=>{r.addEventListener("click",()=>{const l=r.dataset.timelineIndex;if(!l)return;const w=Number.parseInt(l,10);Number.isFinite(w)&&c({type:"replay-control",role:o(),control:"jump",index:w})})})}function H(){if(!t){m.innerHTML="";return}p==="dashboard"?m.innerHTML=V():p==="workspace"?m.innerHTML=_():p==="plan-view"?m.innerHTML=U():p==="timeline-view"?m.innerHTML=W():p==="policy-view"?m.innerHTML=q():p==="audit-view"?m.innerHTML=G():m.innerHTML=J(),K()}function R(e){t=e,$.value=e.activeRole,N(),H(),D()}function z(e){e.ok?E(e.message):E(e.error?`${e.error.source}: ${e.error.message}`:e.message),R(e.snapshot)}window.addEventListener("message",e=>{const a=e.data;if(a.type==="snapshot"){R(a.payload);return}a.type==="action-result"&&z(a.payload)});S.addEventListener("click",()=>{const e=x.value.trim();e.length!==0&&c({type:"run-dsl",role:o(),dsl:e})});A.addEventListener("click",()=>{c({type:"refresh",role:o(),filters:y})});$.addEventListener("change",()=>{c({type:"refresh",role:o(),filters:y})});T.postMessage({type:"ready"});

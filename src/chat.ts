@@ -61,6 +61,8 @@ import { formatTransactionVerificationReport, runTransactionVerification } from 
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
 import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
+import { formatProductionVerificationReport, runProductionVerification } from "./core/productionVerification.js";
+import { formatPhase8HardeningReport, runPhase8Hardening } from "./core/phase8Hardening.js";
 import { CompilerPipelineError, compileInput, formatCompilerErrors } from "./core/compilerPipeline.js";
 import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
 import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
@@ -298,7 +300,9 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --contracts",
         "- @choir verify --policy",
         "- @choir verify --orchestration",
+        "- @choir verify --production",
         "- @choir verify --compiler",
+        "- @choir verify --full",
         "- @choir control",
         "- @choir timeline",
         "- @choir list abstractions",
@@ -746,9 +750,25 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         return;
                     }
 
+                    if (verifyChatCommand.mode === "production") {
+                        const report = await runProductionVerification();
+                        stream.markdown(formatProductionVerificationReport(report));
+                        return;
+                    }
+
                     if (verifyChatCommand.mode === "compiler") {
                         const report = await runCompilerVerification();
                         stream.markdown(formatCompilerVerificationReport(report));
+                        return;
+                    }
+
+                    if (verifyChatCommand.mode === "full-system") {
+                        const report = await runPhase8Hardening({
+                            mode: "full",
+                            workspaceRoot,
+                            throwOnFailure: false,
+                        });
+                        stream.markdown(formatPhase8HardeningReport(report));
                         return;
                     }
 

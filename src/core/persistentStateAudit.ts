@@ -64,9 +64,14 @@ export type PersistableTransactionContext = {
 const STATE_VERSION = "3.0.0";
 const SNAPSHOT_INTERVAL = 10;
 const GENESIS_HASH = "GENESIS";
+const UNINITIALIZED_HASH = "__UNINITIALIZED__";
 
 function choirDir(root: string): string {
   return path.join(root, ".choir");
+}
+
+function recoveryStatePath(root: string): string {
+  return path.join(choirDir(root), "state.recovery.json");
 }
 
 function statePath(root: string): string {
@@ -137,41 +142,55 @@ function ensureStorage(root: string): void {
     fs.writeFileSync(auditPath(root), "", "utf-8");
   }
 
-  if (!fs.existsSync(statePath(root))) {
-    const initial: PersistedState = {
-      version: STATE_VERSION,
-      currentHash: deterministicHash({}),
-      logicalTime: 0,
-    };
-    atomicWriteJson(statePath(root), `${JSON.stringify(initial, null, 2)}\n`);
+  if (fs.existsSync(recoveryStatePath(root))) {
     return;
   }
 
-  const existingRaw = fs.readFileSync(statePath(root), "utf-8");
-  const existing = JSON.parse(existingRaw) as Record<string, unknown>;
-  const currentHash = typeof existing.currentHash === "string" && existing.currentHash.trim().length > 0
-    ? existing.currentHash
-    : typeof existing.stateHash === "string" && existing.stateHash.trim().length > 0
-      ? existing.stateHash
-      : deterministicHash({});
-  const logicalTime = typeof existing.logicalTime === "number" && Number.isFinite(existing.logicalTime) && existing.logicalTime >= 0
-    ? Math.floor(existing.logicalTime)
-    : 0;
-  const version = typeof existing.version === "string" && existing.version.trim().length > 0
-    ? existing.version
-    : STATE_VERSION;
+  const legacyPath = statePath(root);
+  let migrated: PersistedState | null = null;
 
-  if (
-    typeof existing.currentHash !== "string"
-    || typeof existing.logicalTime !== "number"
-  ) {
-    atomicWriteJson(statePath(root), `${JSON.stringify({
-      ...existing,
-      version,
-      currentHash,
-      logicalTime,
-    }, null, 2)}\n`);
+  if (fs.existsSync(legacyPath)) {
+    try {
+      const legacyRaw = fs.readFileSync(legacyPath, "utf-8");
+      const legacy = JSON.parse(legacyRaw) as Record<string, unknown>;
+      const hasStatePlaneShape = (
+        Object.prototype.hasOwnProperty.call(legacy, "intent")
+        || Object.prototype.hasOwnProperty.call(legacy, "ast")
+        || Object.prototype.hasOwnProperty.call(legacy, "graph")
+        || Object.prototype.hasOwnProperty.call(legacy, "execution")
+        || Object.prototype.hasOwnProperty.call(legacy, "stateHash")
+      );
+
+      if (!hasStatePlaneShape) {
+        const currentHash = typeof legacy.currentHash === "string" && legacy.currentHash.trim().length > 0
+          ? legacy.currentHash
+          : "";
+        const logicalTime = typeof legacy.logicalTime === "number" && Number.isFinite(legacy.logicalTime) && legacy.logicalTime >= 0
+          ? Math.floor(legacy.logicalTime)
+          : -1;
+
+        if (currentHash.length > 0 && logicalTime >= 0) {
+          migrated = {
+            version: typeof legacy.version === "string" && legacy.version.trim().length > 0
+              ? legacy.version
+              : STATE_VERSION,
+            currentHash,
+            logicalTime,
+          };
+        }
+      }
+    } catch {
+      migrated = null;
+    }
   }
+
+  const initial: PersistedState = migrated ?? {
+    version: STATE_VERSION,
+    currentHash: UNINITIALIZED_HASH,
+    logicalTime: 0,
+  };
+
+  atomicWriteJson(recoveryStatePath(root), `${JSON.stringify(initial, null, 2)}\n`);
 }
 
 function parsePersistedState(value: unknown): PersistedState {
@@ -185,7 +204,7 @@ function parsePersistedState(value: unknown): PersistedState {
     : STATE_VERSION;
   const currentHash = typeof record.currentHash === "string" && record.currentHash.trim().length > 0
     ? record.currentHash
-    : deterministicHash({});
+    : UNINITIALIZED_HASH;
   const logicalTime = typeof record.logicalTime === "number" && Number.isFinite(record.logicalTime) && record.logicalTime >= 0
     ? Math.floor(record.logicalTime)
     : 0;
@@ -293,9 +312,13 @@ function parseAuditRecord(value: unknown): AuditRecord | null {
 
 export function loadPersistedState(root: string): PersistedState {
   ensureStorage(root);
-  const raw = fs.readFileSync(statePath(root), "utf-8");
+  const raw = fs.readFileSync(recoveryStatePath(root), "utf-8");
   const parsed = JSON.parse(raw) as unknown;
   return parsePersistedState(parsed);
+}
+
+function writePersistedState(root: string, state: PersistedState): void {
+  atomicWriteJson(recoveryStatePath(root), `${JSON.stringify(state, null, 2)}\n`);
 }
 
 export function loadTransitionRecords(root: string): TransitionRecord[] {
@@ -438,11 +461,34 @@ export function replayTo(root: string, logicalTime: number): GlobalState {
 
 export function replayFromLogs(root: string): GlobalState {
   const persisted = loadPersistedState(root);
-  const state = replayTo(root, persisted.logicalTime);
+  const transitions = loadTransitionRecords(root);
+  const lastTransitionTime = transitions.length > 0
+    ? Math.max(...transitions.map((entry) => entry.logicalTime))
+    : 0;
+  const replayLogicalTime = Math.max(persisted.logicalTime, lastTransitionTime);
+
+  const state = replayTo(root, replayLogicalTime);
   const hash = deterministicHash(state);
+
+  if (persisted.currentHash === UNINITIALIZED_HASH) {
+    writePersistedState(root, {
+      version: persisted.version,
+      currentHash: hash,
+      logicalTime: replayLogicalTime,
+    });
+    return state;
+  }
 
   if (hash !== persisted.currentHash) {
     throw new Error(`Replay mismatch: expected ${persisted.currentHash} but reconstructed ${hash}`);
+  }
+
+  if (persisted.logicalTime !== replayLogicalTime) {
+    writePersistedState(root, {
+      version: persisted.version,
+      currentHash: persisted.currentHash,
+      logicalTime: replayLogicalTime,
+    });
   }
 
   return state;
@@ -507,18 +553,11 @@ export function recordCommittedTransaction(root: string, ctx: PersistableTransac
   if (existingTransitions.length === 0 && existingSnapshots.length === 0) {
     appendSnapshot(root, ctx.baseState, 0);
 
-    const statePayload = fs.existsSync(statePath(root))
-      ? JSON.parse(fs.readFileSync(statePath(root), "utf-8")) as Record<string, unknown>
-      : {};
-    const bootstrapped = {
-      ...statePayload,
-      version: typeof statePayload.version === "string" && statePayload.version.trim().length > 0
-        ? statePayload.version
-        : STATE_VERSION,
+    writePersistedState(root, {
+      version: persisted.version,
       currentHash: deterministicHash(ctx.baseState),
       logicalTime: 0,
-    };
-    atomicWriteJson(statePath(root), `${JSON.stringify(bootstrapped, null, 2)}\n`);
+    });
   }
 
   const lastLogicalTime = Math.max(
@@ -569,24 +608,13 @@ export function recordCommittedTransaction(root: string, ctx: PersistableTransac
     appendSnapshot(root, replayState, nextLogicalTime);
   }
 
-  const statePayload = fs.existsSync(statePath(root))
-    ? JSON.parse(fs.readFileSync(statePath(root), "utf-8")) as Record<string, unknown>
-    : {};
   const nextPersisted: PersistedState = {
-    version: typeof statePayload.version === "string" && statePayload.version.trim().length > 0
-      ? statePayload.version
-      : STATE_VERSION,
+    version: persisted.version,
     currentHash: replayedHash,
     logicalTime: nextLogicalTime,
   };
 
-  const nextStateJson = {
-    ...statePayload,
-    version: nextPersisted.version,
-    currentHash: nextPersisted.currentHash,
-    logicalTime: nextPersisted.logicalTime,
-  };
-  atomicWriteJson(statePath(root), `${JSON.stringify(nextStateJson, null, 2)}\n`);
+  writePersistedState(root, nextPersisted);
   appendAudit(root, {
     type: "state",
     state: nextPersisted,

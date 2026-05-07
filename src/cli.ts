@@ -11,6 +11,8 @@ import { formatTransactionVerificationReport, runTransactionVerification } from 
 import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
 import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
+import { formatProductionVerificationReport, runProductionVerification } from "./core/productionVerification.js";
+import { formatPhase8HardeningReport, runPhase8Hardening } from "./core/phase8Hardening.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./core/propertyChaosHarness.js";
 import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
@@ -29,7 +31,9 @@ function usage(): string {
     "  choir verify --state",
     "  choir verify --policy",
     "  choir verify --orchestration",
+    "  choir verify --production",
     "  choir verify --compiler",
+    "  choir verify --full",
     "  choir verify --property [--seed <n>]",
     "  choir verify --chaos [none|light|moderate|extreme] [--seed <n>]",
   ].join("\n");
@@ -148,9 +152,27 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (remaining.length === 1 && remaining[0] === "--production") {
+        const report = await runProductionVerification();
+        console.log(formatProductionVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
       if (remaining.length === 1 && remaining[0] === "--compiler") {
         const report = await runCompilerVerification();
         console.log(formatCompilerVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--full") {
+        const report = await runPhase8Hardening({
+          mode: "full",
+          workspaceRoot: process.cwd(),
+          throwOnFailure: false,
+        });
+        console.log(formatPhase8HardeningReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }

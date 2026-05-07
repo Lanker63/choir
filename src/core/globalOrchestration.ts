@@ -11,6 +11,22 @@ import {
 } from "./deterministicCore.js";
 import { SystemState } from "./distributedSync.js";
 import { recordCommittedTransaction } from "./persistentStateAudit.js";
+import {
+  appendStructuredLog,
+  circuitAllow,
+  createTrace,
+  emitTelemetryEvent,
+  evaluateAlerts,
+  markPolicyBypassAttempt,
+  rateLimitAllow,
+  recordCircuitFailure,
+  recordCircuitSuccess,
+  recordExecutionOutcome,
+  recordPolicyOutcome,
+  updateTraceStatus,
+  validatePerformance,
+  withExecutionTimeout,
+} from "./productionReadiness.js";
 import { hasApprovalForPreview, upsertPendingPreviewApproval } from "./state.js";
 
 export type RepoTask = {
@@ -3461,6 +3477,19 @@ export function evaluateGlobalPolicies(plan: GlobalPlan, policies: GlobalPolicyR
     ? "deny"
     : (requiresApproval ? "require-approval" : "allow");
 
+  if (decision === "allow" && violations.length > 0) {
+    markPolicyBypassAttempt({
+      planId: plan.id,
+      violations: sortedUnique(violations),
+      rules: sortedUnique(appliedPolicyIds),
+    });
+  }
+
+  recordPolicyOutcome({
+    denied: decision === "deny",
+    source: "evaluateGlobalPolicies",
+  });
+
   return {
     allowed: decision === "allow",
     requiresApproval: decision === "require-approval",
@@ -3759,12 +3788,42 @@ async function executeIsolatedRollback(
   };
 }
 
+function isExecutionBlockedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.startsWith("Global execution blocked:");
+}
+
+function isGuardBlockedViolation(violations: string[]): boolean {
+  return violations.some((entry) =>
+    entry.startsWith("Execution blocked:")
+    || entry.includes("requires approval")
+    || entry.includes("rate limit exceeded")
+    || entry.includes("circuit breaker open")
+  );
+}
+
 export async function executeGlobalPlan(
   plan: GlobalPlan,
   options: ExecuteGlobalPlanOptions
 ): Promise<GlobalExecutionResult> {
+  const observabilityTrace = createTrace(
+    "global-execution",
+    ["compile", "validate", "policy", "orchestrate", "execute", "commit"],
+    {
+      planId: plan.id,
+      taskCount: plan.tasks.length,
+    }
+  );
+  emitTelemetryEvent("execution", {
+    phase: "start",
+    source: "executeGlobalPlan",
+    planId: plan.id,
+    taskCount: plan.tasks.length,
+  });
+
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
   const baseStates = stateForRepos(normalizedRepos);
+  const circuitKey = `executeGlobalPlan:${plan.id}`;
   const dependencyGraph = buildRollbackDependencyGraph(plan);
   const planStages = (() => {
     try {
@@ -3773,15 +3832,142 @@ export async function executeGlobalPlan(
       return [];
     }
   })();
+
+  const finalizeGlobalResult = (result: GlobalExecutionResult): GlobalExecutionResult => {
+    recordExecutionOutcome({
+      success: result.success,
+      rolledBack: result.rolledBack,
+      source: "executeGlobalPlan",
+    });
+
+    updateTraceStatus(observabilityTrace.traceId, result.success ? "ok" : "error", {
+      planId: plan.id,
+      rolledBack: String(result.rolledBack),
+      success: String(result.success),
+    });
+
+    if (result.success) {
+      recordCircuitSuccess(circuitKey);
+      appendStructuredLog("info", "Global plan execution completed", {
+        planId: plan.id,
+        rolledBack: result.rolledBack,
+        repos: result.audit.reposInvolved,
+      });
+    } else {
+      if (isGuardBlockedViolation(result.audit.violations)) {
+        appendStructuredLog("warn", "Global plan execution blocked by guard", {
+          planId: plan.id,
+          rolledBack: result.rolledBack,
+          violations: result.audit.violations,
+        });
+      } else {
+        recordCircuitFailure(circuitKey);
+        appendStructuredLog("error", "Global plan execution failed", {
+          planId: plan.id,
+          rolledBack: result.rolledBack,
+          violations: result.audit.violations,
+        });
+      }
+    }
+
+    evaluateAlerts(options.stateRoot);
+    return result;
+  };
+
+  const performance = validatePerformance(plan);
+  if (!performance.valid) {
+    return finalizeGlobalResult({
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: [],
+        violations: sortedUnique([
+          ...performance.errors,
+          "Execution blocked: performance validation failed",
+        ]),
+      },
+      trace: {
+        plan,
+        stages: cloneUnknown(planStages),
+        executionOrder: [],
+        failures: sortedUnique([
+          ...performance.errors,
+          "Execution blocked: performance validation failed",
+        ]),
+        policyDecisions: [],
+        convergence: false,
+      },
+    });
+  }
+
+  if (!rateLimitAllow(`executeGlobalPlan:${plan.id}`, 250, 1000)) {
+    return finalizeGlobalResult({
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: [],
+        violations: ["Execution blocked: rate limit exceeded"],
+      },
+      trace: {
+        plan,
+        stages: cloneUnknown(planStages),
+        executionOrder: [],
+        failures: ["Execution blocked: rate limit exceeded"],
+        policyDecisions: [],
+        convergence: false,
+      },
+    });
+  }
+
+  if (!circuitAllow(circuitKey, 3, 200)) {
+    return finalizeGlobalResult({
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: [],
+        violations: ["Execution blocked: circuit breaker open"],
+      },
+      trace: {
+        plan,
+        stages: cloneUnknown(planStages),
+        executionOrder: [],
+        failures: ["Execution blocked: circuit breaker open"],
+        policyDecisions: [],
+        convergence: false,
+      },
+    });
+  }
+
+  try {
   const simulation = await simulatePlan(plan, options);
   const simulationPolicy = simulation.policyDecisions[0];
 
   if (simulationPolicy && !simulationPolicy.allowed && !simulationPolicy.requiresApproval) {
+    markPolicyBypassAttempt({
+      planId: plan.id,
+      policyDecisions: simulationPolicy.policyDecisions,
+      violations: simulationPolicy.violations,
+    });
+    emitTelemetryEvent("failure", {
+      source: "executeGlobalPlan",
+      reason: "policy-denied",
+      planId: plan.id,
+      policyDecisions: simulationPolicy.policyDecisions,
+    });
     blockGlobalExecution(simulationPolicy);
   }
 
   if (!simulation.success) {
-    return {
+    return finalizeGlobalResult({
       success: false,
       rolledBack: false,
       finalStates: cloneState(baseStates),
@@ -3806,7 +3992,7 @@ export async function executeGlobalPlan(
         convergence: false,
         deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
       },
-    };
+    });
   }
 
   let approvedPreviewHash: string | undefined;
@@ -3826,7 +4012,7 @@ export async function executeGlobalPlan(
         upsertPendingPreviewApproval(options.stateRoot, previewHash, `execute ${plan.id}`);
       }
 
-      return {
+      return finalizeGlobalResult({
         success: false,
         rolledBack: false,
         finalStates: cloneState(baseStates),
@@ -3851,16 +4037,46 @@ export async function executeGlobalPlan(
           convergence: false,
           deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
         },
-      };
+      });
     }
 
     approvedPreviewHash = previewHash;
   }
 
-  const execution = await runGlobalPlanInternal(plan, {
-    ...options,
-    approvedPreviewHash,
-  }, "execution");
+  let execution: InternalRunResult;
+  try {
+    execution = await withExecutionTimeout(120000, async () => runGlobalPlanInternal(plan, {
+      ...options,
+      approvedPreviewHash,
+    }, "execution"));
+  } catch (error) {
+    return finalizeGlobalResult({
+      success: false,
+      rolledBack: false,
+      finalStates: cloneState(baseStates),
+      audit: {
+        planId: plan.id,
+        reposInvolved: normalizedRepos.map((repo) => repo.id),
+        policiesApplied: simulationPolicy?.appliedPolicyIds ?? [],
+        violations: sortedUnique([
+          ...simulation.violations,
+          `Execution blocked: ${error instanceof Error ? error.message : String(error)}`,
+        ]),
+      },
+      trace: {
+        plan,
+        stages: cloneUnknown(planStages),
+        executionOrder: simulation.trace.stepsExecuted,
+        failures: sortedUnique([
+          ...simulation.violations,
+          `Execution blocked: ${error instanceof Error ? error.message : String(error)}`,
+        ]),
+        policyDecisions: simulationPolicy?.policyDecisions ?? [],
+        convergence: false,
+        deterministicTrace: simulation.trace.deterministicTrace ? cloneUnknown(simulation.trace.deterministicTrace) : undefined,
+      },
+    });
+  }
 
   if (!execution.success) {
     const failedUnit = execution.failure?.unitId ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
@@ -3882,7 +4098,7 @@ export async function executeGlobalPlan(
       ...isolatedRollback.validation.errors,
     ]);
 
-    return {
+    return finalizeGlobalResult({
       success: false,
       rolledBack: true,
       finalStates,
@@ -3903,7 +4119,7 @@ export async function executeGlobalPlan(
         deterministicTrace: cloneUnknown(execution.deterministicTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
-    };
+    });
   }
 
   const expectedState = simulation.finalState;
@@ -3932,7 +4148,7 @@ export async function executeGlobalPlan(
       divergentUnits
     );
     const rolledBackStates = cloneState(isolatedRollback.finalState);
-    return {
+    return finalizeGlobalResult({
       success: false,
       rolledBack: true,
       finalStates: rolledBackStates,
@@ -3967,10 +4183,10 @@ export async function executeGlobalPlan(
         deterministicTrace: cloneUnknown(execution.deterministicTrace),
       },
       rollbackTrace: isolatedRollback.rollbackTrace,
-    };
+    });
   }
 
-  return {
+  return finalizeGlobalResult({
     success: execution.success,
     rolledBack: execution.rolledBack,
     finalStates: cloneState(execution.finalStates),
@@ -3990,7 +4206,33 @@ export async function executeGlobalPlan(
       transactionTrace: cloneUnknown(execution.transactionTrace),
       deterministicTrace: cloneUnknown(execution.deterministicTrace),
     },
-  };
+  });
+  } catch (error) {
+    if (isExecutionBlockedError(error)) {
+      updateTraceStatus(observabilityTrace.traceId, "error", {
+        planId: plan.id,
+        blocked: "true",
+      });
+      appendStructuredLog("warn", "Global plan execution blocked by policy", {
+        planId: plan.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      evaluateAlerts(options.stateRoot);
+      throw error;
+    }
+
+    recordCircuitFailure(circuitKey);
+    updateTraceStatus(observabilityTrace.traceId, "error", {
+      planId: plan.id,
+      thrown: "true",
+    });
+    appendStructuredLog("error", "Global plan execution threw", {
+      planId: plan.id,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    evaluateAlerts(options.stateRoot);
+    throw error;
+  }
 }
 
 function normalizePercent(value: number): number {
@@ -4352,9 +4594,26 @@ export async function executeRolloutPlan(
   strategy: RolloutStrategy,
   config?: Partial<RolloutConfig>
 ): Promise<RolloutExecutionResult> {
+  const observabilityTrace = createTrace(
+    "rollout-execution",
+    ["compile", "validate", "policy", "orchestrate", "execute", "commit"],
+    {
+      planId: plan.id,
+      strategy: strategy.type,
+      taskCount: plan.tasks.length,
+    }
+  );
+  emitTelemetryEvent("execution", {
+    phase: "rollout-start",
+    source: "executeRolloutPlan",
+    planId: plan.id,
+    strategy: strategy.type,
+  });
+
   const effectiveConfig = mergeRolloutConfig(config);
   const normalizedRepos = options.repos.map((repo) => normalizeRepo(repo)).sort((left, right) => left.id.localeCompare(right.id));
   const baseState = stateForRepos(normalizedRepos);
+  const circuitKey = `executeRolloutPlan:${plan.id}`;
   const dependencyGraph = buildRollbackDependencyGraph(plan);
   const trace: RolloutTrace = {
     stages: buildStages(plan, strategy),
@@ -4365,15 +4624,99 @@ export async function executeRolloutPlan(
     deterministicTraces: [],
   };
 
+  const finalizeRolloutResult = (result: RolloutExecutionResult): RolloutExecutionResult => {
+    recordExecutionOutcome({
+      success: result.success,
+      rolledBack: result.rolledBack,
+      source: "executeRolloutPlan",
+    });
+
+    updateTraceStatus(observabilityTrace.traceId, result.success ? "ok" : "error", {
+      planId: plan.id,
+      stopped: String(result.stopped),
+      rolledBack: String(result.rolledBack),
+    });
+
+    if (result.success) {
+      recordCircuitSuccess(circuitKey);
+      appendStructuredLog("info", "Rollout execution completed", {
+        planId: plan.id,
+        strategy: strategy.type,
+        stages: result.trace.completedStages,
+      });
+    } else {
+      const guardBlocked = result.failures.some((entry) =>
+        entry.startsWith("Rollout blocked:")
+        || entry.includes("rate limit exceeded")
+        || entry.includes("circuit breaker open")
+      );
+
+      if (guardBlocked) {
+        appendStructuredLog("warn", "Rollout execution blocked by guard", {
+          planId: plan.id,
+          strategy: strategy.type,
+          failures: result.failures,
+        });
+      } else {
+        recordCircuitFailure(circuitKey);
+        appendStructuredLog("error", "Rollout execution failed", {
+          planId: plan.id,
+          strategy: strategy.type,
+          failures: result.failures,
+        });
+      }
+    }
+
+    evaluateAlerts(options.stateRoot);
+    return result;
+  };
+
+  const performance = validatePerformance(plan);
+  if (!performance.valid) {
+    return finalizeRolloutResult({
+      success: false,
+      stopped: true,
+      rolledBack: false,
+      finalStates: cloneState(baseState),
+      trace,
+      failures: sortedUnique([
+        ...performance.errors,
+        "Rollout blocked: performance validation failed",
+      ]),
+    });
+  }
+
+  if (!rateLimitAllow(`executeRolloutPlan:${plan.id}`, 250, 1000)) {
+    return finalizeRolloutResult({
+      success: false,
+      stopped: true,
+      rolledBack: false,
+      finalStates: cloneState(baseState),
+      trace,
+      failures: ["Rollout blocked: rate limit exceeded"],
+    });
+  }
+
+  if (!circuitAllow(circuitKey, 3, 200)) {
+    return finalizeRolloutResult({
+      success: false,
+      stopped: true,
+      rolledBack: false,
+      finalStates: cloneState(baseState),
+      trace,
+      failures: ["Rollout blocked: circuit breaker open"],
+    });
+  }
+
   if (trace.stages.length === 0) {
-    return {
+    return finalizeRolloutResult({
       success: true,
       stopped: false,
       rolledBack: false,
       finalStates: cloneState(baseState),
       trace,
       failures: [],
-    };
+    });
   }
 
   const simulation = await simulatePlan(plan, {
@@ -4382,7 +4725,7 @@ export async function executeRolloutPlan(
   });
 
   if (!simulation.success) {
-    return {
+    return finalizeRolloutResult({
       success: false,
       stopped: true,
       rolledBack: false,
@@ -4392,7 +4735,7 @@ export async function executeRolloutPlan(
         ...simulation.violations,
         "Rollout blocked: pre-rollout simulation failed",
       ]),
-    };
+    });
   }
 
   const rolloutContext = executionContextFromInputHash(hashInput({
@@ -4410,14 +4753,14 @@ export async function executeRolloutPlan(
     });
 
     if (!approved) {
-      return {
+      return finalizeRolloutResult({
         success: false,
         stopped: true,
         rolledBack: false,
         finalStates: cloneState(baseState),
         trace,
         failures: ["Rollout blocked: approval required"],
-      };
+      });
     }
   }
 
@@ -4437,14 +4780,14 @@ export async function executeRolloutPlan(
 
       if (!approved) {
         trace.failedStage = stage.id;
-        return {
+        return finalizeRolloutResult({
           success: false,
           stopped: true,
           rolledBack: false,
           finalStates: cloneState(currentState),
           trace,
           failures: ["Rollout blocked: stage approval required"],
-        };
+        });
       }
     }
 
@@ -4475,14 +4818,14 @@ export async function executeRolloutPlan(
       trace.failedStage = stage.id;
       if (!effectiveConfig.autoRollback) {
         trace.canResume = false;
-        return {
+        return finalizeRolloutResult({
           success: false,
           stopped: true,
           rolledBack: false,
           finalStates: cloneState(stageResult.finalStates),
           trace,
           failures: stageValidation.errors,
-        };
+        });
       }
 
       const failedUnit = stageResult.failure?.unitId ?? stage.units[0] ?? "workspace:root";
@@ -4527,14 +4870,14 @@ export async function executeRolloutPlan(
         continue;
       }
 
-      return {
+      return finalizeRolloutResult({
         success: false,
         stopped: true,
         rolledBack: true,
         finalStates: cloneState(currentState),
         trace,
         failures: rollbackFailures,
-      };
+      });
     }
 
     currentState = cloneState(stageResult.finalStates);
@@ -4558,7 +4901,7 @@ export async function executeRolloutPlan(
       divergentUnits
     );
     trace.rollbackTraces.push(isolatedRollback.rollbackTrace);
-    return {
+    return finalizeRolloutResult({
       success: false,
       stopped: true,
       rolledBack: true,
@@ -4569,15 +4912,15 @@ export async function executeRolloutPlan(
         ...isolatedRollback.isolation.errors,
         ...isolatedRollback.validation.errors,
       ]),
-    };
+    });
   }
 
-  return {
+  return finalizeRolloutResult({
     success: true,
     stopped: false,
     rolledBack: false,
     finalStates: cloneState(currentState),
     trace,
     failures: [],
-  };
+  });
 }

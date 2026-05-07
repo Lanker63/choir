@@ -144,6 +144,27 @@ Hard constraints:
 - simulation mode never commits
 - rollback restores pre-execution state on failure
 
+## Production Readiness and Observability Contract
+
+- no execution or rollout path may bypass observability instrumentation
+- each run emits deterministic telemetry events, structured logs, and trace spans
+- production health must expose determinism, replay consistency, audit-chain validity, and policy-enforcement status
+- alerting must cover: nondeterminism, replay mismatch, audit-chain break, rollback failure, and policy-bypass attempt
+- each required alert must have an explicit runbook mapping
+- safety guards must include: deterministic performance validation, timeout wrapper, rate limiter, and circuit breaker
+- safety-guard state must not introduce nondeterministic outcomes across fixed-seed verification/property runs
+
+## Final Hardening Gate Contract (Phase 8)
+
+- release gate command is `npm run verify:full`
+- merge/deploy is blocked unless:
+   - all 14 contract sections pass
+   - cross-system invariants all hold
+   - replay and rollback exactness are preserved
+   - policy bypass attack checks fail closed
+   - deterministic lock and stress checks pass
+- proof artifacts must be emitted under `.choir/artifacts/proofs/`
+
 ## Org-Wide Simulation Contract
 
 - Simulation reuses execution logic with isolated state layer:

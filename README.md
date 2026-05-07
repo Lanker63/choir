@@ -90,6 +90,12 @@ Additional commands:
   - choir library list|install|update|lock
 - CI:
   - choir ci run
+- Verification:
+  - @choir verify --production
+  - choir verify --production
+  - @choir verify --full
+  - choir verify --full
+  - npm run verify:full
 
 ## DSL Grammar (Compact)
 
@@ -148,6 +154,9 @@ Additional commands:
 - Global orchestration validates full cross-repo graph and policy before execution
 - Global failure handling is isolation-first: rollback affects failed units and already-executed dependents only
 - Full rollback is fail-safe fallback only when isolated rollback cannot restore consistency
+- Execution and rollout are observability-first: each path emits deterministic telemetry, structured logs, and trace spans
+- Production safety guards include deterministic performance validation, timeout wrapping, and rate/circuit guard evaluation
+- Guard blocks fail closed while preserving deterministic replay behavior for verification and auditability
 
 Preview hash gate:
 

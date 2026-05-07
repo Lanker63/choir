@@ -45,6 +45,9 @@ jobs:
       - name: Run orchestration verification
         run: npm run verify:orchestration
 
+      - name: Run production verification
+        run: npm run verify:production
+
       - name: Run compiler verification
         run: npm run verify:compiler
 
@@ -59,6 +62,9 @@ jobs:
 
       - name: Run architecture suite
         run: npm run test:architecture
+
+      - name: Run final full-system hardening gate
+        run: npm run verify:full
 
       - name: Link choir CLI
         run: npm link
@@ -104,6 +110,9 @@ jobs:
       - name: Orchestration verification
         run: npm run verify:orchestration
 
+      - name: Production verification
+        run: npm run verify:production
+
       - name: Compiler verification
         run: npm run verify:compiler
 
@@ -118,3 +127,6 @@ jobs:
 
       - name: Run architecture suite
         run: npm run test:architecture
+
+      - name: Run final full-system hardening gate
+        run: npm run verify:full

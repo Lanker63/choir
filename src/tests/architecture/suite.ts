@@ -1856,9 +1856,19 @@ const pass2: TestPass = {
           mode: "orchestration",
         });
 
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --production"), {
+          type: "verify",
+          mode: "production",
+        });
+
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --compiler"), {
           type: "verify",
           mode: "compiler",
+        });
+
+        assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --full"), {
+          type: "verify",
+          mode: "full-system",
         });
 
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify --chaos"), {

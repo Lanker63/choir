@@ -184,11 +184,27 @@ function renderDashboard(): string {
     ? snapshot.dashboard.recentActions.map((entry) => `<li><span class="mono">${escapeHtml(entry.timestamp)}</span> ${escapeHtml(entry.action)} (${escapeHtml(entry.result)})</li>`).join("")
     : "<li>No audit events yet.</li>";
 
+  const productionHealth = snapshot.production
+    ? statusChip(snapshot.production.health.healthy ? "stable" : "needs-attention")
+    : "<span class=\"chip warn\">unavailable</span>";
+
+  const productionAlerts = snapshot.production && snapshot.production.alerts.length > 0
+    ? snapshot.production.alerts.map((alert) => `<li><span class="mono">${escapeHtml(alert.severity)}</span> ${escapeHtml(alert.condition)}</li>`).join("")
+    : "<li>No active production alerts.</li>";
+
+  const productionSlos = snapshot.production && snapshot.production.slos.length > 0
+    ? snapshot.production.slos.map((slo) => `<li>${escapeHtml(slo.name)}: ${slo.actual.toFixed(2)} / ${slo.target.toFixed(2)} (${slo.met ? "met" : "miss"})</li>`).join("")
+    : "<li>No SLO evaluation available.</li>";
+
   return `
     <section class="grid">
       <article class="card">
         <div class="muted">System Health</div>
         <div class="kpi">${statusChip(snapshot.dashboard.systemHealth)}</div>
+      </article>
+      <article class="card">
+        <div class="muted">Production Health</div>
+        <div class="kpi">${productionHealth}</div>
       </article>
       <article class="card">
         <div class="muted">Active Plans</div>
@@ -205,6 +221,14 @@ function renderDashboard(): string {
       <article class="card wide">
         <div class="muted">Recent Actions</div>
         <ul class="list">${recent}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Production Alerts</div>
+        <ul class="list">${productionAlerts}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Production SLOs</div>
+        <ul class="list">${productionSlos}</ul>
       </article>
     </section>
   `;

@@ -1,5 +1,7 @@
+import fs from "fs";
 import { spawnSync } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
 
 export type ContractVerificationMode = "quick" | "full";
 
@@ -327,6 +329,60 @@ function npmExecutable(): string {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
+function nodeExecutable(): string {
+  const npmNode = process.env.npm_node_execpath;
+  if (typeof npmNode === "string" && npmNode.trim().length > 0) {
+    return npmNode;
+  }
+
+  const basename = path.basename(process.execPath).toLowerCase();
+  if (basename.startsWith("node")) {
+    return process.execPath;
+  }
+
+  return process.platform === "win32" ? "node.exe" : "node";
+}
+
+function looksLikeChoirProjectRoot(root: string): boolean {
+  const packagePath = path.join(root, "package.json");
+  const srcHarness = path.join(root, "src", "tests", "verification", "harness.ts");
+  const outHarness = path.join(root, "out", "tests", "verification", "harness.js");
+
+  if (!fs.existsSync(packagePath)) {
+    return false;
+  }
+
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as Record<string, unknown>;
+    const scripts = (parsed.scripts && typeof parsed.scripts === "object" && !Array.isArray(parsed.scripts))
+      ? parsed.scripts as Record<string, unknown>
+      : {};
+
+    const hasCoreScripts = typeof scripts["build:extension"] === "string"
+      && typeof scripts["verify"] === "string"
+      && typeof scripts["verify:contracts"] === "string";
+
+    return hasCoreScripts && (fs.existsSync(srcHarness) || fs.existsSync(outHarness));
+  } catch {
+    return false;
+  }
+}
+
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
+const extensionProjectRoot = path.resolve(moduleDirectory, "..", "..");
+
+function resolveContractWorkspace(preferredRoot: string): string {
+  if (looksLikeChoirProjectRoot(preferredRoot)) {
+    return preferredRoot;
+  }
+
+  if (looksLikeChoirProjectRoot(extensionProjectRoot)) {
+    return extensionProjectRoot;
+  }
+
+  return preferredRoot;
+}
+
 function runCommand(
   id: ContractCommandResult["id"],
   root: string,
@@ -359,20 +415,21 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
   const verifyMode = mode === "full" ? "full" : "quick";
   const propertyIterations = mode === "full" ? "200" : "16";
   const chaosIterations = mode === "full" ? "120" : "10";
+  const node = nodeExecutable();
 
   const build = runCommand("build", workspaceRoot, npmExecutable(), ["run", "build:extension"]);
 
   const architecture = runCommand(
     "architecture",
     workspaceRoot,
-    process.execPath,
+    node,
     [path.join("out", "tests", "architecture", "suite.js")]
   );
 
   const verification = runCommand(
     "verification",
     workspaceRoot,
-    process.execPath,
+    node,
     [path.join("out", "tests", "verification", "harness.js")],
     { CHOIR_VERIFY_MODE: verifyMode }
   );
@@ -380,7 +437,7 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
   const property = runCommand(
     "property",
     workspaceRoot,
-    process.execPath,
+    node,
     [path.join("out", "tests", "verification", "propertyChaosHarness.js"), "property"],
     { CHOIR_PROPERTY_ITERATIONS: propertyIterations }
   );
@@ -388,7 +445,7 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
   const chaos = runCommand(
     "chaos",
     workspaceRoot,
-    process.execPath,
+    node,
     [path.join("out", "tests", "verification", "propertyChaosHarness.js"), "chaos", "moderate"],
     { CHOIR_CHAOS_ITERATIONS: chaosIterations }
   );
@@ -418,7 +475,8 @@ export type RunContractVerificationOptions = {
 };
 
 export async function runContractVerification(options: RunContractVerificationOptions = {}): Promise<ContractVerificationReport> {
-  const workspaceRoot = options.workspaceRoot ? path.resolve(options.workspaceRoot) : process.cwd();
+  const requestedRoot = options.workspaceRoot ? path.resolve(options.workspaceRoot) : process.cwd();
+  const workspaceRoot = resolveContractWorkspace(requestedRoot);
   const mode = options.mode ?? "quick";
 
   const commands = executeContractCommands(workspaceRoot, mode);
