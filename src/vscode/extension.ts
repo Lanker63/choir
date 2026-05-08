@@ -98,9 +98,17 @@ export function activate(context: vscode.ExtensionContext) {
                 const yaml = await import("yaml");
                 const dslText = yaml.stringify([rule]);
 
-                // Preserve existing API shape; control center is panel-based for full layout.
-                provider.setDslText(dslText);
+                // Open the Control Center for context and also open a side editor
+                // showing the selected rule's YAML so the user sees and can edit it.
                 provider.openPanel(vscode.ViewColumn.One);
+
+                try {
+                    const doc = await vscode.workspace.openTextDocument({ content: dslText, language: "yaml" });
+                    await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
+                } catch (editorErr) {
+                    // If opening the editor fails, still surface the control center.
+                    console.error("Choir: failed to open rule editor document", editorErr);
+                }
             } catch (err) {
                 console.error("Choir: openRuleEditorForRule failed", err);
             }
