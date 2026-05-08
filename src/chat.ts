@@ -40,16 +40,12 @@ import {
     buildRollbackDependencyGraph,
     buildStages,
     computeRollbackSet,
-    executeRolloutPlan,
     GlobalPlan,
     orderRollback,
     Repo,
     RollbackTrace,
     RolloutStrategy,
-    compareStrategies,
     validateIsolation,
-    simulatePlan as simulateGlobalPlan,
-    simulateUnits as simulateGlobalUnits,
 } from "./core/globalOrchestration.js";
 import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
@@ -82,13 +78,9 @@ import {
     parseVerifyChatCommand,
 } from "./core/chatCommands.js";
 import {
-    PreviewSynthesisError,
-    synthesizePreviewContract,
-} from "./core/previewOrchestrator.js";
-import {
-    PlanOptimizationError,
-    synthesizeAndOptimizePlans,
-} from "./core/planOptimizationOrchestrator.js";
+    OrchestrationPipelineError,
+    runOrchestrationPipeline,
+} from "./core/orchestrationRuntime.js";
 import {
     InitApplyMode,
     InitWizard,
@@ -1237,12 +1229,13 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 if (parsed.ast.type === "plan" && parsed.ast.optimize) {
                     const planNode = parsed.ast;
                     try {
-                        const optimized = await synthesizeAndOptimizePlans({
+                        const runtime = await runOrchestrationPipeline("optimize", {
                             root: workspaceRoot,
                             controlPlane: control,
                             command: normalizedDSLInput,
                             ...(planNode.target ? { targetGoal: planNode.target } : {}),
                         });
+                        const optimized = runtime.optimized;
 
                         const rankingLines = optimized.rankedPlans.map((entry) =>
                             `- ${entry.rank}. ${entry.strategyId} (policy=${entry.policyDecision}, risk=${entry.riskScore}, dependencyRisk=${entry.dependencyRisk}, blastRadius=${entry.blastRadius}, rollbackComplexity=${entry.rollbackComplexity}, executionCost=${entry.executionCost}, changes=${entry.changeCount})`
@@ -1281,7 +1274,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ...rankingLines,
                         ].join("\n"));
                     } catch (error) {
-                        if (error instanceof PlanOptimizationError) {
+                        if (error instanceof OrchestrationPipelineError) {
                             const stageLines = error.stageResults.map((stage) => {
                                 const status = stage.status === "success" ? "ok" : "fail";
                                 return `- [${status}] ${stage.stage}: ${stage.detail}`;
@@ -1334,59 +1327,73 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                if (parsed.ast.type === "execute" && parsed.ast.rolloutStrategy) {
+                if (parsed.ast.type === "execute") {
                     const executeNode = parsed.ast;
-                    const rolloutStrategy = executeNode.rolloutStrategy;
-                    if (!rolloutStrategy) {
-                        stream.markdown("Execution strategy missing.");
-                        return;
+                    try {
+                        const runtime = await runOrchestrationPipeline("execute", {
+                            root: workspaceRoot,
+                            controlPlane: control,
+                            command: normalizedDSLInput,
+                            ...(executeNode.planRef ? { requestedPlanId: executeNode.planRef.identifier } : {}),
+                            ...(executeNode.previewRef ? { requestedPreviewRef: executeNode.previewRef } : {}),
+                            ...(executeNode.rolloutStrategy ? { rolloutStrategy: executeNode.rolloutStrategy } : {}),
+                        });
+
+                        if (!runtime.execute) {
+                            stream.markdown("Execution unavailable: unified orchestration runtime did not return execution output.");
+                            return;
+                        }
+
+                        const stageLines = runtime.stageResults
+                            .map((stage) => {
+                                const status = stage.status === "success" ? "ok" : "fail";
+                                return `- [${status}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                        const executionStageLines = runtime.execute.executionStages.length === 0
+                            ? ["- none"]
+                            : runtime.execute.executionStages.map((stage) =>
+                                `- ${stage.order}. ${stage.id} (units=[${stage.units.join(", ")}])`
+                            );
+
+                        stream.markdown([
+                            runtime.execute.success ? "Execution successful." : "Execution failed.",
+                            `- mode: execute`,
+                            `- plan: ${runtime.execute.planId} (${runtime.execute.planSource})`,
+                            `- strategy: ${runtime.execute.strategyId}`,
+                            `- transactionId: ${runtime.execute.transactionId}`,
+                            `- executionHash: ${runtime.execute.executionHash}`,
+                            `- finalStateHash: ${runtime.execute.finalStateHash}`,
+                            `- replayHash: ${runtime.execute.replayHash}`,
+                            `- simulationFutureStateHash: ${runtime.execute.simulationFutureStateHash}`,
+                            `- policyDecision: ${runtime.policy.decision}`,
+                            `- approvalRequired: ${runtime.approval.required}`,
+                            `- approvalSatisfied: ${runtime.approval.approved}`,
+                            "",
+                            "Pipeline stages:",
+                            ...stageLines,
+                            "",
+                            "Execution stages:",
+                            ...executionStageLines,
+                        ].join("\n"));
+                    } catch (error) {
+                        if (error instanceof OrchestrationPipelineError) {
+                            const stageLines = error.stageResults.map((stage) => {
+                                const status = stage.status === "success" ? "ok" : "fail";
+                                return `- [${status}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                            stream.markdown([
+                                "Execution failed.",
+                                `- stage: ${error.failedStage}`,
+                                "",
+                                ...stageLines,
+                            ].join("\n"));
+                            return;
+                        }
+
+                        throw error;
                     }
-                    const configuredPlans = [...control.execution.plans]
-                        .sort((left, right) => left.id.localeCompare(right.id));
-
-                    if (configuredPlans.length === 0) {
-                        stream.markdown("Rollout execution unavailable: no execution plans defined in control plane.");
-                        return;
-                    }
-
-                    const targetPlan = executeNode.planRef
-                        ? configuredPlans.find((plan) => plan.id === executeNode.planRef?.identifier)
-                        : configuredPlans.find((plan) => plan.status === "approved") ?? configuredPlans[0];
-
-                    if (!targetPlan) {
-                        stream.markdown(`Execution plan not found: ${executeNode.planRef?.identifier}`);
-                        return;
-                    }
-
-                    const globalPlan = toGlobalPlanFromPlan(targetPlan);
-                    const repos = buildSimulationRepos([globalPlan]);
-                    const rollout = await executeRolloutPlan(globalPlan, {
-                        repos,
-                        policies: [],
-                        stateRoot: workspaceRoot,
-                    }, rolloutStrategy);
-
-                    const stageLines = rollout.trace.stages.map((stage) => {
-                        const metrics = rollout.trace.metrics[stage.id];
-                        const summary = metrics
-                            ? `errorRate=${metrics.errorRate.toFixed(3)}, latency=${metrics.latency}, violations=${metrics.violations}`
-                            : "pending";
-                        const percent = typeof stage.percentage === "number" ? ` (${stage.percentage}%)` : "";
-                        return `- ${stage.order}. ${stage.id}${percent}: units=[${stage.units.join(", ")}], ${summary}`;
-                    });
-
-                    stream.markdown([
-                        rollout.success ? "Rollout execution successful." : "Rollout execution failed.",
-                        `- strategy: ${rolloutStrategy.type}`,
-                        `- plan: ${targetPlan.id}`,
-                        `- completedStages: ${rollout.trace.completedStages.length}/${rollout.trace.stages.length}`,
-                        rollout.trace.failedStage ? `- failedStage: ${rollout.trace.failedStage}` : "",
-                        `- rolledBack: ${rollout.rolledBack}`,
-                        "",
-                        "Stages:",
-                        ...stageLines,
-                        ...(rollout.failures.length > 0 ? ["", "Failures:", ...rollout.failures.map((entry) => `- ${entry}`)] : []),
-                    ].filter((line) => line.length > 0).join("\n"));
                     return;
                 }
 
@@ -1491,66 +1498,62 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     parsed.ast.type === "simulate"
                 ) {
                     const simulateNode = parsed.ast;
-                    const configuredPlans = [...control.execution.plans]
-                        .sort((left, right) => left.id.localeCompare(right.id));
+                    try {
+                        const runtime = await runOrchestrationPipeline("simulate", {
+                            root: workspaceRoot,
+                            controlPlane: control,
+                            command: normalizedDSLInput,
+                            ...(simulateNode.planRef ? { requestedPlanId: simulateNode.planRef.identifier } : {}),
+                            ...(simulateNode.units ? { requestedUnits: simulateNode.units } : {}),
+                        });
 
-                    if (configuredPlans.length === 0) {
-                        stream.markdown("Simulation unavailable: no execution plans defined in control plane.");
-                        return;
+                        if (!runtime.simulate) {
+                            stream.markdown("Simulation unavailable: unified orchestration runtime did not return simulation output.");
+                            return;
+                        }
+
+                        stream.markdown(formatSimulationChatResult({
+                            success: runtime.simulate.success,
+                            strategyId: runtime.simulate.strategyId,
+                            planId: runtime.simulate.planId,
+                            planSource: runtime.simulate.planSource,
+                            units: runtime.simulate.units,
+                            changes: runtime.simulate.changes,
+                            violations: runtime.simulate.violations,
+                            metrics: runtime.simulate.metrics,
+                            policyDecision: runtime.simulate.policy.decision,
+                            policyViolations: runtime.simulate.policy.violations,
+                            replay: runtime.simulate.replay,
+                            hashes: runtime.simulate.hashes,
+                            rollbackScope: runtime.simulate.rollbackScope,
+                            stageResults: runtime.stageResults,
+                        }));
+                    } catch (error) {
+                        if (error instanceof OrchestrationPipelineError) {
+                            const stageLines = error.stageResults
+                                .map((stage) => {
+                                    const status = stage.status === "success" ? "ok" : "fail";
+                                    return `- [${status}] ${stage.stage}: ${stage.detail}`;
+                                });
+
+                            stream.markdown([
+                                "Simulation failed.",
+                                `- stage: ${error.failedStage}`,
+                                "",
+                                ...stageLines,
+                            ].join("\n"));
+                            return;
+                        }
+
+                        throw error;
                     }
-
-                    const selectedPlans = simulateNode.planRef
-                        ? configuredPlans.filter((plan) => plan.id === simulateNode.planRef?.identifier)
-                        : configuredPlans;
-
-                    if (selectedPlans.length === 0) {
-                        stream.markdown(`Simulation plan not found: ${simulateNode.planRef?.identifier}`);
-                        return;
-                    }
-
-                    const strategyPlans = selectedPlans.map((plan) => toGlobalPlanFromPlan(plan));
-                    const repos = buildSimulationRepos(strategyPlans);
-                    const simulationOptions = {
-                        repos,
-                        policies: [],
-                    };
-
-                    let chosenPlan = strategyPlans[0] as GlobalPlan;
-                    let comparisonMetrics: { risk: number; changes: number; violations: number } | null = null;
-
-                    if (!simulateNode.planRef && strategyPlans.length > 1) {
-                        const comparison = await compareStrategies(strategyPlans, simulationOptions);
-                        chosenPlan = strategyPlans.find((plan) => plan.id === comparison.bestStrategy) ?? chosenPlan;
-                        comparisonMetrics = comparison.metrics;
-                    }
-
-                    const simulated = simulateNode.units && simulateNode.units.length > 0
-                        ? await simulateGlobalUnits(simulateNode.units, chosenPlan, simulationOptions)
-                        : await simulateGlobalPlan(chosenPlan, simulationOptions);
-
-                    const fallbackChanges = simulated.changes.reduce((sum, entry) => sum + entry.operations.length, 0);
-                    const fallbackRisk = (simulated.violations.length * 5) + fallbackChanges;
-                    const metrics = comparisonMetrics ?? {
-                        risk: fallbackRisk,
-                        changes: fallbackChanges,
-                        violations: simulated.violations.length,
-                    };
-
-                    stream.markdown(formatSimulationChatResult({
-                        success: simulated.success,
-                        strategyId: chosenPlan.id,
-                        units: simulateNode.units,
-                        changes: simulated.changes,
-                        violations: simulated.violations,
-                        metrics,
-                    }));
                     return;
                 }
 
                 if (parsed.ast.type === "preview") {
                     const previewNode = parsed.ast;
                     try {
-                        const synthesized = await synthesizePreviewContract({
+                        const runtime = await runOrchestrationPipeline("preview", {
                             root: workspaceRoot,
                             controlPlane: control,
                             command: normalizedDSLInput,
@@ -1559,51 +1562,55 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             recordPendingApproval: true,
                         });
 
-                        const stageLines = synthesized.stageResults
+                        if (!runtime.preview) {
+                            stream.markdown("Preview synthesis failed: unified orchestration runtime did not return preview payload.");
+                            return;
+                        }
+
+                        const stageLines = runtime.stageResults
                             .map((stage) => {
                                 const statusLabel = stage.status === "success" ? "ok" : "fail";
                                 return `- [${statusLabel}] ${stage.stage}: ${stage.detail}`;
                             });
 
-                        const executionStageLines = synthesized.executionStages.length === 0
+                        const executionStageLines = runtime.optimized.executionStages.length === 0
                             ? ["- none"]
-                            : synthesized.executionStages.map((stage, index) => {
-                                const units = stage.workUnits.map((unit) => unit.id).join(", ");
-                                return `- ${index + 1}. ${stage.id} (parallel=${stage.parallelizable}, units=${stage.workUnits.length})${units.length > 0 ? ` [${units}]` : ""}`;
+                            : runtime.optimized.executionStages.map((stage, index) => {
+                                return `- ${index + 1}. ${stage.id} (parallel=${stage.parallelizable}, units=${stage.units.length})${stage.units.length > 0 ? ` [${stage.units.join(", ")}]` : ""}`;
                             });
 
-                        const diffLines = synthesized.fileChanges.length === 0
+                        const diffLines = runtime.preview.fileChanges.length === 0
                             ? ["No file deltas were produced during simulation."]
-                            : synthesized.fileChanges.slice(0, 5).flatMap((change) => [
+                            : runtime.preview.fileChanges.slice(0, 5).flatMap((change) => [
                                 `File: ${change.file}`,
                                 "```diff",
                                 change.diff,
                                 "```",
                             ]);
 
-                        const approvalLine = synthesized.approval.required
-                            ? synthesized.approval.approved
+                        const approvalLine = runtime.approval.required
+                            ? runtime.approval.approved
                                 ? "required and satisfied"
-                                : `required and pending${synthesized.approval.pendingId ? ` (${synthesized.approval.pendingId})` : ""}`
+                                : `required and pending${runtime.approval.pendingId ? ` (${runtime.approval.pendingId})` : ""}`
                             : "not required";
 
-                        const violationLines = synthesized.policy.violations.length === 0
+                        const violationLines = runtime.policy.violations.length === 0
                             ? ["- none"]
-                            : synthesized.policy.violations.map((entry) => `- [${entry.ruleId}] ${entry.message}`);
+                            : runtime.policy.violations.map((entry) => `- [${entry.ruleId}] ${entry.message}`);
 
                         stream.markdown([
                             "Preview synthesized (read-only execution contract).",
-                            `- plan: ${synthesized.planId} (${synthesized.planSource})`,
-                            `- basePlan: ${synthesized.basePlanId}`,
-                            `- strategy: ${synthesized.strategyId}`,
-                            `- previewHash: ${synthesized.previewHash}`,
-                            `- simulationHash: ${synthesized.simulationHash}`,
-                            `- stateHash: ${synthesized.stateHash}`,
-                            `- filesChanged: ${synthesized.summary.filesChanged}`,
-                            `- patches: ${synthesized.summary.patchesCount}`,
-                            `- remainingViolations: ${synthesized.summary.remainingViolations}`,
-                            `- introducedErrors: ${synthesized.summary.introducedErrors}`,
-                            `- policyDecision: ${synthesized.policy.decision}`,
+                            `- plan: ${runtime.selectedPlanId} (${runtime.planSource})`,
+                            `- basePlan: ${runtime.selectedPlanId}`,
+                            `- strategy: ${runtime.selectedStrategyType}`,
+                            `- previewHash: ${runtime.preview.previewHash}`,
+                            `- simulationHash: ${runtime.preview.simulationHash}`,
+                            `- stateHash: ${runtime.preview.stateHash}`,
+                            `- filesChanged: ${runtime.preview.summary.filesChanged}`,
+                            `- patches: ${runtime.preview.summary.patchesCount}`,
+                            `- remainingViolations: ${runtime.preview.summary.remainingViolations}`,
+                            `- introducedErrors: ${runtime.preview.summary.introducedErrors}`,
+                            `- policyDecision: ${runtime.policy.decision}`,
                             `- approval: ${approvalLine}`,
                             "",
                             "Pipeline stages:",
@@ -1618,7 +1625,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ...diffLines,
                         ].join("\n"));
                     } catch (error) {
-                        if (error instanceof PreviewSynthesisError) {
+                        if (error instanceof OrchestrationPipelineError) {
                             const stageLines = error.stageResults.map((stage) => {
                                 const statusLabel = stage.status === "success" ? "ok" : "fail";
                                 return `- [${statusLabel}] ${stage.stage}: ${stage.detail}`;

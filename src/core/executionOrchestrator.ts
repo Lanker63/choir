@@ -1,34 +1,11 @@
-import { deterministicHash } from "./deterministicCore.js";
+import { ControlPlane } from "../schema.js";
 import {
-  CompilerPipelineError,
-  compileInput,
-  formatCompilerErrors,
-} from "./compilerPipeline.js";
-import {
-  executeGlobalPlan,
-  executeRolloutPlan,
-  hashState as hashGlobalState,
-  replay,
-  simulatePlan,
-  validateTrace,
-  verifyReplay,
-  type GlobalPlan,
-  type Repo,
-  type RolloutStrategy,
-} from "./globalOrchestration.js";
-import {
-  PlanOptimizationError,
-  analyzeWorkspace,
-  generateCandidatePlans,
-  synthesizeAndOptimizePlans,
-} from "./planOptimizationOrchestrator.js";
-import { ControlPlane, Plan, Task } from "../schema.js";
-import {
-  createEmptyStatePlane,
-  hasApprovalForDiff,
-  hasApprovalForPreview,
-  readStatePlane,
-} from "./state.js";
+  OrchestrationPipelineError,
+  runOrchestrationPipeline,
+  type PipelineStageName,
+  type PipelineStageResult,
+} from "./orchestrationRuntime.js";
+import { type RolloutStrategy } from "./globalOrchestration.js";
 
 export type ExecutionOrchestrationStageName =
   | "compile"
@@ -103,520 +80,112 @@ export class ExecutionOrchestrationError extends Error {
   }
 }
 
-type PreviewBindingResolution = {
-  previewHash: string;
-  approved: boolean;
-};
-
-function sortedUnique(values: string[]): string[] {
-  return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
-}
-
-function deriveSimulationUnit(task: Task): string {
-  const files = [...(task.scope?.files ?? [])]
-    .map((file) => file.replace(/\\/g, "/"))
-    .sort((left, right) => left.localeCompare(right));
-
-  const first = files[0];
-  if (!first) {
-    return "workspace:root";
+function mapStage(stage: PipelineStageName): ExecutionOrchestrationStageName {
+  if (stage === "compile" || stage === "structural-validation" || stage === "semantic-validation" || stage === "cross-node-validation") {
+    return "compile";
   }
 
-  const segments = first.split("/").filter((entry) => entry.length > 0);
-  if (segments.length >= 2 && ["packages", "apps", "services", "libs"].includes(segments[0])) {
-    return `${segments[0]}:${segments[1]}`;
+  if (stage === "candidate-synthesis") {
+    return "candidate-synthesis";
   }
 
-  return "workspace:root";
-}
-
-function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
-  const knownTaskIds = new Set(plan.tasks.map((task) => task.id));
-  const tasks = [...plan.tasks]
-    .sort((left, right) => left.id.localeCompare(right.id))
-    .map((task) => ({
-      id: `${plan.id}:${task.id}`,
-      repoId: deriveSimulationUnit(task),
-      action: `${task.type}:${task.id}`,
-      dependsOn: sortedUnique((task.dependsOn ?? [])
-        .filter((dependencyId) => knownTaskIds.has(dependencyId))
-        .map((dependencyId) => `${plan.id}:${dependencyId}`)),
-    }));
-
-  return {
-    id: `global-${plan.id}`,
-    tasks,
-  };
-}
-
-function buildSimulationRepos(plans: GlobalPlan[]): Repo[] {
-  const taskById = new Map(plans.flatMap((plan) => plan.tasks.map((task) => [task.id, task] as const)));
-  const repoDependencies = new Map<string, Set<string>>();
-
-  for (const plan of plans) {
-    for (const task of plan.tasks) {
-      if (!repoDependencies.has(task.repoId)) {
-        repoDependencies.set(task.repoId, new Set<string>());
-      }
-
-      for (const dependencyId of task.dependsOn) {
-        const dependency = taskById.get(dependencyId);
-        if (!dependency) {
-          continue;
-        }
-
-        if (dependency.repoId !== task.repoId) {
-          repoDependencies.get(task.repoId)?.add(dependency.repoId);
-        }
-      }
-    }
+  if (stage === "strategy-ranking" || stage === "orchestration-build") {
+    return "workspace-analysis";
   }
 
-  return [...repoDependencies.entries()]
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([repoId, dependencies]) => ({
-      id: repoId,
-      dependencies: sortedUnique([...dependencies]),
-      state: {},
-    }));
-}
-
-function resolvePreviewBinding(root: string, reference: string): PreviewBindingResolution | null {
-  const state = readStatePlane(root) ?? createEmptyStatePlane();
-
-  const approval = state.approvals.find((entry) =>
-    entry.id === reference
-    || (entry.previewHash ?? "") === reference
-    || entry.diffHash === reference
-  );
-
-  if (approval) {
-    return {
-      previewHash: approval.previewHash ?? approval.diffHash,
-      approved: true,
-    };
+  if (stage === "strategy-selection") {
+    return "strategy-selection";
   }
 
-  const pending = state.pendingApprovals.find((entry) =>
-    entry.id === reference
-    || (entry.previewHash ?? "") === reference
-    || entry.diffHash === reference
-  );
-
-  if (!pending) {
-    return null;
+  if (stage === "simulation") {
+    return "simulation-precheck";
   }
 
-  return {
-    previewHash: pending.previewHash ?? pending.diffHash,
-    approved: false,
-  };
-}
-
-function executionRankingSort(
-  left: {
-    policyViolations: number;
-    dependencyRisk: number;
-    rollbackComplexity: number;
-    blastRadius: number;
-    executionCost: number;
-    strategyId: string;
-    id: string;
-  },
-  right: {
-    policyViolations: number;
-    dependencyRisk: number;
-    rollbackComplexity: number;
-    blastRadius: number;
-    executionCost: number;
-    strategyId: string;
-    id: string;
+  if (stage === "policy" || stage === "approval") {
+    return "policy-enforcement";
   }
-): number {
-  return left.policyViolations - right.policyViolations
-    || left.dependencyRisk - right.dependencyRisk
-    || left.rollbackComplexity - right.rollbackComplexity
-    || left.blastRadius - right.blastRadius
-    || left.executionCost - right.executionCost
-    || left.strategyId.localeCompare(right.strategyId)
-    || left.id.localeCompare(right.id);
+
+  return "replay-verification";
 }
 
-function fail(
-  stage: ExecutionOrchestrationStageName,
-  detail: string,
-  stageResults: ExecutionOrchestrationStageResult[]
-): never {
-  stageResults.push({
-    stage,
-    status: "failure",
-    detail,
-  });
+function toStageResults(stages: PipelineStageResult[], includeExecutionStage: boolean): ExecutionOrchestrationStageResult[] {
+  const mapped = stages.map((stage) => ({
+    stage: mapStage(stage.stage),
+    status: stage.status,
+    detail: stage.detail,
+  }));
 
-  throw new ExecutionOrchestrationError({
-    failedStage: stage,
-    message: detail,
-    stageResults,
-  });
+  if (!includeExecutionStage) {
+    return mapped;
+  }
+
+  return [
+    ...mapped,
+    {
+      stage: "execution",
+      status: "success",
+      detail: "Execution committed with simulation parity enforcement.",
+    },
+  ];
 }
 
 export async function runExecutionOrchestrator(
   options: RunExecutionOrchestratorOptions
 ): Promise<ExecutionOrchestrationResult> {
-  const stageResults: ExecutionOrchestrationStageResult[] = [];
-  const markSuccess = (stage: ExecutionOrchestrationStageName, detail: string): void => {
-    stageResults.push({
-      stage,
-      status: "success",
-      detail,
-    });
-  };
-
   try {
-    compileInput(options.command, options.controlPlane);
-    markSuccess("compile", "Compiler gates passed (structure, semantic, cross-node, policy).");
-  } catch (error) {
-    if (error instanceof CompilerPipelineError) {
-      return fail("compile", formatCompilerErrors(error.errors), stageResults);
-    }
-
-    const message = error instanceof Error ? error.message : String(error);
-    return fail("compile", message, stageResults);
-  }
-
-  if (options.requestedPlanId) {
-    const exists = options.controlPlane.execution.plans.some((plan) => plan.id === options.requestedPlanId);
-    if (!exists) {
-      return fail("candidate-synthesis", `Execution plan not found: ${options.requestedPlanId}`, stageResults);
-    }
-  }
-
-  const effectiveControlPlane = options.requestedPlanId
-    ? {
-      ...options.controlPlane,
-      execution: {
-        ...options.controlPlane.execution,
-        plans: options.controlPlane.execution.plans.filter((plan) => plan.id === options.requestedPlanId),
-      },
-    }
-    : options.controlPlane;
-
-  let optimized: Awaited<ReturnType<typeof synthesizeAndOptimizePlans>>;
-  try {
-    optimized = await synthesizeAndOptimizePlans({
+    const unified = await runOrchestrationPipeline("execute", {
       root: options.root,
+      controlPlane: options.controlPlane,
       command: options.command,
-      controlPlane: effectiveControlPlane,
+      ...(options.requestedPlanId ? { requestedPlanId: options.requestedPlanId } : {}),
+      ...(options.requestedPreviewRef ? { requestedPreviewRef: options.requestedPreviewRef } : {}),
+      ...(options.rolloutStrategy ? { rolloutStrategy: options.rolloutStrategy } : {}),
     });
 
-    markSuccess("workspace-analysis", `Workspace analyzed (graphHash=${optimized.planHash.slice(0, 12)}).`);
-    markSuccess("candidate-synthesis", `Generated ${optimized.rankedPlans.length} deterministic candidate plan(s).`);
-  } catch (error) {
-    if (error instanceof PlanOptimizationError) {
-      const detail = [
-        `Plan optimization failed at stage ${error.failedStage}.`,
-        ...error.stageResults.map((entry) => `- ${entry.stage}: ${entry.detail}`),
-      ].join("\n");
-      return fail("candidate-synthesis", detail, stageResults);
+    if (!unified.execute) {
+      throw new Error("Unified orchestration runtime did not return execution payload.");
     }
 
-    const message = error instanceof Error ? error.message : String(error);
-    return fail("candidate-synthesis", message, stageResults);
-  }
-
-  let selectedRanked = [...optimized.rankedPlans].sort(executionRankingSort)[0];
-  if (!selectedRanked) {
-    return fail("strategy-selection", "No ranked execution strategies are available.", stageResults);
-  }
-
-  const workspace = await analyzeWorkspace(options.root, effectiveControlPlane);
-  const candidates = generateCandidatePlans(effectiveControlPlane, workspace);
-  const selectedCandidate = candidates.find((candidate) =>
-    candidate.plan.id === selectedRanked.id && candidate.strategyId === selectedRanked.strategyId
-  );
-
-  const selectedExecutionPlan = selectedCandidate?.plan ?? optimized.selectedExecutionPlan;
-  markSuccess(
-    "strategy-selection",
-    `Selected strategy ${selectedRanked.strategyId} (violations=${selectedRanked.policyViolations}, dependencyRisk=${selectedRanked.dependencyRisk}, rollbackComplexity=${selectedRanked.rollbackComplexity}, blastRadius=${selectedRanked.blastRadius}, executionCost=${selectedRanked.executionCost}).`
-  );
-
-  const globalPlan = toGlobalPlanFromPlan(selectedExecutionPlan);
-  const repos = buildSimulationRepos([globalPlan]);
-
-  const simulation = await simulatePlan(globalPlan, {
-    repos,
-    policies: [],
-    stateRoot: options.root,
-  });
-
-  if (!simulation.success) {
-    return fail(
-      "simulation-precheck",
-      `Simulation precheck failed: ${simulation.violations.join("; ") || "unknown simulation failure"}`,
-      stageResults
-    );
-  }
-
-  const simulationDeterministicTrace = simulation.trace.deterministicTrace;
-  if (!simulationDeterministicTrace) {
-    return fail("simulation-precheck", "Simulation trace missing deterministic replay metadata.", stageResults);
-  }
-
-  const simulationFutureStateHash = hashGlobalState(simulation.finalState);
-  const simulationReplayHash = hashGlobalState(replay(simulationDeterministicTrace));
-  const simulationTraceValid = validateTrace(simulationDeterministicTrace);
-  const simulationReplayValid = verifyReplay(simulationDeterministicTrace);
-
-  if (!simulationTraceValid || !simulationReplayValid || simulationFutureStateHash !== simulationReplayHash) {
-    return fail(
-      "simulation-precheck",
-      `Simulation replay verification failed (trace=${simulationTraceValid}, replay=${simulationReplayValid}, hashMatch=${simulationFutureStateHash === simulationReplayHash}).`,
-      stageResults
-    );
-  }
-
-  markSuccess(
-    "simulation-precheck",
-    `Simulation parity precheck passed (futureStateHash=${simulationFutureStateHash.slice(0, 12)}).`
-  );
-
-  if (selectedRanked.policyDecision === "deny") {
-    return fail(
-      "policy-enforcement",
-      `Policy denied execution for selected strategy ${selectedRanked.strategyId}.`,
-      stageResults
-    );
-  }
-
-  let approvalSatisfied = !selectedRanked.requiresApproval;
-  if (selectedRanked.requiresApproval) {
-    const stateApproved = hasApprovalForPreview(options.root, selectedRanked.previewHash)
-      || hasApprovalForDiff(options.root, selectedRanked.diffHash);
-
-    if (options.requestedPreviewRef) {
-      const resolved = resolvePreviewBinding(options.root, options.requestedPreviewRef);
-      if (!resolved) {
-        return fail("policy-enforcement", `Preview binding not found: ${options.requestedPreviewRef}`, stageResults);
-      }
-
-      if (resolved.previewHash !== selectedRanked.previewHash) {
-        return fail(
-          "policy-enforcement",
-          `Preview binding mismatch: expected ${selectedRanked.previewHash}, got ${resolved.previewHash}`,
-          stageResults
-        );
-      }
-
-      if (!resolved.approved) {
-        return fail("policy-enforcement", `Preview binding ${options.requestedPreviewRef} is pending approval.`, stageResults);
-      }
-
-      approvalSatisfied = true;
-    } else {
-      approvalSatisfied = stateApproved;
-    }
-
-    if (!approvalSatisfied) {
-      return fail(
-        "policy-enforcement",
-        `Execution requires approval for previewHash=${selectedRanked.previewHash}.`,
-        stageResults
-      );
-    }
-  }
-
-  markSuccess(
-    "policy-enforcement",
-    `Policy decision=${selectedRanked.policyDecision} (requiresApproval=${selectedRanked.requiresApproval}, satisfied=${approvalSatisfied}).`
-  );
-
-  if (options.rolloutStrategy) {
-    const rollout = await executeRolloutPlan(
-      globalPlan,
-      {
-        repos,
-        policies: [],
-        stateRoot: options.root,
-      },
-      options.rolloutStrategy,
-      {
-        requireApproval: selectedRanked.requiresApproval
-          ? async ({ previewHash }) => approvalSatisfied && previewHash === selectedRanked.previewHash
-          : undefined,
-      }
-    );
-
-    if (!rollout.success) {
-      return fail("execution", `Execution failed: ${rollout.failures.join("; ") || "rollout failed"}`, stageResults);
-    }
-
-    const finalStateHash = hashGlobalState(rollout.finalStates);
-    if (simulationFutureStateHash !== finalStateHash) {
-      return fail(
-        "execution",
-        `Simulation parity divergence: simulation=${simulationFutureStateHash}, execution=${finalStateHash}`,
-        stageResults
-      );
-    }
-
-    const deterministicTrace = rollout.trace.deterministicTraces[rollout.trace.deterministicTraces.length - 1] ?? simulationDeterministicTrace;
-    const replayStateHash = hashGlobalState(replay(deterministicTrace));
-    const traceValid = validateTrace(deterministicTrace);
-    const replayValid = verifyReplay(deterministicTrace);
-    const replayHashMatches = replayStateHash === finalStateHash;
-
-    if (!traceValid || !replayValid || !replayHashMatches) {
-      return fail(
-        "replay-verification",
-        `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`,
-        stageResults
-      );
-    }
-
-    markSuccess("execution", `Execution committed across ${rollout.trace.completedStages.length} stage(s).`);
-    markSuccess("replay-verification", `Replay verified (hash=${replayStateHash.slice(0, 12)}).`);
-
-    const transactionId = rollout.trace.transactionTraces[rollout.trace.transactionTraces.length - 1]?.transactionId
-      ?? `rollout-${globalPlan.id}`;
-
-    const executionStages = rollout.trace.stages.map((stage) => ({
-      id: stage.id,
-      order: stage.order,
-      units: sortedUnique(stage.units),
-    }));
-
-    const rollbackUnits = sortedUnique(rollout.trace.rollbackTraces.flatMap((entry) => entry.rollbackSet));
-    const rollbackStages = sortedUnique(rollout.trace.rollbackTraces.map((entry) => `rollback:${entry.failedUnit}`));
+    const selectedRanked = unified.optimized.rankedPlans.find((plan) => plan.id === unified.selectedPlanId)
+      ?? unified.optimized.rankedPlans[0];
 
     return {
-      transactionId,
-      executionHash: deterministicHash({
-        transactionId,
-        planId: globalPlan.id,
-        finalStateHash,
-        replayStateHash,
-        completedStages: rollout.trace.completedStages,
-      }),
-      finalStateHash,
-      replayHash: replayStateHash,
-      executionStages,
-      rollbackScope: {
-        unitIds: rollbackUnits,
-        stageIds: rollbackStages,
-        complexity: rollbackUnits.length + rollbackStages.length,
-      },
-      deterministic: true,
-      verified: true,
-      success: true,
-      strategyId: selectedRanked.strategyId,
-      planId: selectedExecutionPlan.id,
-      planSource: optimized.selectedPlan.synthesized ? "synthesized" : "configured",
-      simulationFutureStateHash,
+      transactionId: unified.execute.transactionId,
+      executionHash: unified.execute.executionHash,
+      finalStateHash: unified.execute.finalStateHash,
+      replayHash: unified.execute.replayHash,
+      executionStages: unified.execute.executionStages,
+      rollbackScope: unified.execute.rollbackScope,
+      deterministic: unified.execute.deterministic,
+      verified: unified.execute.verified,
+      success: unified.execute.success,
+      strategyId: unified.execute.strategyId,
+      planId: unified.execute.planId,
+      planSource: unified.execute.planSource,
+      simulationFutureStateHash: unified.execute.simulationFutureStateHash,
       policy: {
-        decision: selectedRanked.policyDecision,
-        previewHash: selectedRanked.previewHash,
-        diffHash: selectedRanked.diffHash,
-        requiresApproval: selectedRanked.requiresApproval,
-        violations: selectedRanked.policyViolations,
+        decision: unified.policy.decision,
+        previewHash: selectedRanked?.previewHash ?? "",
+        diffHash: unified.policy.diffHash,
+        requiresApproval: unified.policy.requiresApproval,
+        violations: unified.policy.violations.length,
       },
-      stageResults,
+      stageResults: toStageResults(unified.stageResults, true),
     };
+  } catch (error) {
+    if (error instanceof OrchestrationPipelineError) {
+      throw new ExecutionOrchestrationError({
+        failedStage: mapStage(error.failedStage),
+        message: error.message,
+        stageResults: toStageResults(error.stageResults, false),
+      });
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ExecutionOrchestrationError({
+      failedStage: "execution",
+      message,
+      stageResults: [{ stage: "execution", status: "failure", detail: message }],
+    });
   }
-
-  const execution = await executeGlobalPlan(globalPlan, {
-    repos,
-    policies: [],
-    stateRoot: options.root,
-    approveExecution: async ({ previewHash }) => {
-      if (!selectedRanked.requiresApproval) {
-        return true;
-      }
-
-      return approvalSatisfied && previewHash === selectedRanked.previewHash;
-    },
-  });
-
-  if (!execution.success) {
-    return fail(
-      "execution",
-      `Execution failed: ${execution.audit.violations.join("; ") || "global execution failure"}`,
-      stageResults
-    );
-  }
-
-  const finalStateHash = hashGlobalState(execution.finalStates);
-  if (simulationFutureStateHash !== finalStateHash) {
-    return fail(
-      "execution",
-      `Simulation parity divergence: simulation=${simulationFutureStateHash}, execution=${finalStateHash}`,
-      stageResults
-    );
-  }
-
-  markSuccess("execution", `Execution committed (finalStateHash=${finalStateHash.slice(0, 12)}).`);
-
-  const deterministicTrace = execution.trace.deterministicTrace;
-  if (!deterministicTrace) {
-    return fail("replay-verification", "Execution trace missing deterministic replay metadata.", stageResults);
-  }
-
-  const replayStateHash = hashGlobalState(replay(deterministicTrace));
-  const traceValid = validateTrace(deterministicTrace);
-  const replayValid = verifyReplay(deterministicTrace);
-  const replayHashMatches = replayStateHash === finalStateHash;
-
-  if (!traceValid || !replayValid || !replayHashMatches) {
-    return fail(
-      "replay-verification",
-      `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`,
-      stageResults
-    );
-  }
-
-  markSuccess("replay-verification", `Replay verified (hash=${replayStateHash.slice(0, 12)}).`);
-
-  const transactionId = execution.trace.transactionTrace?.transactionId ?? `tx-${globalPlan.id}`;
-  const executionStages = execution.trace.stages.map((stage) => ({
-    id: stage.id,
-    order: stage.order,
-    units: sortedUnique(stage.unitIds),
-  }));
-
-  const rollbackUnits = sortedUnique(execution.rollbackTrace?.rollbackSet ?? []);
-  const rollbackStages = sortedUnique(execution.rollbackTrace?.rollbackOrder.map((unitId) => `rollback:${unitId}`) ?? []);
-
-  return {
-    transactionId,
-    executionHash: deterministicHash({
-      transactionId,
-      planId: globalPlan.id,
-      finalStateHash,
-      replayStateHash,
-      executionOrder: execution.trace.executionOrder,
-    }),
-    finalStateHash,
-    replayHash: replayStateHash,
-    executionStages,
-    rollbackScope: {
-      unitIds: rollbackUnits,
-      stageIds: rollbackStages,
-      complexity: rollbackUnits.length + rollbackStages.length,
-    },
-    deterministic: true,
-    verified: true,
-    success: true,
-    strategyId: selectedRanked.strategyId,
-    planId: selectedExecutionPlan.id,
-    planSource: optimized.selectedPlan.synthesized ? "synthesized" : "configured",
-    simulationFutureStateHash,
-    policy: {
-      decision: selectedRanked.policyDecision,
-      previewHash: selectedRanked.previewHash,
-      diffHash: selectedRanked.diffHash,
-      requiresApproval: selectedRanked.requiresApproval,
-      violations: selectedRanked.policyViolations,
-    },
-    stageResults,
-  };
 }

@@ -3,7 +3,7 @@ import path from "path";
 import type { ControlPlane, Plan, Task } from "../schema.js";
 import type { StatePlane } from "./state.js";
 import { detectWorkspace } from "./workspaceDetection.js";
-import { readLatestPlanningTrace } from "./planningTrace.js";
+import { readLatestOrchestrationTrace } from "./orchestrationRuntimeTrace.js";
 
 export type DependencyGraph = {
   nodes: {
@@ -650,7 +650,7 @@ export function buildGraphSnapshot(input: {
   const affectedNodeIds = overlaySet.affectedNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
   const filteredViolationNodeIds = violationNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
   const hotspots = calculateHotspots(projectedGraph, affectedNodeIds, filteredViolationNodeIds);
-  const planningTrace = readLatestPlanningTrace(input.root);
+  const orchestrationTrace = readLatestOrchestrationTrace(input.root);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -669,13 +669,13 @@ export function buildGraphSnapshot(input: {
         },
       }
       : {}),
-    ...(planningTrace
+    ...(orchestrationTrace
       ? {
         candidateOrchestration: {
-          selectedCandidateId: planningTrace.selectedPlanId,
-          selectedStrategyType: planningTrace.selectedStrategyType,
-          selectedDagHash: planningTrace.orchestrationDagHash,
-          candidates: planningTrace.candidatePlans.map((candidate) => ({
+          selectedCandidateId: orchestrationTrace.selectedPlanId,
+          selectedStrategyType: orchestrationTrace.selectedStrategyType,
+          selectedDagHash: orchestrationTrace.orchestrationDagHash,
+          candidates: orchestrationTrace.candidates.map((candidate) => ({
             id: candidate.id,
             strategyType: candidate.strategyType,
             dagHash: candidate.orchestrationDagHash,

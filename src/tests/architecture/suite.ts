@@ -929,14 +929,14 @@ const pass2: TestPass = {
     },
     {
       id: "2.92",
-      name: "cross-node validation enforces plan and execute preconditions",
+      name: "cross-node validation enforces plan preconditions and warns on implicit execute synthesis",
       run: async () => {
         const control = makeControlPlane();
 
         const executeOnly = parseCommand("choir execute").ast;
         const executeResult = validateCrossNode(executeOnly, { controlPlane: control });
-        assert.strictEqual(executeResult.valid, false);
-        assert.ok(executeResult.issues.some((entry) => entry.code === "execute-without-plan"));
+        assert.strictEqual(executeResult.valid, true);
+        assert.ok(executeResult.issues.some((entry) => entry.code === "execute-without-plan" && entry.severity === "warning"));
 
         const planWithoutIntent = parseCommand("choir plan").ast;
         const planWithoutIntentResult = validateCrossNode(planWithoutIntent, { controlPlane: control });
@@ -1327,10 +1327,12 @@ const pass2: TestPass = {
     },
     {
       id: "2.14",
-      name: "dsl compiler execute requires an available plan",
+      name: "dsl compiler execute allows deterministic runtime synthesis without plan",
       run: async () => {
         const control = makeControlPlane();
-        assert.throws(() => compileDSL("choir execute", control), /Cannot execute without plan/);
+        const withoutPlan = compileDSL("choir execute", control);
+        assert.strictEqual(withoutPlan.changed, false);
+        assert.deepStrictEqual(withoutPlan.updatedControlPlane, control);
 
         const withPlan = makeControlPlane();
         withPlan.execution.plans = [makePlan("plan-alpha", [makeTask("analyze", "analysis")])];

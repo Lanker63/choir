@@ -20,9 +20,8 @@ import {
   runCI,
 } from "../core/ci.js";
 import {
-  executeSelectedPlansWithPreviewGuard,
-  generateSelectedPlanPreview,
-} from "../conductor.js";
+  runOrchestrationPipeline,
+} from "../core/orchestrationRuntime.js";
 import {
   compileDSLAndWrite,
   controlPlaneToChoirConfig,
@@ -55,7 +54,7 @@ import {
   detectEnvironment,
 } from "../core/policyEngine.js";
 import { getProductionSnapshot } from "../core/productionReadiness.js";
-import { readLatestPlanningTrace } from "../core/planningTrace.js";
+import { readLatestOrchestrationTrace } from "../core/orchestrationRuntimeTrace.js";
 import type { Role } from "../core/policyEngine.js";
 import {
   formatDSL,
@@ -416,18 +415,18 @@ export class ChoirProductService {
 
     this.replayIndex = Math.max(0, Math.min(this.replayIndex < 0 ? timelineEntries.length - 1 : this.replayIndex, timelineEntries.length - 1));
     const replayed = jumpTo(root, this.replayIndex);
-    const planningTrace = readLatestPlanningTrace(root);
+    const orchestrationTrace = readLatestOrchestrationTrace(root);
     this.replayTrace = {
       ...replayed.trace,
-      ...(planningTrace
+      ...(orchestrationTrace
         ? {
           planning: {
-            traceId: planningTrace.id,
-            selectedPlanId: planningTrace.selectedPlanId,
-            selectedStrategyType: planningTrace.selectedStrategyType,
-            selectedDagHash: planningTrace.orchestrationDagHash,
-            rankingOrder: planningTrace.rankingOrder,
-            candidates: planningTrace.candidatePlans.map((candidate) => ({
+            traceId: orchestrationTrace.id,
+            selectedPlanId: orchestrationTrace.selectedPlanId,
+            selectedStrategyType: orchestrationTrace.selectedStrategyType,
+            selectedDagHash: orchestrationTrace.orchestrationDagHash,
+            rankingOrder: orchestrationTrace.rankingOrder,
+            candidates: orchestrationTrace.candidates.map((candidate) => ({
               id: candidate.id,
               strategyType: candidate.strategyType,
               orchestrationDagHash: candidate.orchestrationDagHash,
@@ -633,13 +632,16 @@ export class ChoirProductService {
 
     if (parsed.ast.type === "preview") {
       const requestedPlanId = parsed.ast.planRef?.identifier;
-      const preview = await generateSelectedPlanPreview(control, {
+      const preview = await runOrchestrationPipeline("preview", {
         root,
+        controlPlane: control,
+        command: dsl,
         ...(requestedPlanId ? { requestedPlanId } : {}),
+        persistPreviewState: true,
+        recordPendingApproval: true,
       });
 
-      const selected = preview.preview.strategies.find((entry) => entry.strategyId === preview.preview.selectedStrategyId);
-      this.lastPreviewDiffs = (selected?.diff ?? []).map((change) => ({
+      this.lastPreviewDiffs = (preview.preview?.fileChanges ?? []).map((change) => ({
         file: change.file,
         before: change.before,
         after: change.after,
@@ -647,28 +649,27 @@ export class ChoirProductService {
 
       const freshControl = readControlPlane() ?? control;
       return {
-        message: `Preview generated for ${preview.preview.planId} (hash=${preview.preview.hash}).`,
+        message: preview.preview
+          ? `Preview generated for ${preview.selectedPlanId} (hash=${preview.preview.previewHash}).`
+          : `Preview generated for ${preview.selectedPlanId}.`,
         trace: this.createTrace("workflow.preview", dsl, controlPlaneToChoirConfig(freshControl)),
       };
     }
 
     if (parsed.ast.type === "execute") {
-      const state = readStatePlane(root) ?? createEmptyStatePlane();
-      const previewHash = clean(state.execution.lastPreview?.hash);
-      if (!previewHash) {
-        throw new Error("Execution requires a preview hash in state. Run preview first.");
-      }
-
       const requestedPlanId = parsed.ast.planRef?.identifier;
-      const executed = await executeSelectedPlansWithPreviewGuard(control, {
+      const executed = await runOrchestrationPipeline("execute", {
         root,
-        previewId: previewHash,
+        controlPlane: control,
+        command: dsl,
         ...(requestedPlanId ? { requestedPlanId } : {}),
       });
 
       const freshControl = readControlPlane() ?? control;
       return {
-        message: `Execution completed for ${executed.selectedPlans.length} plan(s) using preview ${executed.previewHash}.`,
+        message: executed.execute
+          ? `Execution completed for ${executed.execute.planId} using transaction ${executed.execute.transactionId}.`
+          : `Execution completed for ${executed.selectedPlanId}.`,
         trace: this.createTrace("workflow.execute", dsl, controlPlaneToChoirConfig(freshControl)),
       };
     }

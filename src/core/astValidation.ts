@@ -807,12 +807,17 @@ export function validateCrossNode(ast: AST, context: SystemContext): ValidationR
     }
 
     if (action.type === "execute") {
-      if (!hasPlan) {
-        issues.push(issue("execute-without-plan", "error", "Cannot execute without plan", path));
-      }
-
       if (action.planRef && !planIds.has(action.planRef.identifier)) {
         issues.push(issue("execute-missing-plan", "error", `Cannot execute unknown plan id: ${action.planRef.identifier}`, `${path}.planRef.identifier`));
+      }
+
+      if (!hasPlan && !action.planRef) {
+        issues.push(issue(
+          "execute-without-plan",
+          "warning",
+          "Execute without explicit plan will synthesize a deterministic candidate at runtime.",
+          path
+        ));
       }
     }
   }

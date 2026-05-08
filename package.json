@@ -172,6 +172,7 @@
     "verify:compiler": "npm run build:extension && node out/tests/verification/compiler.js",
     "verify:planning": "npm run build:extension && node out/tests/verification/planning.js",
     "verify:preview": "npm run build:extension && node out/tests/verification/preview.js",
+    "verify:runtime": "npm run build:extension && node out/tests/verification/runtime.js",
     "verify:full": "npm run build:extension && node out/tests/verification/full.js",
     "verify:contracts": "npm run build:extension && CHOIR_CONTRACT_MODE=quick node out/tests/verification/contracts.js",
     "verify:contracts:full": "npm run build:extension && CHOIR_CONTRACT_MODE=full node out/tests/verification/contracts.js",

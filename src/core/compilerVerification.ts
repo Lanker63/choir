@@ -87,18 +87,19 @@ export async function runCompilerVerification(): Promise<CompilerVerificationRep
   });
 
   const crossNodeControl = baseControlPlane();
-  let crossNodeRejected = false;
+  let crossNodeAllowsSynthesis = false;
   try {
-    compileInput("choir execute", crossNodeControl);
+    const compiled = compileInput("choir execute", crossNodeControl);
+    crossNodeAllowsSynthesis = compiled.ruleResults.some((result) => result.ruleId === "warn-execute-without-plan-ref");
   } catch (error) {
-    crossNodeRejected = hasStage(error, "cross-node");
+    crossNodeAllowsSynthesis = !hasStage(error, "cross-node");
   }
   checks.push({
-    name: "cross-node-conflicts-rejected",
-    passed: crossNodeRejected,
-    detail: crossNodeRejected
-      ? "cross-node precondition failed at cross-node gate"
-      : "cross-node conflict was not rejected",
+    name: "cross-node-implicit-execute-synthesis-allowed",
+    passed: crossNodeAllowsSynthesis,
+    detail: crossNodeAllowsSynthesis
+      ? "execute without explicit plan is allowed with warning-level diagnostics"
+      : "cross-node gate unexpectedly rejected implicit execute synthesis",
   });
 
   const determinismControl = baseControlPlane();
