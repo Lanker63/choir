@@ -49,6 +49,7 @@ export class WebviewRegistry {
     control: new Set<vscode.Webview>(),
     graph: new Set<vscode.Webview>(),
     timeline: new Set<vscode.Webview>(),
+    diagnostics: new Set<vscode.Webview>(),
   };
 
   register(kind: WebviewKind, webview: vscode.Webview): vscode.Disposable {
@@ -67,6 +68,7 @@ export class WebviewRegistry {
       ...this.registry.control,
       ...this.registry.graph,
       ...this.registry.timeline,
+      ...this.registry.diagnostics,
     ];
   }
 }

@@ -3,6 +3,7 @@ import { ControlPlane } from "./schema.js";
 import { readControlPlane } from "./choirManager.js";
 import { buildWorkspaceSnapshot } from "./core/context.js";
 import { PipelineResult, runPipeline } from "./core/pipeline.js";
+import { appendPipelineDiagnosticsRecord } from "./core/pipelineDiagnostics.js";
 import { publishDiagnostics, publishFixes } from "./vscode/diagnostics.js";
 
 export interface RunPipelineOptions {
@@ -26,9 +27,50 @@ export async function runPipelineForWorkspace(options: RunPipelineOptions = {}):
     return null;
   }
 
-  const result = await runPipeline({
-    controlPlane,
-    workspace: buildWorkspaceSnapshot(root),
+  let result: PipelineResult;
+  try {
+    result = await runPipeline({
+      controlPlane,
+      workspace: buildWorkspaceSnapshot(root),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    appendPipelineDiagnosticsRecord(root, {
+      command: "pipeline-run",
+      source: "extension",
+      category: "pipeline",
+      result: "failure",
+      summary: `Pipeline run failed: ${message}`,
+      stages: [
+        {
+          stage: "pipeline",
+          status: "failure",
+          detail: message,
+        },
+      ],
+    });
+    throw error;
+  }
+
+  appendPipelineDiagnosticsRecord(root, {
+    command: "pipeline-run",
+    source: "extension",
+    category: "pipeline",
+    result: "success",
+    summary: `Pipeline run completed: rules=${result.trace.rulesEvaluated.length}, diagnostics=${result.diagnostics.length}`,
+    stages: result.trace.phases.map((phase) => ({
+      stage: phase.toLowerCase(),
+      status: "success" as const,
+      detail: `Phase ${phase} executed`,
+    })),
+    metadata: {
+      runId: result.trace.runId,
+      durationMs: result.trace.durationMs,
+      rulesTriggered: result.trace.rulesTriggered.length,
+      diagnostics: result.diagnostics.length,
+      fixesGenerated: result.fixes.length,
+      conflictsDetected: result.conflicts.length,
+    },
   });
 
   if (options.publishResultDiagnostics !== false) {

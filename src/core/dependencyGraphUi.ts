@@ -3,6 +3,7 @@ import path from "path";
 import type { ControlPlane, Plan, Task } from "../schema.js";
 import type { StatePlane } from "./state.js";
 import { detectWorkspace } from "./workspaceDetection.js";
+import { readLatestPlanningTrace } from "./planningTrace.js";
 
 export type DependencyGraph = {
   nodes: {
@@ -66,6 +67,18 @@ export type GraphSnapshot = {
   affectedNodeIds: string[];
   violationNodeIds: string[];
   planOverlay?: PlanOverlay;
+  candidateOrchestration?: {
+    selectedCandidateId: string;
+    selectedStrategyType: string;
+    selectedDagHash: string;
+    candidates: Array<{
+      id: string;
+      strategyType: string;
+      dagHash: string;
+      rank?: number;
+      selected?: boolean;
+    }>;
+  };
   hotspots: GraphHotspot[];
   trace: GraphTrace;
 };
@@ -637,6 +650,7 @@ export function buildGraphSnapshot(input: {
   const affectedNodeIds = overlaySet.affectedNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
   const filteredViolationNodeIds = violationNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
   const hotspots = calculateHotspots(projectedGraph, affectedNodeIds, filteredViolationNodeIds);
+  const planningTrace = readLatestPlanningTrace(input.root);
 
   return {
     generatedAt: new Date().toISOString(),
@@ -652,6 +666,22 @@ export function buildGraphSnapshot(input: {
         planOverlay: {
           planId: overlay.planId,
           steps: overlay.steps.filter((step) => projectedNodeIds.has(step.nodeId)),
+        },
+      }
+      : {}),
+    ...(planningTrace
+      ? {
+        candidateOrchestration: {
+          selectedCandidateId: planningTrace.selectedPlanId,
+          selectedStrategyType: planningTrace.selectedStrategyType,
+          selectedDagHash: planningTrace.orchestrationDagHash,
+          candidates: planningTrace.candidatePlans.map((candidate) => ({
+            id: candidate.id,
+            strategyType: candidate.strategyType,
+            dagHash: candidate.orchestrationDagHash,
+            ...(typeof candidate.rank === "number" ? { rank: candidate.rank } : {}),
+            ...(candidate.selected === true ? { selected: true } : {}),
+          })),
         },
       }
       : {}),

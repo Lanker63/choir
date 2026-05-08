@@ -26,6 +26,26 @@ export type VerifyChatCommand = {
   chaosMode?: "none" | "light" | "moderate" | "extreme";
 };
 
+export type GoalMutationChatCommand =
+  | { type: "remove-goal"; goal: string }
+  | { type: "remove-goal-error"; reason: "missing-goal" };
+
+export type ExportChatCommand =
+  | { type: "export"; format: "json" }
+  | { type: "export-error"; reason: "unsupported-format"; format: string };
+
+function stripOptionalQuotes(value: string): string {
+  if (value.length >= 2) {
+    const startsWithDoubleQuote = value.startsWith('"') && value.endsWith('"');
+    const startsWithSingleQuote = value.startsWith("'") && value.endsWith("'");
+    if (startsWithDoubleQuote || startsWithSingleQuote) {
+      return value.slice(1, -1).trim();
+    }
+  }
+
+  return value;
+}
+
 export function normalizeChatDSLInput(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length === 0) {
@@ -249,4 +269,56 @@ export function parseVerifyChatCommand(input: string): VerifyChatCommand | null 
   }
 
   return null;
+}
+
+export function parseGoalMutationChatCommand(input: string): GoalMutationChatCommand | null {
+  const normalized = input.trim();
+  const withoutParticipantPrefix = normalized.replace(/^@choir\s+/i, "");
+
+  if (!/^remove\s+goal\b/i.test(withoutParticipantPrefix)) {
+    return null;
+  }
+
+  const match = withoutParticipantPrefix.match(/^remove\s+goal(?:\s*:)?\s*(.+)$/i);
+  if (!match) {
+    return {
+      type: "remove-goal-error",
+      reason: "missing-goal",
+    };
+  }
+
+  const goal = stripOptionalQuotes((match[1] ?? "").trim());
+  if (goal.length === 0) {
+    return {
+      type: "remove-goal-error",
+      reason: "missing-goal",
+    };
+  }
+
+  return {
+    type: "remove-goal",
+    goal,
+  };
+}
+
+export function parseExportChatCommand(input: string): ExportChatCommand | null {
+  const normalized = input.trim();
+  const match = normalized.match(/^(?:@choir\s+|choir\s+)?export\s+--format\s+([a-zA-Z0-9._-]+)\s*$/i);
+  if (!match) {
+    return null;
+  }
+
+  const format = (match[1] ?? "").toLowerCase();
+  if (format !== "json") {
+    return {
+      type: "export-error",
+      reason: "unsupported-format",
+      format,
+    };
+  }
+
+  return {
+    type: "export",
+    format: "json",
+  };
 }

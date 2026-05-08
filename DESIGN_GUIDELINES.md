@@ -175,10 +175,25 @@ execution(mode=simulation) == execution(mode=execution)
 
 - Simulation never mutates real workspace or persisted state.
 - Simulation evaluates the same validation and policy pipeline as execution.
+- Simulation must not require pre-existing execution plans; if no configured plans exist, deterministic candidate synthesis from intent/state is mandatory.
 - Simulation output includes deterministic final state projection, per-unit change summary, violations, and replayable trace.
 - Partial simulation must include dependency closure for selected units.
+- Invalid simulation intent (unknown explicit plan/unit target) must fail closed before simulation execution.
 - Execution is blocked when simulation fails.
 - If simulated and executed outcomes diverge, execution fails closed.
+
+## Intent-First Execution Contract
+
+- Execution must be intent-centric and autonomous: persisted execution plans are optional artifacts, never mandatory prerequisites.
+- Execution must compile and validate command intent before orchestration begins.
+- Execution must synthesize deterministic candidate plans from current control/state/workspace inputs when persisted plans are absent.
+- Execution strategy selection must be deterministic and stable for identical inputs.
+- Execution must run simulation parity precheck before any transaction begins.
+- Execution policy gates (org -> repo -> environment) must be enforced before transaction execution.
+- Preview-bound execution (`execute --preview <id-or-hash>`) must validate binding against approved preview hashes before execution.
+- Execution and simulation must share the same orchestration and mutation path; execution cannot use alternate commit logic.
+- Transaction lifecycle remains strict: prepare -> simulate -> validate -> commit|rollback.
+- Post-execution replay verification must match committed final state hash; mismatch fails closed.
 
 ## Refactor Contract (PASS 1)
 
@@ -263,6 +278,15 @@ Workspace detection contract:
 - hash-chained from GENESIS
 - mandatory auditing for policy, compile, execution, CI, macro, abstraction actions
 - deterministic compliance report outputs for identical filters
+
+## Pipeline Diagnostics Contract
+
+- Pipeline and orchestration execution traces must be visible outside transient chat output.
+- Every pipeline run must append a diagnostics record to `.choir/pipeline.diagnostics.jsonl`.
+- Compiler gate results and orchestration stage outcomes (planning, preview, simulation, execution) must be persisted with stage-level status and detail.
+- Command preflight failures (for example missing control-plane resolution) must append failure diagnostics whenever a workspace root is available.
+- Diagnostics records must include command, source, category, result, summary, timestamp, and optional metadata.
+- A dedicated Diagnostics UI panel must render persisted records and stage details, including failure points.
 
 ## Command and Language Surface
 

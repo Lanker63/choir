@@ -163,6 +163,20 @@ export type TimelineReplayTrace = {
   replayTime: number;
   consistencyCheck: boolean;
   fallbackUsed: boolean;
+  planning?: {
+    traceId: string;
+    selectedPlanId: string;
+    selectedStrategyType: string;
+    selectedDagHash: string;
+    rankingOrder: string[];
+    candidates: Array<{
+      id: string;
+      strategyType: string;
+      orchestrationDagHash: string;
+      rank?: number;
+      selected?: boolean;
+    }>;
+  };
 };
 
 export type WorkflowState = {

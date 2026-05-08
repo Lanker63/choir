@@ -45,16 +45,19 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
 
 <preview> ::= "preview" [<plan-ref>]
 
-<execute> ::= "execute" [<plan-ref>] [<execute-options>]
+<execute> ::= "execute" [<plan-target>] [<execute-options>]
 
 <rollback> ::= "rollback"
              | "rollback" <identifier>
              | "rollback" "--stage" <identifier>
 
-<execute-options> ::= "--strategy" <execute-strategy>
+<execute-options> ::= ["--preview" <identifier>]
+                    ["--strategy" <execute-strategy>]
                     ["--steps" <int-list>]
                     ["--phases" <int-list>]
                     ["--batch-size" <integer>]
+
+<plan-target> ::= <plan-ref> | <identifier>
 
 <execute-strategy> ::= "all-at-once" | "canary" | "phased" | "batched"
 
@@ -163,6 +166,7 @@ export const CHOIR_PLAN_FOR_KEYWORD = "for" as const;
 export const CHOIR_PLAN_OPTIMIZE_FLAG = "--optimize" as const;
 export const CHOIR_PLAN_ADAPTIVE_FLAG = "--adaptive" as const;
 export const CHOIR_EXECUTE_STRATEGY_FLAG = "--strategy" as const;
+export const CHOIR_EXECUTE_PREVIEW_FLAG = "--preview" as const;
 export const CHOIR_EXECUTE_STEPS_FLAG = "--steps" as const;
 export const CHOIR_EXECUTE_PHASES_FLAG = "--phases" as const;
 export const CHOIR_EXECUTE_BATCH_SIZE_FLAG = "--batch-size" as const;
@@ -183,6 +187,7 @@ const KEYWORDS = new Set<string>([
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
+  CHOIR_EXECUTE_PREVIEW_FLAG,
   CHOIR_EXECUTE_STEPS_FLAG,
   CHOIR_EXECUTE_PHASES_FLAG,
   CHOIR_EXECUTE_BATCH_SIZE_FLAG,
@@ -268,6 +273,7 @@ export type PreviewNode = {
 export type ExecuteNode = {
   type: "execute";
   planRef?: PlanRef;
+  previewRef?: string;
   rolloutStrategy?: ExecuteRolloutStrategy;
 };
 
@@ -1016,8 +1022,14 @@ class Parser {
 
     if (next && next.type === "keyword" && next.value === "plan") {
       planRef = this.parsePlanRef();
+    } else if (next && next.type === "identifier") {
+      planRef = {
+        type: "plan-ref",
+        identifier: this.expectIdentifierLike(),
+      };
     }
 
+    let previewRef: string | undefined;
     let strategyType: string | undefined;
     let steps: number[] | undefined;
     let phases: number[] | undefined;
@@ -1030,6 +1042,15 @@ class Parser {
       }
 
       const flag = this.expectIdentifierLike().toLowerCase();
+      if (flag === CHOIR_EXECUTE_PREVIEW_FLAG) {
+        if (previewRef) {
+          throw new Error("Duplicate execute preview flag: --preview");
+        }
+
+        previewRef = this.expectIdentifierLike();
+        continue;
+      }
+
       if (flag === CHOIR_EXECUTE_STRATEGY_FLAG) {
         if (strategyType) {
           throw new Error("Duplicate execute strategy flag: --strategy");
@@ -1066,7 +1087,7 @@ class Parser {
         continue;
       }
 
-      throw new Error("Expected execute options: --strategy|--steps|--phases|--batch-size");
+      throw new Error("Expected execute options: --preview|--strategy|--steps|--phases|--batch-size");
     }
 
     if (!strategyType) {
@@ -1077,6 +1098,7 @@ class Parser {
       return {
         type: "execute",
         ...(planRef ? { planRef } : {}),
+        ...(previewRef ? { previewRef } : {}),
       };
     }
 
@@ -1084,6 +1106,7 @@ class Parser {
     return {
       type: "execute",
       ...(planRef ? { planRef } : {}),
+      ...(previewRef ? { previewRef } : {}),
       rolloutStrategy,
     };
   }

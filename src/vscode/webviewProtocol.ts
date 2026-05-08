@@ -29,4 +29,4 @@ export type MessageTrace = {
   timestamp: number;
 };
 
-export type WebviewKind = "control" | "graph" | "timeline";
+export type WebviewKind = "control" | "graph" | "timeline" | "diagnostics";

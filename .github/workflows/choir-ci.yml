@@ -51,6 +51,12 @@ jobs:
       - name: Run compiler verification
         run: npm run verify:compiler
 
+      - name: Run planning verification
+        run: npm run verify:planning
+
+      - name: Run preview verification
+        run: npm run verify:preview
+
       - name: Run contract verification checklist
         run: npm run verify:contracts
 
@@ -115,6 +121,12 @@ jobs:
 
       - name: Compiler verification
         run: npm run verify:compiler
+
+      - name: Planning verification
+        run: npm run verify:planning
+
+      - name: Preview verification
+        run: npm run verify:preview
 
       - name: Contract verification checklist (full)
         run: npm run verify:contracts:full

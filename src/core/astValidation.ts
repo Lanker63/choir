@@ -295,6 +295,72 @@ function trimValue(value: string): string {
   return value.trim();
 }
 
+type ConstraintPolarity = "positive" | "negative";
+
+function normalizeConstraintSubject(value: string): string {
+  return trimValue(value)
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function parseConstraintIntent(value: string): { subject: string; polarity: ConstraintPolarity } | null {
+  const normalized = normalizeConstraintSubject(value);
+  if (normalized.length === 0) {
+    return null;
+  }
+
+  const negativePrefixes = [/^no\s+/, /^not\s+/, /^never\s+/, /^without\s+/];
+  for (const prefix of negativePrefixes) {
+    if (prefix.test(normalized)) {
+      const subject = normalized.replace(prefix, "").trim();
+      if (subject.length === 0) {
+        return null;
+      }
+
+      return {
+        subject,
+        polarity: "negative",
+      };
+    }
+  }
+
+  return {
+    subject: normalized,
+    polarity: "positive",
+  };
+}
+
+function indexConstraintIntents(values: string[]): Map<string, Set<ConstraintPolarity>> {
+  const index = new Map<string, Set<ConstraintPolarity>>();
+  for (const value of values) {
+    const parsed = parseConstraintIntent(value);
+    if (!parsed) {
+      continue;
+    }
+
+    const set = index.get(parsed.subject) ?? new Set<ConstraintPolarity>();
+    set.add(parsed.polarity);
+    index.set(parsed.subject, set);
+  }
+
+  return index;
+}
+
+function hasOpposingConstraintIntent(
+  value: string,
+  ...indexes: Array<Map<string, Set<ConstraintPolarity>>>
+): boolean {
+  const parsed = parseConstraintIntent(value);
+  if (!parsed) {
+    return false;
+  }
+
+  const opposite: ConstraintPolarity = parsed.polarity === "positive" ? "negative" : "positive";
+  return indexes.some((index) => index.get(parsed.subject)?.has(opposite) === true);
+}
+
 function controlHasIntent(control: ControlPlane): boolean {
   return control.mission.trim().length > 0
     || control.vision.trim().length > 0
@@ -569,12 +635,14 @@ export function validateSemantics(ast: AST, context: SystemContext): ValidationR
 
   const existingGoals = new Set<string>(context.controlPlane.intent.goals.map((item) => item.toLowerCase()));
   const existingConstraints = new Set<string>(context.controlPlane.intent.constraints.map((item) => item.toLowerCase()));
+  const existingConstraintIntents = indexConstraintIntents(context.controlPlane.intent.constraints);
   const existingNonGoals = new Set<string>(context.controlPlane.intent["non-goals"].map((item) => item.toLowerCase()));
   const existingMission = new Set<string>(context.controlPlane.mission.trim().length > 0 ? [context.controlPlane.mission.trim().toLowerCase()] : []);
   const existingVision = new Set<string>(context.controlPlane.vision.trim().length > 0 ? [context.controlPlane.vision.trim().toLowerCase()] : []);
 
   const seenGoals = new Set<string>();
   const seenConstraints = new Set<string>();
+  const seenConstraintIntents = new Map<string, Set<ConstraintPolarity>>();
   const seenNonGoals = new Set<string>();
   const seenMission = new Set<string>();
   const seenVision = new Set<string>();
@@ -608,6 +676,10 @@ export function validateSemantics(ast: AST, context: SystemContext): ValidationR
           issues.push(issue("duplicate-constraint", "error", `Duplicate constraint is not allowed: ${value}`, `${path}.value`));
         }
 
+        if (hasOpposingConstraintIntent(value, seenConstraintIntents, existingConstraintIntents)) {
+          issues.push(issue("constraint-conflicts-constraint", "error", `Constraint conflicts with existing constraint intent: ${value}`, `${path}.value`));
+        }
+
         if (seenNonGoals.has(key) || existingNonGoals.has(key)) {
           issues.push(issue("constraint-conflicts-non-goal", "error", `Constraint conflicts with non-goal: ${value}`, `${path}.value`));
         }
@@ -617,6 +689,13 @@ export function validateSemantics(ast: AST, context: SystemContext): ValidationR
         }
 
         seenConstraints.add(key);
+
+        const parsed = parseConstraintIntent(value);
+        if (parsed) {
+          const intentSet = seenConstraintIntents.get(parsed.subject) ?? new Set<ConstraintPolarity>();
+          intentSet.add(parsed.polarity);
+          seenConstraintIntents.set(parsed.subject, intentSet);
+        }
       }
 
       if (action.defineType === "non-goal") {

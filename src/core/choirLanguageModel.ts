@@ -13,6 +13,7 @@ import {
   CHOIR_LIBRARY_AT_SYMBOL,
   CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
+  CHOIR_EXECUTE_PREVIEW_FLAG,
   CHOIR_PLAN_FOR_KEYWORD,
   CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_PLAN_OPTIMIZE_FLAG,
@@ -59,6 +60,7 @@ type ParserState =
   | "execute-tail"
   | "execute-strategy"
   | "execute-id"
+  | "execute-preview-id"
   | "rollback-tail"
   | "rollback-stage-id"
   | "export-format"
@@ -119,6 +121,7 @@ const DSL_KEYWORDS = new Set<string>([
   CHOIR_PLAN_ADAPTIVE_FLAG,
   CHOIR_PLAN_OPTIMIZE_FLAG,
   CHOIR_EXECUTE_STRATEGY_FLAG,
+  CHOIR_EXECUTE_PREVIEW_FLAG,
   CHOIR_ROLLBACK_STAGE_FLAG,
   CHOIR_PLAN_REF_KEYWORD,
   CHOIR_EXPORT_FORMAT_KEYWORD,
@@ -146,6 +149,7 @@ const KEYWORD_HOVER: Record<string, string> = {
   preview: "Preview pending plan execution.",
   execute: "Execute approved plan actions.",
   "--strategy": "Choose progressive rollout strategy for staged execution.",
+  "--preview": "Bind execution to an approved preview hash or approval id.",
   rollback: "Rollback state for all units, a specific unit, or a rollout stage.",
   "--stage": "Scope rollback to a specific rollout stage id.",
   status: "Show runtime or policy status.",
@@ -390,6 +394,7 @@ function transition(state: ParserState, token: Token): ParserState[] {
     if (
       state === "preview-id"
       || state === "execute-id"
+      || state === "execute-preview-id"
       || state === "execute-strategy"
       || state === "rollback-stage-id"
       || state === "approve-id"
@@ -717,8 +722,16 @@ function transition(state: ParserState, token: Token): ParserState[] {
       return ["execute-id"];
     }
 
+    if (token.value === CHOIR_EXECUTE_PREVIEW_FLAG) {
+      return ["execute-preview-id"];
+    }
+
     if (token.value === CHOIR_EXECUTE_STRATEGY_FLAG) {
       return ["execute-strategy"];
+    }
+
+    if (CHOIR_IDENTIFIER_PATTERN.test(token.value)) {
+      return ["expect-then-or-end"];
     }
 
     return [];
@@ -811,7 +824,9 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
 
     return [
       { type: "keyword", value: CHOIR_PLAN_REF_KEYWORD },
+      { type: "keyword", value: CHOIR_EXECUTE_PREVIEW_FLAG },
       { type: "keyword", value: CHOIR_EXECUTE_STRATEGY_FLAG },
+      { type: "identifier" },
     ];
   }
 
@@ -825,6 +840,7 @@ function expectedForState(state: ParserState): ExpectedTerminal[] {
   if (
     state === "preview-id"
     || state === "execute-id"
+    || state === "execute-preview-id"
     || state === "execute-strategy"
     || state === "rollback-stage-id"
     || state === "approve-id"

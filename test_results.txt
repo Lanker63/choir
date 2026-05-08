@@ -1,0 +1,218 @@
+
+> choir@0.0.1 test:architecture
+> npm run build:extension && node out/tests/architecture/suite.js
+
+
+> choir@0.0.1 build:extension
+> tsc -p ./
+
+
+== Pass 1 — Control Plane Tests ==
+PASS 1.1 only one control plane YAML exists
+PASS 1.2 control plane matches canonical schema
+PASS 1.3 control plane compiles into executable rules
+PASS 1.4 control plane rejects duplicate plan ids
+PASS 1.5 control plane rejects circular task dependencies
+
+== Pass 2 — Chat Non-Authority Tests ==
+PASS 2.1 chat does not produce diagnostics without persistence
+PASS 2.2 chat mutates control plane YAML
+PASS 2.3 enforcement requires pipeline execution
+PASS 2.4 enforcer does not consume raw chat input
+PASS 2.5 plural chat directives split comma-delimited lists
+PASS 2.6 choir DSL tokenizer is deterministic
+PASS 2.7 choir DSL parser builds AST and supports then-pipeline
+PASS 2.8 choir DSL parser supports refactor commands
+PASS 2.81 choir DSL rejects invalid syntax deterministically
+PASS 2.9 choir DSL compiler routes AST actions deterministically
+PASS 2.10 capability enforcement prevents cross-role actions
+PASS 2.90 ast structure validation rejects malformed nodes deterministically
+PASS 2.91 ast semantic validation rejects duplicates and conflicts
+PASS 2.92 cross-node validation enforces plan and execute preconditions
+PASS 2.93 rule engine execution order is deterministic and sorted by id
+PASS 2.94 rule conflict detection catches contradictory decisions and fixes
+PASS 2.95 fix engine preserves immutability and semantic equivalence
+PASS 2.96 processAST validates before rules and emits deterministic trace
+PASS 2.97 dependency graph and impact analysis are deterministic
+PASS 2.98 rule indexing is stable and keyed by node type
+PASS 2.99 incremental engine executes only affected local rules
+PASS 2.100 incremental cache invalidates changed nodes and reuses unaffected entries
+PASS 2.101 consistency check detects divergence and falls back to full evaluation
+PASS 2.11 dsl compiler mutates yaml intent deterministically
+PASS 2.12 dsl compiler supports multi-command then pipeline
+PASS 2.13 dsl compiler plan upsert is deterministic and duplicate-safe
+PASS 2.14 dsl compiler execute requires an available plan
+PASS 2.15 dsl compiler rejects malformed and empty-value commands
+PASS 2.16 yaml serialization is canonical and reproducible
+PASS 2.17 dsl parser supports export dsl command
+PASS 2.18 yaml to dsl projection is deterministic and diff-friendly
+PASS 2.19 yaml to dsl round-trip is stable
+PASS 2.20 yaml to dsl partial projection supports intent section
+PASS 2.21 yaml to dsl warns for unrepresentable policy and plans
+PASS 2.22 policy engine computes deterministic yaml diffs and hash
+PASS 2.23 policy deny rule blocks yaml mutation before write
+PASS 2.24 policy require-approval blocks until approved for exact diff hash
+PASS 2.25 policy evaluation trace is deterministic
+PASS 2.26 dsl parser supports policy approval command surface
+PASS 2.27 choir editor completions are deterministic and grammar-aligned
+PASS 2.28 choir editor validation reuses parser behavior per command line
+PASS 2.29 init wizard enforces step flow validation and deterministic dsl output
+PASS 2.30 init wizard session persistence supports resume and clear
+PASS 2.30a init chat shortcut parser accepts prefixed and stripped participant input
+PASS 2.30c verify chat shortcut parser accepts full and quick modes
+PASS 2.30d chat DSL normalization maps set shorthand to canonical define commands
+PASS 2.30b simulation chat formatter renders deterministic summary and risk labels
+PASS 2.31 dsl parser supports macro command surface
+PASS 2.32 macro expansion is deterministic with parameter defaults
+PASS 2.33 macro execution compiles sequentially through yaml pipeline
+PASS 2.32 macro composition rejects recursive cycles deterministically
+PASS 2.33 policy role x environment matrix is deterministic
+PASS 2.34 policy precedence is deterministic deny over require-approval
+PASS 2.35 runtime environment detection drives policy deny in production
+PASS 2.36 role capability validation denies escalation deterministically
+PASS 2.37 policy dsl parses and compiles deterministically
+PASS 2.38 policy dsl rejects invalid role during parse
+PASS 2.39 policy dsl loader rejects duplicate policy ids
+PASS 2.40 policy inheritance loader returns org repo and environment sources
+PASS 2.41 org deny policy wins over repo allow policy
+PASS 2.42 repo cannot override org deny with assign inheritance
+PASS 2.43 org can allow controlled child assign for non-deny policy
+PASS 2.44 environment policy layer is applied last and can enforce strict production denies
+PASS 2.45 duplicate policy ids across org and repo layers are rejected
+PASS 2.46 effective policy trace records source and final decision deterministically
+PASS 2.47 effective policy visualization renders source-aware debug output
+PASS 2.48 audit store records compile and policy evaluation with immutable hash chain
+PASS 2.49 audit records approval granted events
+PASS 2.50 audit query and compliance reports are deterministic with multi-format export
+PASS 2.51 transactional execution writes execution audit record
+PASS 2.52 macro library version selectors resolve deterministically
+PASS 2.53 library install update and lock are reproducible
+PASS 2.54 namespaced library macro execution logs audit metadata
+PASS 2.55 policy engine supports macro selector deterministically
+PASS 2.56 breaking library changes require major bump
+PASS 2.57 ci config defaults are deterministic
+PASS 2.58 ci pipeline trace and artifacts are deterministic for identical inputs
+PASS 2.59 refactor engine preview is deterministic and rollback restores snapshots
+PASS 2.60 macro execution is blocked outside pipeline in ci mode
+PASS 2.60 dsl parser supports abstraction command surface
+PASS 2.61 abstraction execution is deterministic and idempotent
+PASS 2.62 abstraction composition rejects recursive cycles
+PASS 2.63 abstraction validation enforces macro existence
+PASS 2.64 dsl plan approval command mutates plan status deterministically
+
+== Pass 3 — State Plane Tests ==
+PASS 3.1 state file is generated
+PASS 3.2 state contains required structures
+PASS 3.3 state is reproducible
+PASS 3.4 state derived only from workspace plus control plane
+PASS 3.5 deterministic plan generation from goals and violations
+PASS 3.6 plan snapshot matches simple-project golden
+PASS 3.7 plan snapshot matches multi-module golden
+PASS 3.8 plan snapshot matches dependency-graph golden
+PASS 3.9 plan groups violations by rule into minimal refactor tasks
+PASS 3.10 dependency layer computation detects cycles
+PASS 3.11 state builder and validator enforce structural correctness
+PASS 3.12 state consistency check catches yaml ast and rule divergences
+PASS 3.13 state hash is deterministic for equivalent states
+PASS 3.14 state snapshots are created and rollback restores exact snapshot
+PASS 3.15 workspace timeline model records global and per-unit events
+
+== Pass 4 — Pipeline Consolidation Tests ==
+PASS 4.1 pipeline is sole enforcement entry
+PASS 4.2 chat triggers pipeline indirectly
+PASS 4.3 rule editor validation uses pipeline
+PASS 4.4 pipeline executes in correct order
+PASS 4.5 scheduler enforces dependency order
+PASS 4.6 global execution graph flattens and normalizes dependencies
+PASS 4.7 global execution graph topological layers are deterministic
+PASS 4.8 conflict matrix blocks overlapping file mutations
+PASS 4.9 execution planner enables safe parallel batches
+PASS 4.10 execution planner separates conflicting tasks into distinct batches
+PASS 4.14 cost scoring is deterministic and explainable
+PASS 4.15 cost selection uses deterministic plan-id tie-breaker
+PASS 4.16 cost-based plan set selection returns lowest-cost plan
+PASS 4.17 strategy registry is deterministic and capped
+PASS 4.18 strategy transforms are deterministic across grouped layered and aggressive modes
+PASS 4.19 strategy evaluation and selection are deterministic with lexicographic tie break
+PASS 4.20 preview patch grouping and hash are deterministic
+PASS 4.21 adaptive refinement deterministically generates bounded strategies from failure patterns
+PASS 4.22 adaptive strategy selection is deterministic and bounded by iteration limits
+PASS 4.23 strategy memory signature generation and matching are deterministic
+PASS 4.24 strategy memory record lookup reuse and dedupe are deterministic
+PASS 4.25 adaptive failure analysis is deterministic and classifies extended patterns
+PASS 4.26 adaptive cycle determinism assertion passes for identical inputs
+PASS 4.27 plan --adaptive integrates memory fallback and records iteration feedback
+PASS 4.28 adaptive acceptance criteria converges to valid deterministic selection
+PASS 4.11 transactional execution commits validated batches
+PASS 4.12 transactional execution rolls back on validation failure without writes
+PASS 4.13 transactional execution rejects non-idempotent patch sets
+
+== Pass 5 — Distributed Synchronization ==
+PASS 5.1 replica model and logical clock operations are deterministic
+PASS 5.2 delta computation is minimal and deterministic
+PASS 5.3 delta application records visible conflicts and resolves by logical clock
+PASS 5.4 state merge is commutative and deterministic
+PASS 5.5 push pull and bidirectional sync modes converge deterministically
+PASS 5.6 version vectors track per-replica updates after sync
+PASS 5.7 signed changesets reject tampering and require manual resolution
+PASS 5.8 transport batching compression and trace helpers remain deterministic
+PASS 5.9 manual conflict strategy marks unresolved conflicts for manual resolution
+
+== Pass 6 — Global Orchestration and Org Policy Propagation ==
+PASS 6.1 global context and synthesized plan are deterministic for identical inputs
+PASS 6.2 global dependency graph includes inter-repo edges and rejects repo cycles
+PASS 6.3 ordered global execution is deterministic and dependency-safe
+PASS 6.4 global plan validation catches missing deps and conflicting actions
+PASS 6.5 task batching parallelizes independent work and sequences dependencies
+PASS 6.6 org policies are propagated to all repos with no opt-out
+PASS 6.7 cross-repo policy evaluation detects compatibility violations and blocks execution
+PASS 6.8 global execution isolates failure and rolls back only impacted units
+PASS 6.9 policy drift detection flags repo states that diverge from org expectations
+PASS 6.10 incremental planning cache reuses previous graph and plan for unchanged inputs
+PASS 6.10a global simulation is deterministic and does not mutate repo input state
+PASS 6.10b strategy comparison ranks deterministic outcomes by real simulated metrics
+PASS 6.10c partial simulation includes selected units and required dependencies only
+PASS 6.10d execution is blocked when simulation gate fails
+PASS 6.10e simulation and execution converge to identical final state
+PASS 6.10f strategy comparison tie-break is deterministic by lexical strategy id
+PASS 6.10g execution fails closed when simulation and execution outcomes diverge
+PASS 6.10h strategy evaluation simulates all candidates deterministically
+PASS 6.10i strategy metrics comparator enforces lexicographic priority and deterministic score
+PASS 6.10j strategy selection filters violations by default and emits explainable decision
+PASS 6.10k rollout stage generation is deterministic across canary phased and batched strategies
+PASS 6.10l rollout stops on stage failure and rolls back affected stage units
+PASS 6.10m rollout threshold gates stop progression deterministically
+PASS 6.10n rollout requires approval gate before execution when configured
+PASS 6.10o rollout fails closed and rolls back all units on simulation divergence
+PASS 6.10p rollback set includes failed unit and executed dependents only
+PASS 6.10q rollback order is reverse dependency order and deterministic
+PASS 6.10r rollback isolation and post-rollback consistency checks fail closed
+PASS 6.10s transaction abort prevents stage partial state leakage
+PASS 6.10t transaction trace id and stage sequence are deterministic
+PASS 6.10u transaction lock conflicts fail closed with deterministic error
+PASS 6.10v deterministic input hash and trace are stable for identical input
+PASS 6.10w transaction deterministic trace replays to exact final state hash
+PASS 6.10x simulation and execution deterministic hashes converge
+PASS 6.10y deterministic sort is stable and ordered
+PASS 6.10z transaction lifecycle enforces prepare-validate-commit ordering
+PASS 6.10aa idempotency guard suppresses duplicate deterministic changes
+PASS 6.11 workspace detection reads pnpm workspace config with deterministic package ordering
+PASS 6.12 workspace detection prioritizes turbo marker over package manager hints
+PASS 6.13 workspace detection supports nx defaults and remains deterministic
+PASS 6.14 workspace detection reads package.json workspaces and deduplicates overlaps
+PASS 6.15 dependency graph transform to UI graph is deterministic and sorted
+PASS 6.16 graph snapshot is deterministic and projects plan/violation overlays
+PASS 6.17 graph DSL commands parse into deterministic graph AST
+PASS 6.18 verification harness case runner validates deterministic replay simulation and rollback
+PASS 6.19 verification harness full run is deterministic and report formatting is stable
+PASS 6.20 property-based harness is deterministic with fixed seed and stable report
+PASS 6.21 chaos harness mode is deterministic and reports invariant set
+
+== Final — Cross-Cutting Tests ==
+PASS X.1 higher priority rules override lower ones
+PASS X.2 trace is fully populated
+PASS X.3 control plane requires version
+PASS X.4 conflict resolution is deterministic and priority driven
+PASS X.5 priority overrides and dependency safety rejections are honored
+
+PASS architecture harness (all passes)

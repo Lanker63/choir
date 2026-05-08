@@ -55,6 +55,7 @@ import {
   detectEnvironment,
 } from "../core/policyEngine.js";
 import { getProductionSnapshot } from "../core/productionReadiness.js";
+import { readLatestPlanningTrace } from "../core/planningTrace.js";
 import type { Role } from "../core/policyEngine.js";
 import {
   formatDSL,
@@ -415,7 +416,28 @@ export class ChoirProductService {
 
     this.replayIndex = Math.max(0, Math.min(this.replayIndex < 0 ? timelineEntries.length - 1 : this.replayIndex, timelineEntries.length - 1));
     const replayed = jumpTo(root, this.replayIndex);
-    this.replayTrace = replayed.trace;
+    const planningTrace = readLatestPlanningTrace(root);
+    this.replayTrace = {
+      ...replayed.trace,
+      ...(planningTrace
+        ? {
+          planning: {
+            traceId: planningTrace.id,
+            selectedPlanId: planningTrace.selectedPlanId,
+            selectedStrategyType: planningTrace.selectedStrategyType,
+            selectedDagHash: planningTrace.orchestrationDagHash,
+            rankingOrder: planningTrace.rankingOrder,
+            candidates: planningTrace.candidatePlans.map((candidate) => ({
+              id: candidate.id,
+              strategyType: candidate.strategyType,
+              orchestrationDagHash: candidate.orchestrationDagHash,
+              ...(typeof candidate.rank === "number" ? { rank: candidate.rank } : {}),
+              ...(candidate.selected === true ? { selected: true } : {}),
+            })),
+          },
+        }
+        : {}),
+    };
     const currentTransition = timeline.transitions[this.replayIndex];
     const metadata = currentTransition?.metadata;
 

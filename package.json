@@ -22,50 +22,51 @@
     "commands": [
       {
         "command": "choir.openRuleEditor",
-        "title": "Choir: Open Control Center",
+        "title": "Open Control Center",
         "category": "Choir",
         "icon": "$(dashboard)"
       },
       {
         "command": "choir.revealRuleEditorDebug",
-        "title": "Choir: Debug Reveal Rule Editor",
+        "title": "Debug Reveal Rule Editor",
         "category": "Choir"
       },
       {
         "command": "choir.openRuleEditorPanel",
-        "title": "Choir: Open Control Center (Panel)",
-        "category": "Choir"
-      },
-      {
-        "command": "choir.openRuleEditorPanelResolve",
-        "title": "Choir: Open Control Center (Panel Resolve)",
+        "title": "Open Control Center",
         "category": "Choir"
       },
       {
         "command": "choir.showDslEditorTrace",
-        "title": "Choir: Show DSL Editor Trace",
+        "title": "Show DSL Editor Trace",
         "category": "Choir"
       },
       {
         "command": "choir.openDependencyGraph",
-        "title": "Choir: Open Dependency Graph",
+        "title": "Open Dependency Graph",
         "category": "Choir",
         "icon": "$(graph)"
       },
       {
         "command": "choir.openTimeline",
-        "title": "Choir: Open Timeline",
+        "title": "Open Timeline",
         "category": "Choir",
         "icon": "$(history)"
       },
       {
+        "command": "choir.openDiagnostics",
+        "title": "Open Diagnostics",
+        "category": "Choir",
+        "icon": "$(warning)"
+      },
+      {
         "command": "choir.graph.setMode",
-        "title": "Choir: Set Graph Mode",
+        "title": "Set Graph Mode",
         "category": "Choir"
       },
       {
         "command": "choir.showWebviewSyncTrace",
-        "title": "Choir: Show Webview Sync Trace",
+        "title": "Show Webview Sync Trace",
         "category": "Choir"
       }
     ],
@@ -169,6 +170,8 @@
     "verify:orchestration": "npm run build:extension && node out/tests/verification/orchestration.js",
     "verify:production": "npm run build:extension && node out/tests/verification/production.js",
     "verify:compiler": "npm run build:extension && node out/tests/verification/compiler.js",
+    "verify:planning": "npm run build:extension && node out/tests/verification/planning.js",
+    "verify:preview": "npm run build:extension && node out/tests/verification/preview.js",
     "verify:full": "npm run build:extension && node out/tests/verification/full.js",
     "verify:contracts": "npm run build:extension && CHOIR_CONTRACT_MODE=quick node out/tests/verification/contracts.js",
     "verify:contracts:full": "npm run build:extension && CHOIR_CONTRACT_MODE=full node out/tests/verification/contracts.js",

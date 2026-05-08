@@ -40,10 +40,14 @@ import {
 } from "../../core/strategyPlanner.js";
 import {
   ExecutionPreview,
+  generateExecutionPreview,
   generateDiff,
   groupPatchesByFile,
   hashPreview,
 } from "../../core/executionPreview.js";
+import {
+  synthesizeAndOptimizePlans,
+} from "../../core/planOptimizationOrchestrator.js";
 import {
   StrategyMemoryEntry,
   buildSignature,
@@ -154,7 +158,8 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
-import { normalizeChatDSLInput, parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
+import { normalizeChatDSLInput, parseExportChatCommand, parseGoalMutationChatCommand, parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
+import { synthesizePreviewContract } from "../../core/previewOrchestrator.js";
 import {
   getAbstraction,
   listAbstractions,
@@ -173,6 +178,7 @@ import {
   runExecutionPlanTransactionally,
 } from "../../core/scheduler.js";
 import {
+  approvePendingDiff,
   buildGlobalTimeline,
   buildState,
   buildUnitTimeline,
@@ -798,7 +804,13 @@ const pass2: TestPass = {
         assert.throws(() => parseCommand("choir plan --optimize --optimize"), /Duplicate plan optimize flag/);
         assert.throws(() => parseCommand("choir plan --adaptive --adaptive"), /Duplicate plan adaptive flag/);
         assert.throws(() => parseCommand("choir execute --steps 1,10"), /require --strategy/);
-        assert.throws(() => parseCommand("choir execute unknown-plan"), /Expected execute options/);
+        assert.deepStrictEqual(parseCommand("choir execute unknown-plan").ast, {
+          type: "execute",
+          planRef: {
+            type: "plan-ref",
+            identifier: "unknown-plan",
+          },
+        });
         assert.throws(() => parseCommand("choir rollback --stage"), /Expected identifier/);
         assert.throws(() => parseCommand("choir refactor rename one"), /Expected identifier/);
         assert.throws(() => parseCommand("choir simulate units"), /Expected identifier/);
@@ -892,6 +904,7 @@ const pass2: TestPass = {
       run: async () => {
         const control = makeControlPlane();
         control.intent["non-goals"] = ["no direct db access"];
+        control.intent.constraints = ["No new development"];
 
         const duplicateGoal = parseCommand('choir define goal "enforce boundaries" then define goal "enforce boundaries"').ast;
         const duplicateResult = validateSemantics(duplicateGoal, { controlPlane: control });
@@ -902,6 +915,16 @@ const pass2: TestPass = {
         const conflictResult = validateSemantics(conflict, { controlPlane: control });
         assert.strictEqual(conflictResult.valid, false);
         assert.ok(conflictResult.issues.some((entry) => entry.code === "constraint-conflicts-non-goal"));
+
+        const opposingConstraint = parseCommand('choir define constraint "New development"').ast;
+        const opposingConstraintResult = validateSemantics(opposingConstraint, { controlPlane: control });
+        assert.strictEqual(opposingConstraintResult.valid, false);
+        assert.ok(opposingConstraintResult.issues.some((entry) => entry.code === "constraint-conflicts-constraint"));
+
+        const opposingWithinSequence = parseCommand('choir define constraint "No AI code generation" then define constraint "AI code generation"').ast;
+        const opposingWithinSequenceResult = validateSemantics(opposingWithinSequence, { controlPlane: makeControlPlane() });
+        assert.strictEqual(opposingWithinSequenceResult.valid, false);
+        assert.ok(opposingWithinSequenceResult.issues.some((entry) => entry.code === "constraint-conflicts-constraint"));
       },
     },
     {
@@ -1660,7 +1683,7 @@ const pass2: TestPass = {
         assert.deepStrictEqual(simulateTail, ["plan", "units", "then"]);
 
         const executeTail = getDeterministicCompletions("choir execute ").map((item) => item.label);
-        assert.deepStrictEqual(executeTail, ["plan", "--strategy", "then"]);
+        assert.deepStrictEqual(executeTail, ["plan", "--preview", "--strategy", "identifier", "then"]);
 
         const rollbackTail = getDeterministicCompletions("choir rollback ").map((item) => item.label);
         assert.deepStrictEqual(rollbackTail, ["--stage", "identifier", "then"]);
@@ -1926,6 +1949,131 @@ const pass2: TestPass = {
 
         const showAst = parseCommand(normalizeChatDSLInput("@choir show")).ast;
         assert.strictEqual(showAst.type, "status");
+
+        assert.deepStrictEqual(
+          parseGoalMutationChatCommand('@choir remove goal: "Refactor API layer"'),
+          {
+            type: "remove-goal",
+            goal: "Refactor API layer",
+          }
+        );
+
+        assert.deepStrictEqual(
+          parseGoalMutationChatCommand("@choir remove goal \"Refactor API layer\""),
+          {
+            type: "remove-goal",
+            goal: "Refactor API layer",
+          }
+        );
+
+        assert.deepStrictEqual(
+          parseExportChatCommand("@choir export --format json"),
+          {
+            type: "export",
+            format: "json",
+          }
+        );
+
+        assert.deepStrictEqual(
+          parseExportChatCommand("@choir export --format yaml"),
+          {
+            type: "export-error",
+            reason: "unsupported-format",
+            format: "yaml",
+          }
+        );
+      },
+    },
+    {
+      id: "2.30e",
+      name: "preview synthesis is deterministic in fresh workspace without configured plans",
+      run: async () => {
+        const fixture = createHarnessFromFixture("simple-project");
+
+        try {
+          const control = fixture.harness.loadControlPlane();
+          control.execution.plans = [];
+          fixture.harness.saveControlPlane(control);
+
+          const fingerprints: string[] = [];
+          for (let run = 0; run < 10; run += 1) {
+            const preview = await synthesizePreviewContract({
+              root: fixture.root,
+              controlPlane: control,
+              command: "choir preview",
+              persistPreviewState: false,
+              recordPendingApproval: false,
+            });
+
+            assert.strictEqual(preview.planSource, "synthesized");
+            assert.ok(preview.stageResults.every((stage) => stage.status === "success"));
+
+            fingerprints.push(JSON.stringify({
+              previewHash: preview.previewHash,
+              simulationHash: preview.simulationHash,
+              stateHash: preview.stateHash,
+              planId: preview.planId,
+              strategyId: preview.strategyId,
+              executionStages: preview.executionStages,
+              stageResults: preview.stageResults,
+            }));
+          }
+
+          assert.ok(fingerprints.every((entry) => entry === fingerprints[0]));
+        } finally {
+          fixture.dispose();
+        }
+      },
+    },
+    {
+      id: "2.30f",
+      name: "preview synthesis enforces approval binding for require-approval policies",
+      run: async () => {
+        const fixture = createHarnessFromFixture("simple-project");
+
+        try {
+          const control = fixture.harness.loadControlPlane();
+          writePoliciesDSL(fixture.root, [
+            "policy preview-approval {",
+            "  when diff.path = \"execution.plans\" and diff.operation = add then require-approval",
+            "}",
+            "",
+          ].join("\n"));
+
+          const first = await synthesizePreviewContract({
+            root: fixture.root,
+            controlPlane: control,
+            command: "choir preview",
+            persistPreviewState: false,
+            recordPendingApproval: true,
+          });
+
+          assert.strictEqual(first.policy.decision, "require-approval");
+          assert.strictEqual(first.approval.required, true);
+          assert.strictEqual(first.approval.approved, false);
+          assert.ok(first.approval.pendingId);
+
+          approvePendingDiff(
+            fixture.root,
+            first.approval.pendingId as string,
+            "architecture-suite",
+            new Date(0).toISOString()
+          );
+
+          const second = await synthesizePreviewContract({
+            root: fixture.root,
+            controlPlane: control,
+            command: "choir preview",
+            persistPreviewState: false,
+            recordPendingApproval: true,
+          });
+
+          assert.strictEqual(second.approval.required, true);
+          assert.strictEqual(second.approval.approved, true);
+          assert.strictEqual(second.previewHash, first.previewHash);
+        } finally {
+          fixture.dispose();
+        }
       },
     },
     {
@@ -4534,6 +4682,112 @@ const pass4: TestPass = {
           first.adaptiveTrace.strategiesTested,
           second.adaptiveTrace.strategiesTested
         );
+      },
+    },
+    {
+      id: "4.29",
+      name: "plan optimize synthesizes deterministic plans in fresh workspaces",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+          control.execution.plans = [];
+
+          const first = await synthesizeAndOptimizePlans({
+            root,
+            controlPlane: control,
+            command: "choir plan --optimize",
+          });
+          const second = await synthesizeAndOptimizePlans({
+            root,
+            controlPlane: control,
+            command: "choir plan --optimize",
+          });
+
+          assert.strictEqual(first.selectedPlan.synthesized, true);
+          assert.ok(first.candidatePlans.length > 1);
+          assert.ok(first.rankedPlans.length > 0);
+          assert.ok(first.stageResults.every((stage) => stage.status === "success"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "candidate-synthesis"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "strategy-ranking"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "strategy-selection"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "orchestration-build"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "simulation"));
+          assert.ok(first.stageResults.some((stage) => stage.stage === "replay-verification"));
+          assert.strictEqual(first.selectedPlan.id, second.selectedPlan.id);
+          assert.strictEqual(first.planHash, second.planHash);
+          assert.strictEqual(first.simulationHash, second.simulationHash);
+          assert.deepStrictEqual(first.executionStages, second.executionStages);
+        });
+      },
+    },
+    {
+      id: "4.30",
+      name: "plan optimize simulation hash matches execution preview hash",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+          control.execution.plans = [];
+
+          const optimized = await synthesizeAndOptimizePlans({
+            root,
+            controlPlane: control,
+            command: "choir plan --optimize",
+          });
+
+          const executionControl = {
+            ...control,
+            execution: {
+              ...control.execution,
+              plans: [
+                {
+                  ...optimized.selectedExecutionPlan,
+                  status: "approved" as const,
+                },
+              ],
+            },
+          };
+
+          const preview = await generateExecutionPreview(optimized.selectedExecutionPlan, {
+            root,
+            controlPlane: executionControl,
+          });
+
+          assert.strictEqual(preview.hash, optimized.simulationHash);
+        });
+      },
+    },
+    {
+      id: "4.31",
+      name: "plan optimize rejects deny policy candidates deterministically",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+          control.execution.plans = [];
+          writePoliciesDSL(root, [
+            "policy deny-plan-synthesis {",
+            "  when diff.path = \"execution.plans\" and diff.operation = add then deny",
+            "}",
+            "",
+          ].join("\n"));
+
+          await assert.rejects(
+            () => synthesizeAndOptimizePlans({
+              root,
+              controlPlane: control,
+              command: "choir plan --optimize",
+            }),
+            (error: unknown) => {
+              if (typeof error !== "object" || error === null) {
+                return false;
+              }
+
+              const candidate = error as { failedStage?: unknown; message?: unknown };
+              return candidate.failedStage === "policy-evaluation"
+                && typeof candidate.message === "string"
+                && candidate.message.includes("denied by policy");
+            }
+          );
+        });
       },
     },
     {

@@ -73,10 +73,12 @@ Additional commands:
 - Chat panel shortcuts:
   - @choir control
   - @choir timeline
+  - @choir diagnostics
 - UI panels:
   - Choir: Open Control Center
   - Choir: Open Dependency Graph
   - Choir: Open Timeline
+  - Choir: Open Diagnostics
 - Governance:
   - choir policy status
   - choir audit log|query|report
@@ -95,6 +97,8 @@ Additional commands:
   - choir verify --production
   - @choir verify --full
   - choir verify --full
+  - npm run verify:simulation
+  - npm run verify:execution
   - npm run verify:full
 
 ## DSL Grammar (Compact)
@@ -117,7 +121,7 @@ Additional commands:
              | "refactor" "extract" <identifier> <identifier>
              | "refactor" "inline" <identifier>
 <preview> ::= "preview" ["plan" <identifier>]
-<execute> ::= "execute" ["plan" <identifier>] ["--strategy" <execute-strategy>] ["--steps" <int-list>] ["--phases" <int-list>] ["--batch-size" <integer>]
+<execute> ::= "execute" [["plan" <identifier>] | <identifier>] ["--preview" <identifier>] ["--strategy" <execute-strategy>] ["--steps" <int-list>] ["--phases" <int-list>] ["--batch-size" <integer>]
 <rollback> ::= "rollback" | "rollback" <identifier> | "rollback" "--stage" <identifier>
 <status> ::= "status"
 <export> ::= "export" "dsl" ["all" | "intent" | "policy" | "plans"]
@@ -173,12 +177,18 @@ Refactor safety notes (PASS 1):
 Org-wide simulation notes:
 
 - `choir simulate` runs deterministic, non-mutating simulation with the same execution logic as real execution.
+- `choir simulate` does not require pre-existing execution plans; when no configured plans exist, Choir synthesizes a deterministic candidate plan from current intent/state.
 - `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
+- `choir execute` is intent-first: when no persisted plans exist, execution synthesizes deterministic candidate plans from current intent and workspace state.
+- `choir execute --preview <id-or-hash>` binds execution to an approved preview hash before any transaction starts.
+- `choir execute <planId>` and `choir execute plan <planId>` target an explicit persisted plan when needed; persisted plans are optional artifacts, not prerequisites.
 - `choir plan --optimize` simulates all candidate strategies and returns explainable ranking and selected strategy.
 - `choir execute --strategy ...` runs progressive staged rollout (canary/phased/batched/all-at-once) with per-stage validation.
 - `choir rollback`, `choir rollback <unit>`, and `choir rollback --stage <id>` compute deterministic rollback scope/order and record rollback timeline transitions.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
+- Invalid simulation intent (for example, unknown explicit plan/unit targets) is blocked before simulation runs.
+- Invalid execution intent (for example, unknown explicit plan targets) is blocked before execution runs.
 
 ## Workspace Detection
 
@@ -220,6 +230,14 @@ Artifacts:
 - Audit log: .choir/audit.log.jsonl
 - Append-only and hash-chained from GENESIS
 - Reports: .choir/reports/compliance-{report.json,report.yaml,report.pdf}
+
+## Execution Diagnostics
+
+- Pipeline diagnostics log: .choir/pipeline.diagnostics.jsonl
+- Captures compiler gate outcomes and orchestrator stage execution (plan optimize, preview, simulate, execute)
+- Captures command preflight failures (for example control-plane path/load failures) when a workspace root is available
+- Diagnostics panel renders the latest recorded stage traces and metadata for each command run
+- Empty diagnostics state surfaces the active diagnostics log path for faster root/path troubleshooting
 
 ## UI Surfaces
 

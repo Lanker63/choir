@@ -6,6 +6,7 @@ import { RuleEditorProvider } from "./RuleEditorProvider.js";
 import { RuleTreeProvider } from "./RuleTreeProvider.js";
 import { GraphViewProvider } from "./GraphViewProvider.js";
 import { TimelineViewProvider } from "./TimelineViewProvider.js";
+import { PipelineDiagnosticsViewProvider } from "./PipelineDiagnosticsViewProvider.js";
 import { ChoirEventBus, MessageTraceStore, WebviewRegistry } from "./choirWebviewSync.js";
 import { readStatePlane } from "../core/state.js";
 import { recoverState, verifyReplayConsistency } from "../core/persistentStateAudit.js";
@@ -68,6 +69,7 @@ export function activate(context: vscode.ExtensionContext) {
         const provider = new RuleEditorProvider(context, productService, eventBus, traceStore, webviewRegistry);
         const graphProvider = new GraphViewProvider(context, eventBus, traceStore, webviewRegistry);
         const timelineProvider = new TimelineViewProvider(context, productService, eventBus, traceStore, webviewRegistry);
+        const diagnosticsProvider = new PipelineDiagnosticsViewProvider(context, eventBus, traceStore, webviewRegistry);
 
         // Register tree provider for the activity view that lists rules
         const tree = new RuleTreeProvider();
@@ -117,6 +119,20 @@ export function activate(context: vscode.ExtensionContext) {
             eventBus.emit({ type: "TIMELINE_UPDATED" });
         }));
 
+        addSubscription(context, vscode.commands.registerCommand("choir.openDiagnostics", async () => {
+            try {
+                diagnosticsProvider.openPanel(vscode.ViewColumn.Two);
+                await diagnosticsProvider.refresh();
+            } catch (error) {
+                const message = error instanceof Error ? error.message : String(error);
+                void vscode.window.showErrorMessage(`Unable to open diagnostics: ${message}`);
+            }
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.refreshDiagnostics", async () => {
+            await diagnosticsProvider.refresh();
+        }));
+
         addSubscription(context, vscode.commands.registerCommand("choir.graph.setMode", async (mode?: string, nodeId?: string) => {
             const normalizedMode = mode === "focused" || mode === "dependency" || mode === "dependents" ? mode : "full";
             await graphProvider.setMode(normalizedMode, typeof nodeId === "string" ? nodeId : undefined);
@@ -128,14 +144,6 @@ export function activate(context: vscode.ExtensionContext) {
                 provider.openPanel(vscode.ViewColumn.One);
             } catch (err) {
                 console.error("Choir: openRuleEditorPanel failed", err);
-            }
-        }));
-
-        addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorPanelResolve", () => {
-            try {
-                provider.openPanel(vscode.ViewColumn.One);
-            } catch (err) {
-                console.error("Choir: openRuleEditorPanelResolve failed", err);
             }
         }));
 

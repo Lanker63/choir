@@ -705,6 +705,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const hotspot = Array.isArray(state.snapshot.hotspots)
         ? state.snapshot.hotspots.find(function(entry) { return entry.nodeId === node.id; })
         : undefined;
+      const candidateOrchestration = state.snapshot.candidateOrchestration;
+      const candidateSummary = candidateOrchestration && Array.isArray(candidateOrchestration.candidates)
+        ? candidateOrchestration.candidates
+          .map(function(candidate) {
+            const rank = typeof candidate.rank === "number" ? ("#" + candidate.rank + " ") : "";
+            const selected = candidate.selected === true ? " [selected]" : "";
+            return rank + candidate.strategyType + " (" + candidate.id + ", dag=" + candidate.dagHash + ")" + selected;
+          })
+          .join("\\n")
+        : "none";
 
       const lines = [
         "id: " + node.id,
@@ -719,6 +729,14 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         "",
         "hotspot:",
         hotspot ? ("score=" + hotspot.score + ", reasons=" + (hotspot.reasons || []).join(",")) : "none",
+        "",
+        "candidate orchestration:",
+        candidateOrchestration
+          ? ("selected=" + candidateOrchestration.selectedCandidateId + ", strategy=" + candidateOrchestration.selectedStrategyType + ", dag=" + candidateOrchestration.selectedDagHash)
+          : "none",
+        "",
+        "candidates:",
+        candidateSummary,
       ];
 
       inspector.textContent = lines.join("\\n");

@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import fs from "fs";
 import path from "path";
-import { createDefaultControlPlane, getControlPlanePath, readControlPlane } from "./choirManager.js";
+import { createDefaultControlPlane, getControlPlanePath, readControlPlane, writeControlPlane } from "./choirManager.js";
 import {
     exportReport,
     generateReport,
@@ -48,7 +48,6 @@ import {
     RolloutStrategy,
     compareStrategies,
     validateIsolation,
-    selectBestStrategy,
     simulatePlan as simulateGlobalPlan,
     simulateUnits as simulateGlobalUnits,
 } from "./core/globalOrchestration.js";
@@ -74,12 +73,22 @@ import {
 } from "./core/yamlDslGenerator.js";
 import {
     parseAbstractionChatCommand,
+    parseExportChatCommand,
     parseGraphChatCommand,
+    parseGoalMutationChatCommand,
     parseInitChatCommand,
     normalizeChatDSLInput,
     parsePanelChatCommand,
     parseVerifyChatCommand,
 } from "./core/chatCommands.js";
+import {
+    PreviewSynthesisError,
+    synthesizePreviewContract,
+} from "./core/previewOrchestrator.js";
+import {
+    PlanOptimizationError,
+    synthesizeAndOptimizePlans,
+} from "./core/planOptimizationOrchestrator.js";
 import {
     InitApplyMode,
     InitWizard,
@@ -303,6 +312,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --production",
         "- @choir verify --compiler",
         "- @choir verify --full",
+        "- @choir export --format json",
         "- @choir control",
         "- @choir timeline",
         "- @choir list abstractions",
@@ -349,6 +359,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const graphChatCommand = parseGraphChatCommand(raw);
             const panelChatCommand = parsePanelChatCommand(raw);
             const verifyChatCommand = parseVerifyChatCommand(raw);
+            const exportChatCommand = parseExportChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
                     stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
@@ -789,6 +800,80 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 return;
             }
 
+            if (exportChatCommand) {
+                if (exportChatCommand.type === "export-error") {
+                    stream.markdown(`Unsupported export format: ${exportChatCommand.format}. Supported formats: json.`);
+                    return;
+                }
+
+                const control = readControlPlane();
+                if (!control) {
+                    stream.markdown("No control plane found. Open a workspace folder first.");
+                    return;
+                }
+
+                const controlPath = getControlPlanePath();
+                if (!controlPath) {
+                    stream.markdown("Unable to resolve .choir/choir.config.yaml.");
+                    return;
+                }
+
+                const root = path.dirname(controlPath);
+                const fileName = "choir.config.json";
+                const outputPath = path.join(root, fileName);
+                const json = `${JSON.stringify(control, null, 2)}\n`;
+                fs.writeFileSync(outputPath, json, "utf-8");
+
+                stream.markdown([
+                    "JSON exported successfully.",
+                    `- path: .choir/${fileName}`,
+                    "",
+                    "```json",
+                    json.trimEnd(),
+                    "```",
+                ].join("\n"));
+                return;
+            }
+
+            const goalMutationChatCommand = parseGoalMutationChatCommand(raw);
+            if (goalMutationChatCommand) {
+                if (goalMutationChatCommand.type === "remove-goal-error") {
+                    stream.markdown("Invalid goal removal command. Provide a non-empty goal after `remove goal`.");
+                    return;
+                }
+
+                const control = readControlPlane();
+                if (!control) {
+                    stream.markdown("No control plane found. Open a workspace folder first.");
+                    return;
+                }
+
+                const controlPath = getControlPlanePath();
+                if (!controlPath) {
+                    stream.markdown("Unable to resolve .choir/choir.config.yaml.");
+                    return;
+                }
+
+                const currentGoals = control.intent.goals;
+                const nextGoals = currentGoals.filter((goal) => goal !== goalMutationChatCommand.goal);
+                if (nextGoals.length === currentGoals.length) {
+                    stream.markdown(`No changes. Goal not found: ${goalMutationChatCommand.goal}`);
+                    return;
+                }
+
+                const updatedControl = {
+                    ...control,
+                    intent: {
+                        ...control.intent,
+                        goals: nextGoals,
+                    },
+                };
+
+                writeControlPlane(updatedControl);
+                stream.markdown("YAML updated successfully: .choir/choir.config.yaml");
+                return;
+            }
+
             if (abstractionChatCommand) {
                 const workspaceRoot = getWorkspaceRoot();
                 if (!workspaceRoot) {
@@ -1151,51 +1236,68 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 if (parsed.ast.type === "plan" && parsed.ast.optimize) {
                     const planNode = parsed.ast;
-                    const configuredPlans = [...control.execution.plans]
-                        .sort((left, right) => left.id.localeCompare(right.id));
+                    try {
+                        const optimized = await synthesizeAndOptimizePlans({
+                            root: workspaceRoot,
+                            controlPlane: control,
+                            command: normalizedDSLInput,
+                            ...(planNode.target ? { targetGoal: planNode.target } : {}),
+                        });
 
-                    if (configuredPlans.length === 0) {
-                        stream.markdown("Plan optimization unavailable: no execution plans defined in control plane.");
-                        return;
+                        const rankingLines = optimized.rankedPlans.map((entry) =>
+                            `- ${entry.rank}. ${entry.strategyId} (policy=${entry.policyDecision}, risk=${entry.riskScore}, dependencyRisk=${entry.dependencyRisk}, blastRadius=${entry.blastRadius}, rollbackComplexity=${entry.rollbackComplexity}, executionCost=${entry.executionCost}, changes=${entry.changeCount})`
+                        );
+
+                        const stageLines = optimized.stageResults
+                            .map((stage) => {
+                                const status = stage.status === "success" ? "ok" : "fail";
+                                return `- [${status}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                        const executionLines = optimized.executionStages.length === 0
+                            ? ["- none"]
+                            : optimized.executionStages.map((stage) =>
+                                `- ${stage.order}. ${stage.id} (parallel=${stage.parallelizable}, units=[${stage.units.join(", ")}])`
+                            );
+
+                        stream.markdown([
+                            "Plan optimization complete.",
+                            `- selectedPlan: ${optimized.selectedPlan.id}`,
+                            `- strategy: ${optimized.selectedPlan.strategyId}`,
+                            `- synthesized: ${optimized.selectedPlan.synthesized}`,
+                            `- policyDecision: ${optimized.policyDecision}`,
+                            `- planHash: ${optimized.planHash}`,
+                            `- simulationHash: ${optimized.simulationHash}`,
+                            `- rollbackScopeComplexity: ${optimized.rollbackScope.complexity}`,
+                            `- candidates: ${optimized.rankedPlans.length}`,
+                            "",
+                            "Pipeline stages:",
+                            ...stageLines,
+                            "",
+                            "Execution stages:",
+                            ...executionLines,
+                            "",
+                            "Ranking:",
+                            ...rankingLines,
+                        ].join("\n"));
+                    } catch (error) {
+                        if (error instanceof PlanOptimizationError) {
+                            const stageLines = error.stageResults.map((stage) => {
+                                const status = stage.status === "success" ? "ok" : "fail";
+                                return `- [${status}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                            stream.markdown([
+                                "Plan optimization failed.",
+                                `- stage: ${error.failedStage}`,
+                                "",
+                                ...stageLines,
+                            ].join("\n"));
+                            return;
+                        }
+
+                        throw error;
                     }
-
-                    const target = planNode.target;
-                    const targetedPlans = target
-                        ? configuredPlans.filter((plan) => (plan.goalRefs ?? []).includes(target))
-                        : configuredPlans;
-
-                    if (targetedPlans.length === 0) {
-                        stream.markdown(`Plan optimization found no matching strategies for target: ${target}`);
-                        return;
-                    }
-
-                    const strategies = targetedPlans.map((plan) => ({
-                        id: plan.id,
-                        plan: toGlobalPlanFromPlan(plan),
-                    }));
-                    const repos = buildSimulationRepos(strategies.map((entry) => entry.plan));
-                    const selection = await selectBestStrategy(strategies, {
-                        repos,
-                        policies: [],
-                    });
-
-                    const rankingLines = selection.ranking.map((entry, index) =>
-                        `- ${index + 1}. ${entry.strategyId} (violations=${entry.metrics.violations}, risk=${entry.metrics.risk}, changes=${entry.metrics.changes}, executionCost=${entry.metrics.executionCost})`
-                    );
-
-                    stream.markdown([
-                        "Plan optimization complete.",
-                        `- selected: ${selection.selected.strategyId}`,
-                        `- strategiesEvaluated: ${selection.trace.strategiesEvaluated}`,
-                        `- strategiesRejected: ${selection.trace.strategiesRejected}`,
-                        `- selectionTimeMs: ${selection.trace.selectionTime}`,
-                        "",
-                        "Reason:",
-                        ...selection.decision.reason.split("\n"),
-                        "",
-                        "Ranking:",
-                        ...rankingLines,
-                    ].join("\n"));
                     return;
                 }
 
@@ -1442,6 +1544,97 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         violations: simulated.violations,
                         metrics,
                     }));
+                    return;
+                }
+
+                if (parsed.ast.type === "preview") {
+                    const previewNode = parsed.ast;
+                    try {
+                        const synthesized = await synthesizePreviewContract({
+                            root: workspaceRoot,
+                            controlPlane: control,
+                            command: normalizedDSLInput,
+                            ...(previewNode.planRef ? { requestedPlanId: previewNode.planRef.identifier } : {}),
+                            persistPreviewState: true,
+                            recordPendingApproval: true,
+                        });
+
+                        const stageLines = synthesized.stageResults
+                            .map((stage) => {
+                                const statusLabel = stage.status === "success" ? "ok" : "fail";
+                                return `- [${statusLabel}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                        const executionStageLines = synthesized.executionStages.length === 0
+                            ? ["- none"]
+                            : synthesized.executionStages.map((stage, index) => {
+                                const units = stage.workUnits.map((unit) => unit.id).join(", ");
+                                return `- ${index + 1}. ${stage.id} (parallel=${stage.parallelizable}, units=${stage.workUnits.length})${units.length > 0 ? ` [${units}]` : ""}`;
+                            });
+
+                        const diffLines = synthesized.fileChanges.length === 0
+                            ? ["No file deltas were produced during simulation."]
+                            : synthesized.fileChanges.slice(0, 5).flatMap((change) => [
+                                `File: ${change.file}`,
+                                "```diff",
+                                change.diff,
+                                "```",
+                            ]);
+
+                        const approvalLine = synthesized.approval.required
+                            ? synthesized.approval.approved
+                                ? "required and satisfied"
+                                : `required and pending${synthesized.approval.pendingId ? ` (${synthesized.approval.pendingId})` : ""}`
+                            : "not required";
+
+                        const violationLines = synthesized.policy.violations.length === 0
+                            ? ["- none"]
+                            : synthesized.policy.violations.map((entry) => `- [${entry.ruleId}] ${entry.message}`);
+
+                        stream.markdown([
+                            "Preview synthesized (read-only execution contract).",
+                            `- plan: ${synthesized.planId} (${synthesized.planSource})`,
+                            `- basePlan: ${synthesized.basePlanId}`,
+                            `- strategy: ${synthesized.strategyId}`,
+                            `- previewHash: ${synthesized.previewHash}`,
+                            `- simulationHash: ${synthesized.simulationHash}`,
+                            `- stateHash: ${synthesized.stateHash}`,
+                            `- filesChanged: ${synthesized.summary.filesChanged}`,
+                            `- patches: ${synthesized.summary.patchesCount}`,
+                            `- remainingViolations: ${synthesized.summary.remainingViolations}`,
+                            `- introducedErrors: ${synthesized.summary.introducedErrors}`,
+                            `- policyDecision: ${synthesized.policy.decision}`,
+                            `- approval: ${approvalLine}`,
+                            "",
+                            "Pipeline stages:",
+                            ...stageLines,
+                            "",
+                            "Execution stages:",
+                            ...executionStageLines,
+                            "",
+                            "Policy violations:",
+                            ...violationLines,
+                            "",
+                            ...diffLines,
+                        ].join("\n"));
+                    } catch (error) {
+                        if (error instanceof PreviewSynthesisError) {
+                            const stageLines = error.stageResults.map((stage) => {
+                                const statusLabel = stage.status === "success" ? "ok" : "fail";
+                                return `- [${statusLabel}] ${stage.stage}: ${stage.detail}`;
+                            });
+
+                            stream.markdown([
+                                "Preview synthesis failed.",
+                                `- failedStage: ${error.failedStage}`,
+                                "",
+                                ...stageLines,
+                            ].join("\n"));
+                            return;
+                        }
+
+                        throw error;
+                    }
                     return;
                 }
 

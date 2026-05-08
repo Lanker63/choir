@@ -82,7 +82,7 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "cross-node validation stage",
         source: "architecture",
-        pattern: /PASS 2\.92 cross-node validation enforces plan and execute preconditions/,
+        pattern: /PASS 2\.92 cross-node validation enforces (?:plan|intent) and execute preconditions/,
       },
     ],
   },
