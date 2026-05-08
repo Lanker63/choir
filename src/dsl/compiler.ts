@@ -180,14 +180,11 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
         if (rule.match.callExpressions && ts.isCallExpression(node)) {
           const name = node.expression.getText(sourceFile);
 
-          const matched = rule.match.callExpressions.some(c =>
-            name.includes(c)
+          const matched = rule.match.callExpressions.some((c) =>
+            c === "*" ? true : name.includes(c)
           );
 
-          if (
-            matched &&
-            rule.constraint.type === "forbid"
-          ) {
+          if (matched && rule.constraint.type === "forbid") {
             const typeInfo = nodeType ? ` (type: ${context.semanticGraph.getType(nodeId!)?.flags ?? "unknown"})` : "";
             emitDiagnostic(node, `${rule.message}${typeInfo}`);
           }

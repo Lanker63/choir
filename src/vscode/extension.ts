@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import * as fs from "fs";
+import { getControlPlanePath } from "../choirManager.js";
 import { registerChoir } from "../chat.js";
 import { ChoirProductService } from "./ChoirProductService.js";
 import { RuleEditorProvider } from "./RuleEditorProvider.js";
@@ -95,19 +97,60 @@ export function activate(context: vscode.ExtensionContext) {
         // Command to focus the Control Center webview.
         addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorForRule", async (rule) => {
             try {
-                const yaml = await import("yaml");
-                const dslText = yaml.stringify([rule]);
-
-                // Open the Control Center for context and also open a side editor
-                // showing the selected rule's YAML so the user sees and can edit it.
+                // Open the Control Center panel for context
                 provider.openPanel(vscode.ViewColumn.One);
 
-                try {
+                // Try to open the canonical control-plane file and reveal the selected rule
+                const controlPath = getControlPlanePath();
+                const ruleId = rule && typeof rule.id === "string" ? rule.id : undefined;
+
+                async function openAndRevealFile(filePath: string) {
+                    try {
+                        const doc = await vscode.workspace.openTextDocument(filePath);
+                        if (ruleId) {
+                            const text = doc.getText();
+                            const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\\]\\]/g, "\\\\$&");
+                            // look for list entry like `- id: <ruleId>` or `id: <ruleId>`
+                            let m = new RegExp("^-\\s*id\\s*:\\s*" + escapeRegExp(ruleId) + "\\b", "m").exec(text);
+                            if (!m) {
+                                m = new RegExp("^\\s*id\\s*:\\s*" + escapeRegExp(ruleId) + "\\b", "m").exec(text);
+                            }
+                            if (m) {
+                                const pos = doc.positionAt(m.index);
+                                await vscode.window.showTextDocument(doc, { preview: false, selection: new vscode.Range(pos, pos), viewColumn: vscode.ViewColumn.Two });
+                                return;
+                            }
+                        }
+                        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
+                    } catch (err) {
+                        console.error("Choir: failed to open control plane document", err);
+                        throw err;
+                    }
+                }
+
+                if (controlPath && fs.existsSync(controlPath)) {
+                    try {
+                        await openAndRevealFile(controlPath);
+                    } catch {
+                        // fallback to creating a quick YAML view of the rule
+                        const yaml = await import("yaml");
+                        const dslText = yaml.stringify([rule]);
+                        const doc = await vscode.workspace.openTextDocument({ content: dslText, language: "yaml" });
+                        await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
+                    }
+                } else {
+                    // No canonical control plane on disk — open a temporary YAML view for the rule
+                    const yaml = await import("yaml");
+                    const dslText = yaml.stringify([rule]);
                     const doc = await vscode.workspace.openTextDocument({ content: dslText, language: "yaml" });
                     await vscode.window.showTextDocument(doc, { preview: false, viewColumn: vscode.ViewColumn.Two });
-                } catch (editorErr) {
-                    // If opening the editor fails, still surface the control center.
-                    console.error("Choir: failed to open rule editor document", editorErr);
+                }
+
+                // Emit a NAVIGATE event so the Control Center webview can highlight the rule
+                try {
+                    eventBus.emit({ type: "NAVIGATE", intent: { type: "focusRule", ruleId } });
+                } catch (emitErr) {
+                    console.error("Choir: failed to emit NAVIGATE event", emitErr);
                 }
             } catch (err) {
                 console.error("Choir: openRuleEditorForRule failed", err);

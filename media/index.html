@@ -9,6 +9,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Choir Control Center</title>
     <link rel="stylesheet" href="__STYLE_URI__" />
+    <style>
+      /* Selected rule badge shown when a rule is focused from the Rules tree */
+      .selected-badge{min-width:200px;padding:6px 10px;border-radius:8px;background:rgba(255,255,255,.9);border:1px solid rgba(36,47,41,.2);color:#5e665f;font-size:13px;display:inline-block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .rule-hint{margin:10px 0 0;color:#5e665f;font-size:13px}
+    </style>
   </head>
   <body>
     <div class="app-shell">
@@ -18,6 +23,7 @@
           <h1>Control Center</h1>
         </div>
         <div class="topbar-actions">
+          <div id="selectedRuleBadge" class="selected-badge" aria-hidden="true"></div>
           <button id="refreshBtn" type="button">Refresh</button>
         </div>
       </header>
@@ -41,6 +47,8 @@
         </div>
       </section>
 
+      <div id="ruleHint" class="rule-hint">Tip: To edit rules, open the Rules view in the Choir activity bar; selecting a rule opens the Control Center and reveals it in the editor for persistent edits.</div>
+
       <nav id="surfaceTabs" class="surface-tabs" aria-label="UI Surfaces"></nav>
 
       <main id="surfaceContainer" class="surface-container"></main>
@@ -53,6 +61,22 @@
     <script nonce="__NONCE__">
         const vscode = acquireVsCodeApi();
         window.vscode = vscode;
+        // Update selected-rule badge when the extension sends a snapshot containing highlightRuleId
+        window.addEventListener('message', (ev) => {
+          try {
+            const a = ev.data;
+            const sb = document.getElementById('selectedRuleBadge');
+            const snapshot = a && a.type === 'snapshot' ? a.payload : (a && a.type === 'action-result' && a.payload && a.payload.snapshot ? a.payload.snapshot : null);
+            if (!sb) return;
+            if (snapshot && snapshot.highlightRuleId) {
+              sb.textContent = `Selected rule: ${snapshot.highlightRuleId}`;
+            } else {
+              sb.textContent = '';
+            }
+          } catch (err) {
+            // ignore
+          }
+        });
     </script>
     <script type="module" nonce="__NONCE__" src="__SCRIPT_URI__"></script>
   </body>

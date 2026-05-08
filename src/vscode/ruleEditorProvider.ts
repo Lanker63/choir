@@ -15,6 +15,8 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
   private readonly webviews = new Set<vscode.Webview>();
   private readonly webviewRegistrations = new Map<vscode.Webview, vscode.Disposable>();
   private readonly eventSubscription: vscode.Disposable;
+  private lastKnownRole?: string;
+  private lastClientRefreshAt = 0;
   // Validation/mutation routes remain pipeline-driven (runPipelineForWorkspace marker).
 
   constructor(
@@ -70,11 +72,22 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     }
   }
 
-  private async postRefreshSnapshot(): Promise<void> {
+  private async postRefreshSnapshot(role?: string): Promise<void> {
+    const useRole = role ?? this.lastKnownRole ?? "conductor";
     const result = await this.service.handleAction({
       type: "refresh",
-      role: "conductor",
+      role: useRole as any,
     });
+
+    // Persist the activeRole from snapshot so subsequent automatic refreshes
+    // use the same role the client last asked for.
+    try {
+      if (result && result.snapshot && typeof result.snapshot.activeRole === "string") {
+        this.lastKnownRole = result.snapshot.activeRole;
+      }
+    } catch (err) {
+      // ignore
+    }
 
     this.postMessage({
       type: "snapshot",
@@ -93,14 +106,27 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       || event.type === "TIMELINE_UPDATED"
       || event.type === "GRAPH_UPDATED"
     ) {
+      // If the user just initiated a refresh with a role selection, avoid
+      // immediately overwriting their selection with a server-initiated
+      // refresh. Allow a short debounce window.
+      const now = Date.now();
+      if (now - this.lastClientRefreshAt < 800) {
+        return;
+      }
       await this.postRefreshSnapshot();
       return;
     }
 
     if (event.type === "NAVIGATE") {
+      const snapshot = await this.service.buildSnapshot((this.lastKnownRole ?? "conductor") as any);
+      // If the NAVIGATE intent includes a focusRule, pass it through so the
+      // webview can visually indicate the selected rule.
+      if ((event as any).intent && (event as any).intent.type === "focusRule" && (event as any).intent.ruleId) {
+        (snapshot as any).highlightRuleId = (event as any).intent.ruleId;
+      }
       this.postMessage({
         type: "snapshot",
-        payload: (await this.service.buildSnapshot("conductor")),
+        payload: snapshot,
       });
     }
   }
@@ -148,6 +174,17 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
       }
 
       if (msg.type === "action" && "payload" in msg) {
+        // Track client-initiated role refreshes so we don't immediately
+        // override the user's selection with an automatic snapshot.
+        try {
+          if ((msg as any).payload && (msg as any).payload.type === "refresh" && typeof (msg as any).payload.role === "string") {
+            this.lastKnownRole = (msg as any).payload.role;
+            this.lastClientRefreshAt = Date.now();
+          }
+        } catch (_) {
+          // ignore
+        }
+
         const result = await this.service.handleAction(msg.payload);
         await sendToWebview(this.traceStore, "control", webview, {
           type: "action-result",

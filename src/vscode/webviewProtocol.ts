@@ -3,7 +3,8 @@ import type { ProductActionRequest } from "../ui/contracts.js";
 export type NavigationIntent =
   | { type: "focusUnit"; unitId: string }
   | { type: "showDependencies"; unitId: string }
-  | { type: "showTimeline"; unitId: string };
+  | { type: "showTimeline"; unitId: string }
+  | { type: "focusRule"; ruleId: string };
 
 export type ChoirEvent =
   | { type: "STATE_UPDATED"; stateHash: string }
