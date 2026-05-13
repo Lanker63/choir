@@ -11,8 +11,11 @@ import {
   type GlobalPlan,
   type Repo,
   type RolloutStrategy,
+  type CompiledPolicy as GlobalCompiledPolicy,
   executeGlobalPlan,
   executeRolloutPlan,
+  evaluateCompiledGlobalPolicies,
+  executionPreviewHash,
   hashState as hashGlobalState,
   replay,
   simulatePlan,
@@ -107,6 +110,7 @@ export type Intent = {
   persistPreviewState?: boolean;
   recordPendingApproval?: boolean;
   rolloutStrategy?: RolloutStrategy;
+  executionPolicies?: GlobalCompiledPolicy[];
 };
 
 export type PipelineExecutionDAG = {
@@ -279,6 +283,7 @@ type GenerateSimulationContractInput = {
   root: string;
   selectedExecutionPlan: Plan;
   orchestrationHash: string;
+  executionPolicies?: GlobalCompiledPolicy[];
   requestedUnits?: string[];
 };
 
@@ -482,6 +487,18 @@ function mapExecutionStages(optimized: OptimizedPlanResult): Array<{ id: string;
   }));
 }
 
+function policyViolationId(message: string): string {
+  const match = /^Rule ([^:]+):/.exec(message);
+  return match?.[1] ?? "execution-policy";
+}
+
+function executionPolicyViolations(violations: string[]): PipelinePolicy["violations"] {
+  return violations.map((message) => ({
+    ruleId: policyViolationId(message),
+    message,
+  }));
+}
+
 export function buildExecutionDAG(selectedPlan: RankedPlan): PipelineExecutionDAG {
   return {
     hash: selectedPlan.orchestrationGraph.hash,
@@ -506,12 +523,12 @@ export async function generateSimulationContract(
   const simulation = input.requestedUnits && input.requestedUnits.length > 0
     ? await simulateUnits(input.requestedUnits, globalPlan, {
       repos,
-      policies: [],
+      policies: input.executionPolicies ?? [],
       stateRoot: input.root,
     })
     : await simulatePlan(globalPlan, {
       repos,
-      policies: [],
+      policies: input.executionPolicies ?? [],
       stateRoot: input.root,
     });
 
@@ -558,6 +575,7 @@ export async function verifyReplayDeterminism(input: {
   targetGoal?: string;
   selected: OptimizedPlanResult;
   simulationContract: PipelineSimulationContract;
+  executionPolicies?: GlobalCompiledPolicy[];
 }): Promise<{
   replayVerification: PipelineReplayVerification;
   replayOptimized: OptimizedPlanResult;
@@ -582,6 +600,7 @@ export async function verifyReplayDeterminism(input: {
     root: input.root,
     selectedExecutionPlan: replayOptimized.selectedExecutionPlan,
     orchestrationHash: replayOptimized.selectedPlan.orchestrationGraph.hash,
+    executionPolicies: input.executionPolicies,
   });
 
   const simulationContract = replaySimulation.simulationContract.futureStateHash === input.simulationContract.futureStateHash
@@ -747,32 +766,6 @@ export async function runOrchestrationPipeline(
     markSuccess("orchestration-build", `Execution DAG built with hash ${executionDag.hash.slice(0, 12)}.`);
 
     const selectedExecutionPlan = optimized.selectedExecutionPlan;
-
-    const generatedSimulation = await generateSimulationContract({
-      root: intent.root,
-      selectedExecutionPlan,
-      orchestrationHash: executionDag.hash,
-    });
-
-    simulationContract = generatedSimulation.simulationContract;
-    markSuccess("simulation", `Simulation contract generated (futureStateHash=${simulationContract.futureStateHash.slice(0, 12)}).`);
-
-    const replayOutcome = await verifyReplayDeterminism({
-      root: intent.root,
-      command: intent.command,
-      controlPlane,
-      ...(intent.targetGoal ? { targetGoal: intent.targetGoal } : {}),
-      selected: optimized,
-      simulationContract,
-    });
-
-    replayVerification = replayOutcome.replayVerification;
-    if (!replayVerification.verified) {
-      return fail("replay-verification", "Replay verification failed for unified orchestration runtime.");
-    }
-
-    markSuccess("replay-verification", "Replay verification confirmed deterministic synthesis, ranking, selection, DAG, and simulation contract.");
-
     const selectedExecutionControl = mergeExecutionPlan(controlPlane, selectedExecutionPlan);
     const diffs = computeDiff(
       controlPlaneToChoirConfig(controlPlane),
@@ -786,13 +779,24 @@ export async function runOrchestrationPipeline(
     };
     const policySet = loadPolicies(intent.root, environment);
     const evaluation = evaluatePolicies(diffs, policySet, context);
+    const executionPolicies = intent.executionPolicies ?? [];
+    const selectedGlobalPlan = toGlobalPlanFromPlan(selectedExecutionPlan);
+    const selectedRepos = buildSimulationRepos([selectedGlobalPlan]);
+    const executionPolicyResult = evaluateCompiledGlobalPolicies(selectedGlobalPlan, executionPolicies, selectedRepos);
+    const executionPolicyDenied = !executionPolicyResult.allowed && !executionPolicyResult.requiresApproval;
+    const dslDecision = mapPolicyDecision(evaluation.trace.decision);
     const diffHash = hashDiff(diffs);
+    const denied = dslDecision === "deny" || executionPolicyDenied;
+    const requiresApproval = !denied && (evaluation.result.requiresApproval || executionPolicyResult.requiresApproval);
     policy = {
-      decision: mapPolicyDecision(evaluation.trace.decision),
-      allowed: evaluation.result.allowed,
-      requiresApproval: evaluation.result.requiresApproval,
+      decision: denied ? "deny" : (requiresApproval ? "require-approval" : "allow"),
+      allowed: !denied,
+      requiresApproval,
       diffHash,
-      violations: evaluation.result.violations,
+      violations: [
+        ...evaluation.result.violations,
+        ...executionPolicyViolations(executionPolicyResult.violations),
+      ],
     };
 
     if (!policy.allowed || policy.decision === "deny") {
@@ -804,13 +808,58 @@ export async function runOrchestrationPipeline(
 
     markSuccess("policy", `Policy decision=${policy.decision} (diffHash=${policy.diffHash.slice(0, 12)}).`);
 
+    const generatedSimulation = await generateSimulationContract({
+      root: intent.root,
+      selectedExecutionPlan,
+      orchestrationHash: executionDag.hash,
+      executionPolicies,
+    });
+
+    simulationContract = generatedSimulation.simulationContract;
+    markSuccess("simulation", `Simulation contract generated (futureStateHash=${simulationContract.futureStateHash.slice(0, 12)}).`);
+
+    const replayOutcome = await verifyReplayDeterminism({
+      root: intent.root,
+      command: intent.command,
+      controlPlane,
+      ...(intent.targetGoal ? { targetGoal: intent.targetGoal } : {}),
+      selected: optimized,
+      simulationContract,
+      executionPolicies,
+    });
+
+    replayVerification = replayOutcome.replayVerification;
+    if (!replayVerification.verified) {
+      return fail("replay-verification", "Replay verification failed for unified orchestration runtime.");
+    }
+
+    markSuccess("replay-verification", "Replay verification confirmed deterministic synthesis, ranking, selection, DAG, and simulation contract.");
+
     if (policy.requiresApproval) {
-      const approved = hasApprovalForPreview(intent.root, selected.previewHash)
+      const dslApproved = !evaluation.result.requiresApproval
+        || hasApprovalForPreview(intent.root, selected.previewHash)
         || hasApprovalForDiff(intent.root, policy.diffHash);
+      const executionApprovalPreviewHash = executionPolicyResult.requiresApproval
+        ? executionPreviewHash(
+          selectedGlobalPlan,
+          generatedSimulation.simulation.context.baseState,
+          executionPolicyResult,
+          generatedSimulation.simulation.trace.stepsExecuted
+        )
+        : undefined;
+      const executionApproved = !executionPolicyResult.requiresApproval
+        || (executionApprovalPreviewHash ? hasApprovalForPreview(intent.root, executionApprovalPreviewHash) : false);
+      const approved = dslApproved && executionApproved;
 
       let pendingId: string | undefined;
       if (!approved && mode === "preview" && intent.recordPendingApproval !== false) {
-        pendingId = upsertPendingPreviewApproval(intent.root, selected.previewHash, intent.command).pendingId;
+        if (evaluation.result.requiresApproval && !dslApproved) {
+          pendingId = upsertPendingPreviewApproval(intent.root, selected.previewHash, intent.command).pendingId;
+        }
+        if (executionApprovalPreviewHash && !executionApproved) {
+          const pending = upsertPendingPreviewApproval(intent.root, executionApprovalPreviewHash, intent.command).pendingId;
+          pendingId = pendingId ?? pending;
+        }
       }
 
       approval = {
@@ -820,7 +869,11 @@ export async function runOrchestrationPipeline(
       };
 
       if (mode === "execute" && !approved) {
-        return fail("approval", `Execution requires approval for previewHash=${selected.previewHash}.`);
+        const missingHashes = [
+          ...(evaluation.result.requiresApproval && !dslApproved ? [selected.previewHash] : []),
+          ...(executionApprovalPreviewHash && !executionApproved ? [executionApprovalPreviewHash] : []),
+        ];
+        return fail("approval", `Execution requires approval for previewHash=${missingHashes.join(", ") || selected.previewHash}.`);
       }
     }
 
@@ -889,12 +942,12 @@ export async function runOrchestrationPipeline(
       const simulated = requestedUnits.length > 0
         ? await simulateUnits(requestedUnits, globalPlan, {
           repos,
-          policies: [],
+          policies: executionPolicies,
           stateRoot: intent.root,
         })
         : await simulatePlan(globalPlan, {
           repos,
-          policies: [],
+          policies: executionPolicies,
           stateRoot: intent.root,
         });
 
@@ -963,13 +1016,19 @@ export async function runOrchestrationPipeline(
           globalPlan,
           {
             repos,
-            policies: [],
+            policies: executionPolicies,
             stateRoot: intent.root,
           },
           intent.rolloutStrategy,
           {
             requireApproval: policy.requiresApproval
-              ? async ({ previewHash }) => approval.approved && previewHash === selected.previewHash
+              ? async ({ previewHash }) => {
+                if (!executionPolicyResult.requiresApproval) {
+                  return approval.approved;
+                }
+
+                return approval.approved && hasApprovalForPreview(intent.root, previewHash);
+              }
               : undefined,
           }
         );
@@ -1035,14 +1094,14 @@ export async function runOrchestrationPipeline(
       } else {
         const execution = await executeGlobalPlan(globalPlan, {
           repos,
-          policies: [],
+          policies: executionPolicies,
           stateRoot: intent.root,
           approveExecution: async ({ previewHash }) => {
             if (!policy.requiresApproval) {
               return true;
             }
 
-            return approval.approved && previewHash === selected.previewHash;
+            return approval.approved && hasApprovalForPreview(intent.root, previewHash);
           },
         });
 

@@ -39,7 +39,7 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
   public openPanel(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
     if (this.panel) {
-      this.panel.reveal(column, false);
+      this.panel.reveal(column, true);
       return;
     }
 
@@ -57,6 +57,12 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
     this.panel = panel;
     this.configureWebview(panel.webview);
+    // Ensure the panel is revealed without stealing focus from editors
+    try {
+      panel.reveal(column, true);
+    } catch (_err) {
+      // ignore
+    }
 
     panel.onDidDispose(() => {
       this.webviewRegistrations.get(panel.webview)?.dispose();
@@ -74,10 +80,18 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
   private async postRefreshSnapshot(role?: string): Promise<void> {
     const useRole = role ?? this.lastKnownRole ?? "conductor";
-    const result = await this.service.handleAction({
-      type: "refresh",
-      role: useRole as any,
-    });
+    let result;
+    try {
+      result = await this.service.handleAction({
+        type: "refresh",
+        role: useRole as any,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error("RuleEditorProvider: refresh failed", error);
+      void vscode.window.showErrorMessage(`Choir Control Center refresh failed: ${message}`);
+      return;
+    }
 
     // Persist the activeRole from snapshot so subsequent automatic refreshes
     // use the same role the client last asked for.
@@ -168,36 +182,42 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     webview.onDidReceiveMessage(async (msg: WebviewInboundMessage) => {
       traceInbound(this.traceStore, "control", msg as { type?: unknown });
 
-      if (msg.type === "ready") {
-        await this.postRefreshSnapshot();
-        return;
-      }
+      try {
+        if (msg.type === "ready") {
+          await this.postRefreshSnapshot();
+          return;
+        }
 
-      if (msg.type === "action" && "payload" in msg) {
-        // Track client-initiated role refreshes so we don't immediately
-        // override the user's selection with an automatic snapshot.
-        try {
-          if ((msg as any).payload && (msg as any).payload.type === "refresh" && typeof (msg as any).payload.role === "string") {
-            this.lastKnownRole = (msg as any).payload.role;
-            this.lastClientRefreshAt = Date.now();
+        if (msg.type === "action" && "payload" in msg) {
+          // Track client-initiated role refreshes so we don't immediately
+          // override the user's selection with an automatic snapshot.
+          try {
+            if ((msg as any).payload && (msg as any).payload.type === "refresh" && typeof (msg as any).payload.role === "string") {
+              this.lastKnownRole = (msg as any).payload.role;
+              this.lastClientRefreshAt = Date.now();
+            }
+          } catch (_) {
+            // ignore
           }
-        } catch (_) {
-          // ignore
-        }
 
-        const result = await this.service.handleAction(msg.payload);
-        await sendToWebview(this.traceStore, "control", webview, {
-          type: "action-result",
-          payload: result,
-        });
+          const result = await this.service.handleAction(msg.payload);
+          await sendToWebview(this.traceStore, "control", webview, {
+            type: "action-result",
+            payload: result,
+          });
 
-        if (result.ok) {
-          const currentTimelineEntry = result.snapshot.timeline.states[result.snapshot.timeline.currentIndex];
-          const stateHash = currentTimelineEntry?.toHash ?? "GENESIS";
-          this.eventBus.emit({ type: "STATE_UPDATED", stateHash });
-          this.eventBus.emit({ type: "PLAN_UPDATED" });
-          this.eventBus.emit({ type: "TIMELINE_UPDATED" });
+          if (result.ok) {
+            const currentTimelineEntry = result.snapshot.timeline.states[result.snapshot.timeline.currentIndex];
+            const stateHash = currentTimelineEntry?.toHash ?? "GENESIS";
+            this.eventBus.emit({ type: "STATE_UPDATED", stateHash });
+            this.eventBus.emit({ type: "PLAN_UPDATED" });
+            this.eventBus.emit({ type: "TIMELINE_UPDATED" });
+          }
         }
+      } catch (error) {
+        console.error("RuleEditorProvider: inbound message handling failed", error, msg);
+        const message = error instanceof Error ? error.message : String(error);
+        void vscode.window.showErrorMessage(`Choir Control Center action failed: ${message}`);
       }
     });
   }

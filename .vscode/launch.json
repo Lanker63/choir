@@ -7,6 +7,9 @@
       "request": "launch",
       "runtimeExecutable": "${execPath}",
       "args": ["--no-warnings", "--extensionDevelopmentPath=${workspaceFolder}"],
+      "env": {
+        "CHOIR_ENVIRONMENT": "staging"
+      }
     },
     {
       "name": "Run Extension (trace-deprecation + no-warnings)",

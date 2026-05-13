@@ -299,6 +299,37 @@ function sourceValueForCondition(diff: YAMLDiff): unknown {
   return diff.after;
 }
 
+function collectSearchText(value: unknown, output: string[]): void {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    output.push(String(value));
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectSearchText(entry, output);
+    }
+    return;
+  }
+
+  if (isRecord(value)) {
+    for (const key of Object.keys(value).sort((left, right) => left.localeCompare(right))) {
+      output.push(key);
+      collectSearchText(value[key], output);
+    }
+  }
+}
+
+function searchableText(value: unknown): string {
+  const parts: string[] = [];
+  collectSearchText(value, parts);
+  return parts.join("\n").toLowerCase();
+}
+
 function matchesCondition(rule: PolicyRule, diff: YAMLDiff): boolean {
   if (!rule.condition) {
     return true;
@@ -308,7 +339,7 @@ function matchesCondition(rule: PolicyRule, diff: YAMLDiff): boolean {
 
   if (typeof rule.condition.contains === "string") {
     const needle = rule.condition.contains.toLowerCase();
-    const haystack = String(source ?? "").toLowerCase();
+    const haystack = searchableText(source);
     if (!haystack.includes(needle)) {
       return false;
     }

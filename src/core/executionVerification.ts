@@ -5,6 +5,7 @@ import { ControlPlane } from "../schema.js";
 import {
   executeGlobalPlan,
   hashState as hashGlobalState,
+  type CompiledPolicy,
   type ExecuteGlobalPlanOptions,
   type GlobalPlan,
   type Repo,
@@ -95,6 +96,24 @@ function rollbackFixtureOptions(root: string): ExecuteGlobalPlanOptions {
   };
 }
 
+function denyAllExecutionPolicy(): CompiledPolicy[] {
+  return [
+    {
+      id: "verify-unified-deny-all",
+      source: "org",
+      rules: [
+        {
+          id: "verify-unified-deny-all-actions",
+          kind: "deny-action-prefix",
+          effect: "deny",
+          actionPrefix: "",
+          priority: 100,
+        },
+      ],
+    },
+  ];
+}
+
 function makeTempRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "choir-execution-verify-"));
 }
@@ -145,6 +164,30 @@ export async function runExecutionVerification(): Promise<ExecutionVerificationR
       name: "invalid-intent-blocks-execution",
       passed: blockedInvalidIntent,
       detail: blockedInvalidIntent ? "missing explicit plan target was blocked" : "missing explicit plan target was not blocked",
+    });
+
+    let blockedByExecutionPolicy = false;
+    let blockedStage = "";
+    try {
+      await runExecutionOrchestrator({
+        root: freshRoot,
+        controlPlane: control,
+        command: "choir execute",
+        executionPolicies: denyAllExecutionPolicy(),
+      });
+    } catch (error) {
+      if (error instanceof ExecutionOrchestrationError) {
+        blockedByExecutionPolicy = error.failedStage === "policy-enforcement";
+        blockedStage = error.failedStage;
+      }
+    }
+
+    checks.push({
+      name: "unified-execution-propagates-deny-policy",
+      passed: blockedByExecutionPolicy,
+      detail: blockedByExecutionPolicy
+        ? "execution policy denied before transaction execution"
+        : `execution policy was not enforced (stage=${blockedStage || "none"})`,
     });
   } finally {
     fs.rmSync(freshRoot, { recursive: true, force: true });

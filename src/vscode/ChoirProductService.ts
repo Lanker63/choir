@@ -192,6 +192,87 @@ export class ChoirProductService {
 
   constructor(_context: vscode.ExtensionContext) {}
 
+  private fallbackSnapshot(role: Role, reason?: string): ProductSnapshot {
+    const fallbackState = createEmptyStatePlane();
+    const recommendation = reason && reason.trim().length > 0
+      ? `Control Center fallback mode: ${reason}`
+      : "Control Center fallback mode: snapshot generation failed.";
+
+    let controlPlane: object = {};
+    try {
+      const control = readControlPlane();
+      if (control) {
+        controlPlane = controlPlaneToChoirConfig(control);
+      }
+    } catch (_error) {
+      // Keep fallback resilient even when control plane parsing fails.
+    }
+
+    return {
+      generatedAt: new Date().toISOString(),
+      activeRole: role,
+      availableSurfaces: SURFACES_BY_ROLE[role],
+      dashboard: {
+        systemHealth: "needs-attention",
+        activePlans: 0,
+        policyViolations: 0,
+        recentActions: [],
+        recommendations: [recommendation],
+      },
+      workflow: {
+        current: "define-intent",
+        completed: [],
+        pending: ["plan", "preview", "approve", "execute", "audit"],
+      },
+      planView: [],
+      diffView: [],
+      policyView: [{
+        decision: "allow",
+        rulesMatched: [],
+        source: "repo",
+      }],
+      auditView: {
+        events: [],
+        filters: {},
+      },
+      macroUI: {
+        libraries: [],
+        macros: [],
+        abstractions: [],
+      },
+      roleView: ROLE_VIEW,
+      pendingApprovals: [],
+      traces: [...this.traces].reverse(),
+      controlPlane,
+      timeline: {
+        currentIndex: -1,
+        canStepForward: false,
+        canStepBackward: false,
+        playing: false,
+        states: [],
+      },
+      stateInspector: this.buildStateInspector(
+        fallbackState,
+        [recommendation],
+        []
+      ),
+    };
+  }
+
+  private async buildSnapshotOrFallback(
+    role: Role,
+    filters?: { role?: string; environment?: string },
+    reason?: string
+  ): Promise<ProductSnapshot> {
+    try {
+      return await this.buildSnapshot(role, filters);
+    } catch (error) {
+      const message = reason
+        ?? (error instanceof Error ? error.message : String(error));
+      return this.fallbackSnapshot(role, message);
+    }
+  }
+
   private getWorkspaceRoot(): string | null {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
   }
@@ -982,7 +1063,7 @@ export class ChoirProductService {
         return {
           ok: true,
           message: "State synchronized.",
-          snapshot: await this.buildSnapshot(role, action.filters),
+          snapshot: await this.buildSnapshotOrFallback(role, action.filters),
         };
       }
 
@@ -997,7 +1078,7 @@ export class ChoirProductService {
           ok: true,
           message: executed.message,
           trace: executed.trace,
-          snapshot: await this.buildSnapshot(role),
+          snapshot: await this.buildSnapshotOrFallback(role),
         };
       }
 
@@ -1009,7 +1090,7 @@ export class ChoirProductService {
           return {
             ok: true,
             message: "Replay playback started.",
-            snapshot: await this.buildSnapshot(role),
+            snapshot: await this.buildSnapshotOrFallback(role),
           };
         }
 
@@ -1018,7 +1099,7 @@ export class ChoirProductService {
           return {
             ok: true,
             message: "Replay playback paused.",
-            snapshot: await this.buildSnapshot(role),
+            snapshot: await this.buildSnapshotOrFallback(role),
           };
         }
 
@@ -1029,7 +1110,7 @@ export class ChoirProductService {
           return {
             ok: true,
             message: replayed.index >= 0 ? `Stepped forward to state ${replayed.index + 1}.` : "No replay states available.",
-            snapshot: await this.buildSnapshot(role),
+            snapshot: await this.buildSnapshotOrFallback(role),
           };
         }
 
@@ -1040,7 +1121,7 @@ export class ChoirProductService {
           return {
             ok: true,
             message: replayed.index >= 0 ? `Stepped backward to state ${replayed.index + 1}.` : "No replay states available.",
-            snapshot: await this.buildSnapshot(role),
+            snapshot: await this.buildSnapshotOrFallback(role),
           };
         }
 
@@ -1052,7 +1133,7 @@ export class ChoirProductService {
           return {
             ok: true,
             message: replayed.index >= 0 ? `Jumped to state ${replayed.index + 1}.` : "No replay states available.",
-            snapshot: await this.buildSnapshot(role),
+            snapshot: await this.buildSnapshotOrFallback(role),
           };
         }
 
@@ -1060,7 +1141,7 @@ export class ChoirProductService {
           ok: false,
           message: "Unknown replay control action.",
           error: toUIError("Unknown replay control action."),
-          snapshot: await this.buildSnapshot(role),
+          snapshot: await this.buildSnapshotOrFallback(role),
         };
       }
 
@@ -1072,7 +1153,7 @@ export class ChoirProductService {
         ok: true,
         message: executed.message,
         trace: executed.trace,
-        snapshot: await this.buildSnapshot(role),
+        snapshot: await this.buildSnapshotOrFallback(role),
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -1080,7 +1161,7 @@ export class ChoirProductService {
         ok: false,
         message: "Action failed.",
         error: toUIError(message),
-        snapshot: await this.buildSnapshot(role),
+        snapshot: await this.buildSnapshotOrFallback(role, undefined, message),
       };
     }
   }

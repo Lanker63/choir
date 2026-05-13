@@ -5,7 +5,7 @@ import {
   type PipelineStageName,
   type PipelineStageResult,
 } from "./orchestrationRuntime.js";
-import { type RolloutStrategy } from "./globalOrchestration.js";
+import { type CompiledPolicy as GlobalCompiledPolicy, type RolloutStrategy } from "./globalOrchestration.js";
 
 export type ExecutionOrchestrationStageName =
   | "compile"
@@ -62,6 +62,7 @@ export type RunExecutionOrchestratorOptions = {
   requestedPlanId?: string;
   requestedPreviewRef?: string;
   rolloutStrategy?: RolloutStrategy;
+  executionPolicies?: GlobalCompiledPolicy[];
 };
 
 export class ExecutionOrchestrationError extends Error {
@@ -140,6 +141,7 @@ export async function runExecutionOrchestrator(
       ...(options.requestedPlanId ? { requestedPlanId: options.requestedPlanId } : {}),
       ...(options.requestedPreviewRef ? { requestedPreviewRef: options.requestedPreviewRef } : {}),
       ...(options.rolloutStrategy ? { rolloutStrategy: options.rolloutStrategy } : {}),
+      ...(options.executionPolicies ? { executionPolicies: options.executionPolicies } : {}),
     });
 
     if (!unified.execute) {

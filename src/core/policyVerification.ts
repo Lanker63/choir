@@ -8,6 +8,7 @@ import {
   executeGlobalPlan,
   simulatePlan,
 } from "./globalOrchestration.js";
+import { evaluatePolicies, type PolicySet, type YAMLDiff } from "./policyEngine.js";
 import { approvePendingDiff, listPendingApprovals } from "./state.js";
 
 export type PolicyVerificationCheck = {
@@ -259,6 +260,58 @@ export async function runPolicyVerification(): Promise<PolicyVerificationReport>
       detail: gatePassed
         ? "execution was blocked until approval was granted"
         : "execution gate did not block missing approval",
+    });
+
+    const highRiskDiffs: YAMLDiff[] = [
+      {
+        path: "execution.plans[0]",
+        operation: "add",
+        after: {
+          id: "high-risk-api-plan",
+          title: "High-risk API sample refactor",
+          tasks: [
+            {
+              id: "high-risk-api-task",
+              description: "high-risk code execution path",
+              successCriteria: ["high-risk change reviewed before execution"],
+            },
+          ],
+        },
+      },
+    ];
+    const highRiskPolicies: PolicySet = {
+      rules: [
+        {
+          id: "repo-approval-high-risk:1",
+          policyId: "repo-approval-high-risk",
+          source: "repo",
+          match: {
+            path: "execution.plans",
+            operation: "add",
+          },
+          condition: {
+            contains: "high-risk",
+          },
+          effect: {
+            type: "require-approval",
+          },
+        },
+      ],
+    };
+    const highRiskEvaluation = evaluatePolicies(highRiskDiffs, highRiskPolicies, {
+      role: "conductor",
+      environment: "local",
+    });
+    const highRiskContainsPassed = highRiskEvaluation.trace.decision === "require-approval"
+      && highRiskEvaluation.result.requiresApproval
+      && highRiskEvaluation.trace.rulesMatched.includes("repo-approval-high-risk:1");
+
+    checks.push({
+      name: "policy-contains-matches-nested-plan-object",
+      passed: highRiskContainsPassed,
+      detail: highRiskContainsPassed
+        ? "contains condition matched high-risk text inside added plan object"
+        : `nested contains did not match (decision=${highRiskEvaluation.trace.decision})`,
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

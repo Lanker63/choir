@@ -3326,6 +3326,10 @@ function flattenPolicies(policies: CompiledPolicy[]): GlobalPolicyRule[] {
     );
 }
 
+export function evaluateCompiledGlobalPolicies(plan: GlobalPlan, policies: CompiledPolicy[], repos: Repo[]): PolicyResult {
+  return evaluateGlobalPolicies(plan, flattenPolicies(policies), repos);
+}
+
 function taskMapByRepo(plan: GlobalPlan): Map<string, GlobalPlanTask[]> {
   const map = new Map<string, GlobalPlanTask[]>();
   for (const task of plan.tasks) {
@@ -3728,7 +3732,7 @@ function rollbackAllRepos(snapshot: Record<string, SystemState>): Record<string,
   return cloneUnknown(snapshot);
 }
 
-function executionPreviewHash(
+export function executionPreviewHash(
   plan: GlobalPlan,
   baseState: GlobalState,
   policyResult: PolicyResult,

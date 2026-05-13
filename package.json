@@ -32,11 +32,6 @@
         "category": "Choir"
       },
       {
-        "command": "choir.openRuleEditorPanel",
-        "title": "Open Control Center",
-        "category": "Choir"
-      },
-      {
         "command": "choir.showDslEditorTrace",
         "title": "Show DSL Editor Trace",
         "category": "Choir"
