@@ -9,9 +9,11 @@ import {
   type Repo,
 } from "./globalOrchestration.js";
 import {
+  buildState,
   buildStateTimeline,
   createEmptyStatePlane,
   listSnapshots,
+  validateConsistency,
 } from "./state.js";
 import {
   loadAuditRecords,
@@ -202,6 +204,70 @@ export async function runStateVerification(): Promise<StateVerificationReport> {
       detail: malformedReplayHandled
         ? "listSnapshots/buildStateTimeline tolerated malformed ast payload"
         : "malformed snapshot caused replay listing to fail",
+    });
+
+    const previousWithAst = {
+      ...createEmptyStatePlane(),
+      ast: [
+        { id: "action:0", type: "define" as const },
+        { id: "action:1", type: "plan" as const },
+      ],
+      plans: [
+        {
+          id: "plan-alpha",
+          status: "draft",
+          taskIds: ["task-1"],
+          nodeRefs: ["action:0", "action:1"],
+        },
+      ],
+    };
+
+    const yamlLike = {
+      version: "1.0.0",
+      mission: "",
+      vision: "",
+      intent: {
+        goals: [],
+        constraints: [],
+        "non-goals": [],
+      },
+      policy: {
+        rules: [],
+      },
+      execution: {
+        plans: [{
+          id: "plan-alpha",
+          title: "Plan Alpha",
+          derivedFrom: "manual" as const,
+          tasks: [{
+            id: "task-1",
+            title: "Task One",
+            type: "analysis" as const,
+            dependsOn: [],
+            successCriteria: ["done"],
+          }],
+          status: "draft" as const,
+        }],
+      },
+    };
+
+    const builtWithoutAst = buildState({
+      yaml: yamlLike as any,
+      previous: previousWithAst,
+    });
+    const consistency = validateConsistency({
+      yaml: yamlLike as any,
+      state: builtWithoutAst,
+    });
+    const noYamlPlanDivergence = consistency.valid
+      || !consistency.issues.some((issue) => issue.code === "yaml-plan-divergence");
+
+    checks.push({
+      name: "build-state-without-ast-keeps-plan-node-refs-consistent",
+      passed: noYamlPlanDivergence,
+      detail: noYamlPlanDivergence
+        ? "validateConsistency no longer reports yaml-plan-divergence when reusing prior AST"
+        : "validateConsistency still reports yaml-plan-divergence",
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

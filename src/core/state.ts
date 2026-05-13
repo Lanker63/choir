@@ -1266,6 +1266,7 @@ function valuesEqual<T>(left: T, right: T): boolean {
 export function buildState(input: BuildStateInput): StatePlane {
   const previous = input.previous ?? createEmptyStatePlane();
   const astNodes = astNodesFromDslAst(input.ast);
+  const effectiveAstNodes = astNodes.length > 0 ? astNodes : previous.ast;
   const dependencies = dependenciesFromDslAst(input.ast);
   const intent = input.yaml
     ? normalizeStateIntent({
@@ -1276,16 +1277,16 @@ export function buildState(input: BuildStateInput): StatePlane {
     : normalizeStateIntent(previous.intent);
 
   const plans = input.plans
-    ? statePlansFromControlPlans(input.plans, astNodes)
+    ? statePlansFromControlPlans(input.plans, effectiveAstNodes)
     : input.yaml
-      ? statePlansFromControlPlans(input.yaml.execution.plans, astNodes)
+      ? statePlansFromControlPlans(input.yaml.execution.plans, effectiveAstNodes)
       : normalizeStatePlans(previous.plans);
 
   const next = materializeStatePlane({
     ...previous,
     version: STATE_VERSION,
     intent,
-    ast: astNodes.length > 0 ? astNodes : previous.ast,
+    ast: effectiveAstNodes,
     graph: {
       dependencies: Object.keys(dependencies).length > 0
         ? dependencies
