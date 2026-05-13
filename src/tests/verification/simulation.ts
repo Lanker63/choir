@@ -1,7 +1,7 @@
 import {
   formatSimulationVerificationReport,
   runSimulationVerification,
-} from "../../core/simulationVerification.js";
+} from "./core/simulationVerification.js";
 
 async function main(): Promise<void> {
   try {

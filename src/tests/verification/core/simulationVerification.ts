@@ -1,11 +1,11 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { ControlPlane } from "../schema.js";
+import { ControlPlane } from "../../../schema.js";
 import {
   SimulationOrchestrationError,
   runSimulationOrchestrator,
-} from "./simulationOrchestrator.js";
+} from "../../../core/simulationOrchestrator.js";
 
 export type SimulationVerificationCheck = {
   name: string;

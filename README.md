@@ -154,6 +154,7 @@ Additional commands:
 - Rollout execution is staged and dependency-aware; each stage must validate before progression
 - Rollout supports deterministic canary/phased/batched expansion with threshold gates and failure isolation rollback
 - Preview is simulation-derived and hash-bound to execution
+- Execute enforces a deterministic integrity gate before any transaction starts (preview hash, simulation parity, DAG signature, replay contract, and state snapshot integrity)
 - Transactional execution: simulate -> validate -> commit/rollback
 - Global orchestration validates full cross-repo graph and policy before execution
 - Global failure handling is isolation-first: rollback affects failed units and already-executed dependents only
@@ -180,13 +181,14 @@ Org-wide simulation notes:
 - `choir simulate` does not require pre-existing execution plans; when no configured plans exist, Choir synthesizes a deterministic candidate plan from current intent/state.
 - `choir simulate units <unitA>,<unitB>` simulates selected units plus dependency closure.
 - `choir execute` is intent-first: when no persisted plans exist, execution synthesizes deterministic candidate plans from current intent and workspace state.
-- `choir execute --preview <id-or-hash>` binds execution to an approved preview hash before any transaction starts.
+- `choir execute --preview <id-or-hash>` binds execution to an explicit preview reference, and deterministic integrity checks still run even when approval policy is `allow`.
 - `choir execute <planId>` and `choir execute plan <planId>` target an explicit persisted plan when needed; persisted plans are optional artifacts, not prerequisites.
 - `choir plan --optimize` simulates all candidate strategies and returns explainable ranking and selected strategy.
 - `choir execute --strategy ...` runs progressive staged rollout (canary/phased/batched/all-at-once) with per-stage validation.
 - `choir rollback`, `choir rollback <unit>`, and `choir rollback --stage <id>` compute deterministic rollback scope/order and record rollback timeline transitions.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
+- Pre-transaction integrity failures abort execution without opening a transaction; post-transaction runtime failures trigger rollback.
 - Invalid simulation intent (for example, unknown explicit plan/unit targets) is blocked before simulation runs.
 - Invalid execution intent (for example, unknown explicit plan targets) is blocked before execution runs.
 

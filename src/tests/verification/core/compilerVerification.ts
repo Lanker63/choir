@@ -2,9 +2,9 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { createHash } from "crypto";
-import { CONTROL_PLANE_VERSION, ControlPlane } from "../schema.js";
-import { compileDSLAndWrite, compile as compileToYAML } from "./dslYamlCompiler.js";
-import { CompilerPipelineError, CompilerStage, compileInput } from "./compilerPipeline.js";
+import { CONTROL_PLANE_VERSION, ControlPlane } from "../../../schema.js";
+import { compileDSLAndWrite, compile as compileToYAML } from "../../../core/dslYamlCompiler.js";
+import { CompilerPipelineError, CompilerStage, compileInput } from "../../../core/compilerPipeline.js";
 
 export type CompilerVerificationCheck = {
   name: string;

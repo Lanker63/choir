@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { ControlPlane } from "../schema.js";
+import { ControlPlane } from "../../../schema.js";
 import {
   executeGlobalPlan,
   hashState as hashGlobalState,
@@ -9,11 +9,11 @@ import {
   type ExecuteGlobalPlanOptions,
   type GlobalPlan,
   type Repo,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import {
   ExecutionOrchestrationError,
   runExecutionOrchestrator,
-} from "./executionOrchestrator.js";
+} from "../../../core/executionOrchestrator.js";
 
 export type ExecutionVerificationCheck = {
   name: string;

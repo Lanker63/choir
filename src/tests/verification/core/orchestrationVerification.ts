@@ -13,7 +13,7 @@ import {
   topologicalSort,
   validateGlobalState,
   detectCycles,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 
 export type OrchestrationVerificationCheck = {
   name: string;

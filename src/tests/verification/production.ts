@@ -1,7 +1,7 @@
 import {
   formatProductionVerificationReport,
   runProductionVerification,
-} from "../../core/productionVerification.js";
+} from "./core/productionVerification.js";
 
 async function main(): Promise<void> {
   try {

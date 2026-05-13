@@ -9,8 +9,8 @@ import {
   type ExecutionInput,
   type GlobalPlan,
   type Repo,
-} from "./globalOrchestration.js";
-import { stableStringify } from "./deterministicCore.js";
+} from "../../../core/globalOrchestration.js";
+import { stableStringify } from "../../../core/deterministicCore.js";
 
 export type DeterminismCheckResult = {
   name: string;

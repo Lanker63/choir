@@ -1,7 +1,7 @@
 import {
   formatRuntimeVerificationReport,
   runRuntimeVerification,
-} from "../../core/runtimeVerification.js";
+} from "./core/runtimeVerification.js";
 
 async function main(): Promise<void> {
   try {

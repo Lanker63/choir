@@ -1,20 +1,20 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { deterministicHash } from "./deterministicCore.js";
+import { deterministicHash } from "../../../core/deterministicCore.js";
 import {
   executeTransaction,
   type ExecuteGlobalPlanOptions,
   type GlobalPlan,
   type Repo,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import {
   buildState,
   buildStateTimeline,
   createEmptyStatePlane,
   listSnapshots,
   validateConsistency,
-} from "./state.js";
+} from "../../../core/state.js";
 import {
   loadAuditRecords,
   loadSnapshots,
@@ -25,7 +25,7 @@ import {
   rollbackTo,
   validateAuditChain,
   verifyReplayConsistency,
-} from "./persistentStateAudit.js";
+} from "../../../core/persistentStateAudit.js";
 
 export type StateVerificationCheck = {
   name: string;

@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { CONTROL_PLANE_VERSION, ControlPlane, Plan, Task } from "../schema.js";
+import { CONTROL_PLANE_VERSION, ControlPlane, Plan, Task } from "../../../schema.js";
 import {
   CompiledPolicy,
   DependencyGraph,
@@ -23,11 +23,11 @@ import {
   hashState as hashGlobalState,
   replay,
   simulatePlan,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import {
   StrategyOutcome,
-} from "./strategyPlanner.js";
-import { resetProductionReadiness } from "./productionReadiness.js";
+} from "../../../core/strategyPlanner.js";
+import { resetProductionReadiness } from "../../../core/productionReadiness.js";
 import {
   buildSignature,
   canReuse,
@@ -36,8 +36,8 @@ import {
   recordStrategy,
   selectFromMemory,
   validatePlanStillApplies,
-} from "./strategyMemory.js";
-import { createEmptyStatePlane } from "./state.js";
+} from "../../../core/strategyMemory.js";
+import { createEmptyStatePlane } from "../../../core/state.js";
 
 export type SystemInvariant =
   | "determinism"

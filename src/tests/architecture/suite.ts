@@ -260,6 +260,10 @@ import {
   formatSimulationChatResult,
   simulationRiskLabel,
 } from "../../core/simulationChat.js";
+import {
+  OrchestrationPipelineError,
+  runOrchestrationPipeline,
+} from "../../core/orchestrationRuntime.js";
 import { detectWorkspace } from "../../core/workspaceDetection.js";
 import {
   buildGraphSnapshot,
@@ -274,7 +278,7 @@ import {
   runChaosTest,
   runPropertyTest,
   setSeed,
-} from "../../core/propertyChaosHarness.js";
+} from "../verification/core/propertyChaosHarness.js";
 import {
   checkDeterminism,
   createVerificationSuite,
@@ -282,7 +286,7 @@ import {
   formatVerificationReport,
   runFullVerification,
   runVerificationCase,
-} from "../../core/verificationHarness.js";
+} from "../verification/core/verificationHarness.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
@@ -5827,6 +5831,141 @@ const pass6: TestPass = {
           entry.includes("Simulation and execution diverged")
           || entry.includes("Simulation divergence:")
         ));
+      },
+    },
+    {
+      id: "6.10ga",
+      name: "integrity gate aborts execute before transaction on state tampering",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          await runOrchestrationPipeline("preview", {
+            root,
+            controlPlane: control,
+            command: "choir preview",
+          });
+
+          const statePath = path.join(root, ".choir", "state.json");
+          const tampered = JSON.parse(fs.readFileSync(statePath, "utf-8")) as Record<string, unknown>;
+          tampered.execution = {
+            ...(typeof tampered.execution === "object" && tampered.execution !== null ? tampered.execution as Record<string, unknown> : {}),
+            activePlanId: "tampered-active-plan",
+          };
+          fs.writeFileSync(statePath, `${JSON.stringify(tampered, null, 2)}\n`, "utf-8");
+
+          let failedStage = "";
+          let errorMessage = "";
+          let stageResults: Array<{ stage: string; status: "success" | "failure" }> = [];
+          try {
+            await runOrchestrationPipeline("execute", {
+              root,
+              controlPlane: control,
+              command: "choir execute",
+            });
+          } catch (error) {
+            if (error instanceof OrchestrationPipelineError) {
+              failedStage = error.failedStage;
+              errorMessage = error.message;
+              stageResults = error.stageResults.map((stage) => ({ stage: stage.stage, status: stage.status }));
+            }
+          }
+
+          assert.strictEqual(failedStage, "integrity");
+          assert.ok(/STATE_SNAPSHOT_INVALID|STATE_SNAPSHOT_MISMATCH|PREVIEW_HASH_MISMATCH/.test(errorMessage));
+          assert.strictEqual(stageResults.some((stage) => stage.stage === "execution" && stage.status === "success"), false);
+        });
+      },
+    },
+    {
+      id: "6.10gb",
+      name: "integrity gate aborts execute on orchestration DAG artifact corruption",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          await runOrchestrationPipeline("preview", {
+            root,
+            controlPlane: control,
+            command: "choir preview",
+          });
+
+          const latestTracePath = path.join(root, ".choir", "traces", "orchestration", "latest.json");
+          const latest = JSON.parse(fs.readFileSync(latestTracePath, "utf-8")) as Record<string, unknown>;
+          const modeMetadata = (typeof latest.modeMetadata === "object" && latest.modeMetadata !== null)
+            ? latest.modeMetadata as Record<string, unknown>
+            : {};
+          const integrity = (typeof modeMetadata.integrity === "object" && modeMetadata.integrity !== null)
+            ? modeMetadata.integrity as Record<string, unknown>
+            : {};
+          integrity.orchestrationHash = "deadbeef";
+          modeMetadata.integrity = integrity;
+          latest.modeMetadata = modeMetadata;
+          fs.writeFileSync(latestTracePath, `${JSON.stringify(latest, null, 2)}\n`, "utf-8");
+
+          let failedStage = "";
+          let errorMessage = "";
+          try {
+            await runOrchestrationPipeline("execute", {
+              root,
+              controlPlane: control,
+              command: "choir execute",
+            });
+          } catch (error) {
+            if (error instanceof OrchestrationPipelineError) {
+              failedStage = error.failedStage;
+              errorMessage = error.message;
+            }
+          }
+
+          assert.strictEqual(failedStage, "integrity");
+          assert.ok(/DAG_HASH_MISMATCH|ORCHESTRATION_HASH_MISMATCH/.test(errorMessage));
+        });
+      },
+    },
+    {
+      id: "6.10gc",
+      name: "integrity gate aborts execute when inputs diverge after preview simulation",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          await runOrchestrationPipeline("preview", {
+            root,
+            controlPlane: control,
+            command: "choir preview",
+          });
+
+          const controlPath = path.join(root, ".choir", "choir.config.yaml");
+          const parsed = YAML.parse(fs.readFileSync(controlPath, "utf-8")) as Record<string, unknown>;
+          const intent = (typeof parsed.intent === "object" && parsed.intent !== null)
+            ? parsed.intent as Record<string, unknown>
+            : {};
+          const goals = Array.isArray(intent.goals) ? intent.goals.slice() : [];
+          goals.push("after-preview-input-change");
+          intent.goals = goals;
+          parsed.intent = intent;
+          fs.writeFileSync(controlPath, YAML.stringify(parsed), "utf-8");
+          const mutatedControl = harness.loadControlPlane();
+
+          let failedStage = "";
+          let errorMessage = "";
+          try {
+            await runOrchestrationPipeline("execute", {
+              root,
+              controlPlane: mutatedControl,
+              command: "choir execute",
+            });
+          } catch (error) {
+            if (error instanceof OrchestrationPipelineError) {
+              failedStage = error.failedStage;
+              errorMessage = error.message;
+            }
+          }
+
+          assert.strictEqual(failedStage, "integrity");
+          assert.ok(/STALE_SIMULATION_ARTIFACT|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(errorMessage));
+        });
       },
     },
     {

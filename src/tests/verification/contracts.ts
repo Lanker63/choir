@@ -1,4 +1,4 @@
-import { formatContractVerificationReport, runContractVerification } from "../../core/contractVerification.js";
+import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
 
 function readMode(): "quick" | "full" {
   return process.env.CHOIR_CONTRACT_MODE === "full" ? "full" : "quick";

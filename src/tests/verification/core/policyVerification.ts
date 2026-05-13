@@ -7,9 +7,9 @@ import {
   Repo,
   executeGlobalPlan,
   simulatePlan,
-} from "./globalOrchestration.js";
-import { evaluatePolicies, type PolicySet, type YAMLDiff } from "./policyEngine.js";
-import { approvePendingDiff, listPendingApprovals } from "./state.js";
+} from "../../../core/globalOrchestration.js";
+import { evaluatePolicies, type PolicySet, type YAMLDiff } from "../../../core/policyEngine.js";
+import { approvePendingDiff, listPendingApprovals } from "../../../core/state.js";
 
 export type PolicyVerificationCheck = {
   name: string;

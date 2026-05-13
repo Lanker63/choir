@@ -1,7 +1,7 @@
 import {
   formatPreviewVerificationReport,
   runPreviewVerification,
-} from "../../core/previewVerification.js";
+} from "./core/previewVerification.js";
 
 async function main(): Promise<void> {
   try {

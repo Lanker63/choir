@@ -3,7 +3,7 @@ import {
   type CompiledPolicy,
   type GlobalPlan,
   type Repo,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import {
   chaosInject,
   circuitAllow,
@@ -24,7 +24,7 @@ import {
   setFeatureFlag,
   validatePerformance,
   withExecutionTimeout,
-} from "./productionReadiness.js";
+} from "../../../core/productionReadiness.js";
 import { runDeterminismVerification } from "./determinismVerification.js";
 
 export type ProductionVerificationCheck = {

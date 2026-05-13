@@ -1,7 +1,7 @@
 import {
   formatOrchestrationVerificationReport,
   runOrchestrationVerification,
-} from "../../core/orchestrationVerification.js";
+} from "./core/orchestrationVerification.js";
 
 async function main(): Promise<void> {
   try {

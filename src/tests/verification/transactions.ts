@@ -1,7 +1,7 @@
 import {
   formatTransactionVerificationReport,
   runTransactionVerification,
-} from "../../core/transactionVerification.js";
+} from "./core/transactionVerification.js";
 
 async function main(): Promise<void> {
   try {

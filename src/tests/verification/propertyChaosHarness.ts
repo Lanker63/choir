@@ -5,7 +5,7 @@ import {
   runChaosTest,
   runPropertyTest,
   setSeed,
-} from "../../core/propertyChaosHarness.js";
+} from "./core/propertyChaosHarness.js";
 
 function readSeed(): number {
   const envSeed = process.env.CHOIR_VERIFY_SEED;

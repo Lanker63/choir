@@ -6,7 +6,7 @@ import {
   deterministicId,
   stableStringify,
   SeededRandom,
-} from "./deterministicCore.js";
+} from "../../../core/deterministicCore.js";
 import {
   executeDeterministic,
   executeGlobalPlan,
@@ -19,7 +19,7 @@ import {
   type GlobalPlan,
   type GlobalPlanTask,
   type Repo,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import { runContractVerification, type ContractVerificationReport } from "./contractVerification.js";
 import { runFullVerification, type VerificationReport } from "./verificationHarness.js";
 import { runDeterminismVerification, type DeterminismVerificationReport } from "./determinismVerification.js";
@@ -36,9 +36,9 @@ import {
   resetProductionReadiness,
   runLoadTest,
   validatePerformance,
-} from "./productionReadiness.js";
-import { approvePendingDiff, listPendingApprovals } from "./state.js";
-import { createReplica, mergeStates, sync, type SystemState as ReplicaSystemState } from "./distributedSync.js";
+} from "../../../core/productionReadiness.js";
+import { approvePendingDiff, listPendingApprovals } from "../../../core/state.js";
+import { createReplica, mergeStates, sync, type SystemState as ReplicaSystemState } from "../../../core/distributedSync.js";
 
 export type SystemInvariant =
   | "simulate == execute"
@@ -47,7 +47,7 @@ export type SystemInvariant =
   | "policy always enforced"
   | "determinism holds globally";
 
-export type Phase8Mode = "quick" | "full";
+export type FullSystemVerificationMode = "quick" | "full";
 
 export type InvariantResult = {
   invariant: SystemInvariant;
@@ -91,9 +91,9 @@ export type ProofArtifact = {
   passed: boolean;
 };
 
-export type Phase8HardeningReport = {
+export type FullSystemVerificationReport = {
   passed: boolean;
-  mode: Phase8Mode;
+  mode: FullSystemVerificationMode;
   contractCoverage: {
     passed: boolean;
     sectionsPassed: number;
@@ -105,8 +105,8 @@ export type Phase8HardeningReport = {
   failures: string[];
 };
 
-export type RunPhase8HardeningOptions = {
-  mode?: Phase8Mode;
+export type RunFullSystemVerificationOptions = {
+  mode?: FullSystemVerificationMode;
   workspaceRoot?: string;
   throwOnFailure?: boolean;
 };
@@ -133,7 +133,7 @@ function hashValue(value: unknown): string {
   return deterministicHash(value);
 }
 
-function modeValue(mode: Phase8Mode, fullValue: number, quickValue: number): number {
+function modeValue(mode: FullSystemVerificationMode, fullValue: number, quickValue: number): number {
   return mode === "full" ? fullValue : quickValue;
 }
 
@@ -154,11 +154,11 @@ function defaultPolicies(): CompiledPolicy[] {
 function requireApprovalPolicy(): CompiledPolicy[] {
   return [
     {
-      id: "phase8-require-approval",
+      id: "full-system-require-approval",
       source: "org",
       rules: [
         {
-          id: "phase8-require-set",
+          id: "full-system-require-set",
           kind: "deny-action-prefix",
           effect: "require-approval",
           actionPrefix: "set:",
@@ -172,11 +172,11 @@ function requireApprovalPolicy(): CompiledPolicy[] {
 function denyDangerPolicy(): CompiledPolicy[] {
   return [
     {
-      id: "phase8-require-danger",
+      id: "full-system-require-danger",
       source: "repo",
       rules: [
         {
-          id: "phase8-require-danger-rule",
+          id: "full-system-require-danger-rule",
           kind: "deny-action-prefix",
           effect: "require-approval",
           actionPrefix: "danger:",
@@ -185,11 +185,11 @@ function denyDangerPolicy(): CompiledPolicy[] {
       ],
     },
     {
-      id: "phase8-deny-danger",
+      id: "full-system-deny-danger",
       source: "org",
       rules: [
         {
-          id: "phase8-deny-danger-rule",
+          id: "full-system-deny-danger-rule",
           kind: "deny-action-prefix",
           effect: "deny",
           actionPrefix: "danger:",
@@ -291,7 +291,7 @@ function buildReposForPlan(plan: GlobalPlan): Repo[] {
 }
 
 function buildExecutionInput(id: string, tasks: number): ExecutionInput {
-  const plan = buildLinearPlan(id, tasks, `phase8-${id}`);
+  const plan = buildLinearPlan(id, tasks, `full-system-${id}`);
   const repos = buildReposForPlan(plan);
   const state = Object.fromEntries(repos.map((repo) => [repo.id, repo.state] as const));
 
@@ -347,7 +347,7 @@ function buildRegressionPatterns(): Array<{ file: string; pattern: RegExp; descr
   ];
 }
 
-async function runVerificationBundle(mode: Phase8Mode, workspaceRoot: string): Promise<VerificationBundle> {
+async function runVerificationBundle(mode: FullSystemVerificationMode, workspaceRoot: string): Promise<VerificationBundle> {
   const verificationMode = mode === "full" ? "full" : "quick";
 
   return {
@@ -388,7 +388,7 @@ export async function verifyAllContracts(workspaceRoot = process.cwd()): Promise
   };
 }
 
-async function validateSystemInvariants(mode: Phase8Mode, workspaceRoot: string): Promise<InvariantResult[]> {
+async function validateSystemInvariants(mode: FullSystemVerificationMode, workspaceRoot: string): Promise<InvariantResult[]> {
   const bundle = await runVerificationBundle(mode, workspaceRoot);
 
   const invariants: InvariantResult[] = [
@@ -432,24 +432,24 @@ async function validateSystemInvariants(mode: Phase8Mode, workspaceRoot: string)
   return invariants;
 }
 
-async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runEdgeCaseElimination(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
 
   resetProductionReadiness();
 
-  const emptyPlan: GlobalPlan = { id: "phase8-empty-plan", tasks: [] };
+  const emptyPlan: GlobalPlan = { id: "full-system-empty-plan", tasks: [] };
   const emptyResult = await executeGlobalPlan(emptyPlan, { repos: [], policies: [] });
   if (!emptyResult.success || !equalUnknown(emptyResult.finalStates, {})) {
     failures.push("empty plan did not converge to deterministic no-op state");
   }
 
-  const singlePlan = buildLinearPlan("phase8-single-node", 1, "phase8-single");
+  const singlePlan = buildLinearPlan("full-system-single-node", 1, "full-system-single");
   const singleResult = await executeGlobalPlan(singlePlan, buildExecutionOptions(singlePlan));
   if (!singleResult.success) {
     failures.push("single-node DAG execution failed");
   }
 
-  const maximalPlan = buildLinearPlan("phase8-maximal-dag", modeValue(mode, 256, 40), "phase8-max");
+  const maximalPlan = buildLinearPlan("full-system-maximal-dag", modeValue(mode, 256, 40), "full-system-max");
   const maximalSimulation = await simulatePlan(maximalPlan, buildExecutionOptions(maximalPlan));
   const maximalExecution = await executeGlobalPlan(maximalPlan, buildExecutionOptions(maximalPlan));
   if (!maximalSimulation.success || !maximalExecution.success) {
@@ -459,11 +459,11 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
   }
 
   const conflictPlan: GlobalPlan = {
-    id: "phase8-conflict-policy",
+    id: "full-system-conflict-policy",
     tasks: [
       {
-        id: "phase8-conflict:t1",
-        repoId: "phase8-conflict",
+        id: "full-system-conflict:t1",
+        repoId: "full-system-conflict",
         action: "danger:mutate",
         dependsOn: [],
       },
@@ -474,7 +474,7 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
     failures.push("conflicting policy case unexpectedly succeeded");
   }
 
-  const repeatedPlan = buildLinearPlan("phase8-repeated", 6, "phase8-repeat");
+  const repeatedPlan = buildLinearPlan("full-system-repeated", 6, "full-system-repeat");
   const repeatedFingerprints: string[] = [];
   for (let run = 0; run < modeValue(mode, 5, 3); run += 1) {
     resetProductionReadiness();
@@ -490,7 +490,7 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
     failures.push("repeated execution produced nondeterministic fingerprints");
   }
 
-  const partialFailurePlan = buildLinearPlan("phase8-partial-failure", modeValue(mode, 8, 4), "phase8-partial");
+  const partialFailurePlan = buildLinearPlan("full-system-partial-failure", modeValue(mode, 8, 4), "full-system-partial");
   for (let failingIndex = 0; failingIndex < partialFailurePlan.tasks.length; failingIndex += 1) {
     const failingTaskId = (partialFailurePlan.tasks[failingIndex] as GlobalPlanTask).id;
     resetProductionReadiness();
@@ -498,7 +498,7 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
       ...buildExecutionOptions(partialFailurePlan),
       executeTask: async (task, state, _repoId, _allStates, runMode) => {
         if (runMode === "execution" && task.id === failingTaskId) {
-          throw new Error(`phase8 injected failure ${task.id}`);
+          throw new Error(`full-system injected failure ${task.id}`);
         }
         return applySetAction(task.action, state);
       },
@@ -509,7 +509,7 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
       ...buildExecutionOptions(partialFailurePlan),
       executeTask: async (task, state, _repoId, _allStates, runMode) => {
         if (runMode === "execution" && task.id === failingTaskId) {
-          throw new Error(`phase8 injected failure ${task.id}`);
+          throw new Error(`full-system injected failure ${task.id}`);
         }
         return applySetAction(task.action, state);
       },
@@ -550,7 +550,7 @@ async function runEdgeCaseElimination(mode: Phase8Mode): Promise<{ passed: boole
   };
 }
 
-async function allSubsystemsAgree(mode: Phase8Mode, workspaceRoot: string): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function allSubsystemsAgree(mode: FullSystemVerificationMode, workspaceRoot: string): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
   const bundle = await runVerificationBundle(mode, workspaceRoot);
 
@@ -584,7 +584,7 @@ async function allSubsystemsAgree(mode: Phase8Mode, workspaceRoot: string): Prom
 }
 
 export async function enforceGlobalDeterminism(
-  mode: Phase8Mode,
+  mode: FullSystemVerificationMode,
   workspaceRoot = process.cwd()
 ): Promise<DeterminismLockResult> {
   const runs = modeValue(mode, 10, 4);
@@ -672,8 +672,8 @@ async function runFailureModeHardening(): Promise<{ passed: boolean; failures: s
     failures.push("DAG cycle handling is incomplete");
   }
 
-  const local = createReplica("phase8-local", { feature: { enabled: true } } as ReplicaSystemState);
-  const remote = createReplica("phase8-remote", { feature: { enabled: false } } as ReplicaSystemState);
+  const local = createReplica("full-system-local", { feature: { enabled: true } } as ReplicaSystemState);
+  const remote = createReplica("full-system-remote", { feature: { enabled: false } } as ReplicaSystemState);
   const conflictSync = sync(local, remote, {
     mode: "bidirectional",
     conflictStrategy: "manual",
@@ -780,11 +780,11 @@ export async function defensiveExecute(
   };
 }
 
-async function runDefensiveExecutionPass(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runDefensiveExecutionPass(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
 
   const invalidPlan: GlobalPlan = {
-    id: "phase8-invalid-plan",
+    id: "full-system-invalid-plan",
     tasks: [
       {
         id: "dup-task",
@@ -810,7 +810,7 @@ async function runDefensiveExecutionPass(mode: Phase8Mode): Promise<{ passed: bo
     failures.push("defensive execution accepted malformed input");
   }
 
-  const validPlan = buildLinearPlan("phase8-defensive-valid", modeValue(mode, 6, 3), "phase8-defensive");
+  const validPlan = buildLinearPlan("full-system-defensive-valid", modeValue(mode, 6, 3), "full-system-defensive");
   const validResult = await defensiveExecute(validPlan, buildExecutionOptions(validPlan));
   if (!validResult.accepted || !validResult.result || !validResult.result.success) {
     failures.push("defensive execution failed on valid deterministic plan");
@@ -825,7 +825,7 @@ async function runDefensiveExecutionPass(mode: Phase8Mode): Promise<{ passed: bo
   };
 }
 
-async function runChaosHardening(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string; report: PropertyRunResult }> {
+async function runChaosHardening(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string; report: PropertyRunResult }> {
   const iterations = modeValue(mode, 1000, 80);
   const report = await runChaosTest("extreme", iterations, {
     seed: 1337,
@@ -846,13 +846,13 @@ async function runChaosHardening(mode: Phase8Mode): Promise<{ passed: boolean; f
   };
 }
 
-async function runReplayStress(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runReplayStress(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
   const traceCount = modeValue(mode, 4, 2);
   const replaysPerTrace = modeValue(mode, 10, 3);
 
   for (let traceIndex = 0; traceIndex < traceCount; traceIndex += 1) {
-    const input = buildExecutionInput(`phase8-replay-${traceIndex}`, modeValue(mode, 8, 4));
+    const input = buildExecutionInput(`full-system-replay-${traceIndex}`, modeValue(mode, 8, 4));
     const trace = await executeDeterministic(input);
 
     const replayHashes: string[] = [];
@@ -880,12 +880,12 @@ async function runReplayStress(mode: Phase8Mode): Promise<{ passed: boolean; fai
   };
 }
 
-async function runPolicyBypassAttackTest(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runPolicyBypassAttackTest(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-phase8-policy-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-full-system-policy-"));
 
   try {
-    const plan = buildLinearPlan("phase8-policy-bypass", modeValue(mode, 3, 2), "phase8-policy");
+    const plan = buildLinearPlan("full-system-policy-bypass", modeValue(mode, 3, 2), "full-system-policy");
     const repos = buildReposForPlan(plan);
 
     const blocked = await executeGlobalPlan(plan, {
@@ -908,7 +908,7 @@ async function runPolicyBypassAttackTest(mode: Phase8Mode): Promise<{ passed: bo
 
     const pendingEntry = pending[0];
     if (pendingEntry) {
-      approvePendingDiff(root, pendingEntry.id, "phase8-attacker-test", new Date().toISOString());
+      approvePendingDiff(root, pendingEntry.id, "full-system-attacker-test", new Date().toISOString());
     }
 
     const changedPlan: GlobalPlan = {
@@ -931,11 +931,11 @@ async function runPolicyBypassAttackTest(mode: Phase8Mode): Promise<{ passed: bo
     }
 
     const conflictPlan: GlobalPlan = {
-      id: "phase8-policy-conflict-attack",
+      id: "full-system-policy-conflict-attack",
       tasks: [
         {
-          id: "phase8-attack:t1",
-          repoId: "phase8-attack",
+          id: "full-system-attack:t1",
+          repoId: "full-system-attack",
           action: "danger:mutate",
           dependsOn: [],
         },
@@ -978,7 +978,7 @@ function randomState(random: SeededRandom, size: number): ReplicaSystemState {
   return result;
 }
 
-async function runDistributedConvergenceStress(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runDistributedConvergenceStress(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
   const iterations = modeValue(mode, 200, 24);
   const random = new SeededRandom(4242);
@@ -995,8 +995,8 @@ async function runDistributedConvergenceStress(mode: Phase8Mode): Promise<{ pass
     }
 
     const runSync = (): string => {
-      let local = createReplica("phase8-node-a", left);
-      let remote = createReplica("phase8-node-b", right);
+      let local = createReplica("full-system-node-a", left);
+      let remote = createReplica("full-system-node-b", right);
 
       const fingerprints: string[] = [];
       for (let retry = 0; retry < 3; retry += 1) {
@@ -1036,10 +1036,10 @@ async function runDistributedConvergenceStress(mode: Phase8Mode): Promise<{ pass
   };
 }
 
-async function runPerformanceStabilityHardening(mode: Phase8Mode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runPerformanceStabilityHardening(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
 
-  const performancePlan = buildLinearPlan("phase8-performance", modeValue(mode, 300, 80), "phase8-perf");
+  const performancePlan = buildLinearPlan("full-system-performance", modeValue(mode, 300, 80), "full-system-perf");
   const perfValidation = validatePerformance(performancePlan);
   if (!perfValidation.valid) {
     failures.push(`performance validation failed: ${perfValidation.errors.join("; ")}`);
@@ -1072,9 +1072,9 @@ async function runPerformanceStabilityHardening(mode: Phase8Mode): Promise<{ pas
   };
 }
 
-async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promise<{ passed: boolean; failures: string[]; detail: string }> {
+async function runFullSystemUAT(mode: FullSystemVerificationMode, workspaceRoot: string): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-phase8-uat-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-full-system-uat-"));
 
   try {
     const choirDir = path.join(root, ".choir");
@@ -1084,7 +1084,7 @@ async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promis
     const controlPlanePath = path.join(choirDir, "choir.config.yaml");
     fs.writeFileSync(controlPlanePath, [
       "version: \"1.0.0\"",
-      "mission: \"phase8\"",
+      "mission: \"full-system\"",
       "vision: \"hardening\"",
       "intent:",
       "  goals: []",
@@ -1098,7 +1098,7 @@ async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promis
     ].join("\n"), "utf-8");
 
     // plan
-    const plan = buildLinearPlan("phase8-uat", modeValue(mode, 4, 2), "phase8-uat");
+    const plan = buildLinearPlan("full-system-uat", modeValue(mode, 4, 2), "full-system-uat");
     const repos = buildReposForPlan(plan);
 
     // simulate -> preview
@@ -1125,7 +1125,7 @@ async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promis
 
     const firstPending = pending[0];
     if (firstPending) {
-      approvePendingDiff(root, firstPending.id, "phase8-uat", new Date().toISOString());
+      approvePendingDiff(root, firstPending.id, "full-system-uat", new Date().toISOString());
     }
 
     // execute
@@ -1145,7 +1145,7 @@ async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promis
       policies: defaultPolicies(),
       executeTask: async (task, state, _repoId, _allStates, runMode) => {
         if (runMode === "execution" && task.id === (plan.tasks[plan.tasks.length - 1] as GlobalPlanTask).id) {
-          throw new Error("phase8-uat-rollback");
+          throw new Error("full-system-uat-rollback");
         }
 
         return applySetAction(task.action, state);
@@ -1156,7 +1156,7 @@ async function runFullSystemUAT(mode: Phase8Mode, workspaceRoot: string): Promis
     }
 
     // replay
-    const input = buildExecutionInput("phase8-uat-replay", modeValue(mode, 5, 3));
+    const input = buildExecutionInput("full-system-uat-replay", modeValue(mode, 5, 3));
     const trace = await executeDeterministic(input);
     const replayed = replay(trace);
     if (hashValue(replayed) !== trace.finalStateHash) {
@@ -1225,7 +1225,7 @@ export async function proveSystem(root = process.cwd()): Promise<ProofArtifact> 
 
   const passed = deterministic.passed && policy.passed && orchestration.passed && continuous.passed;
   const proofHash = deterministicHash(proofPayload);
-  const proofId = deterministicId("phase8-proof", { proofHash, root }, 16);
+  const proofId = deterministicId("full-system-proof", { proofHash, root }, 16);
   const proofPath = path.join(root, ".choir", "artifacts", "proofs", `${proofId}.json`);
 
   ensureDirectory(proofPath);
@@ -1274,7 +1274,7 @@ function toPassResult(id: number, name: string, passed: boolean, detail: string,
   };
 }
 
-export async function runPhase8Hardening(options: RunPhase8HardeningOptions = {}): Promise<Phase8HardeningReport> {
+export async function runFullSystemVerification(options: RunFullSystemVerificationOptions = {}): Promise<FullSystemVerificationReport> {
   const mode = options.mode ?? "full";
   const workspaceRoot = options.workspaceRoot ? path.resolve(options.workspaceRoot) : process.cwd();
   const failures: string[] = [];
@@ -1437,7 +1437,7 @@ export async function runPhase8Hardening(options: RunPhase8HardeningOptions = {}
     failures.push(...pass16.failures);
   }
 
-  const report: Phase8HardeningReport = {
+  const report: FullSystemVerificationReport = {
     passed: passes.every((entry) => entry.passed),
     mode,
     contractCoverage: {
@@ -1452,15 +1452,15 @@ export async function runPhase8Hardening(options: RunPhase8HardeningOptions = {}
   };
 
   if (!report.passed && options.throwOnFailure !== false) {
-    throw new Error(formatPhase8HardeningReport(report));
+    throw new Error(formatFullSystemVerificationReport(report));
   }
 
   return report;
 }
 
-export function formatPhase8HardeningReport(report: Phase8HardeningReport): string {
+export function formatFullSystemVerificationReport(report: FullSystemVerificationReport): string {
   const lines = [
-    `${report.passed ? "PASS" : "FAIL"} phase8 hardening`,
+    `${report.passed ? "PASS" : "FAIL"} full-system verification`,
     `- mode: ${report.mode}`,
     `- contracts: ${report.contractCoverage.sectionsPassed}/${report.contractCoverage.sectionsTotal}`,
     `- invariants: ${report.invariants.filter((entry) => entry.passed).length}/${report.invariants.length}`,

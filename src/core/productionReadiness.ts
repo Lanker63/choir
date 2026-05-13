@@ -690,9 +690,9 @@ export async function continuousVerify(root?: string): Promise<ContinuousVerific
   }
 
   const [{ runDeterminismVerification }, { runPolicyVerification }, { runOrchestrationVerification }] = await Promise.all([
-    import("./determinismVerification.js"),
-    import("./policyVerification.js"),
-    import("./orchestrationVerification.js"),
+    import("../tests/verification/core/determinismVerification.js"),
+    import("../tests/verification/core/policyVerification.js"),
+    import("../tests/verification/core/orchestrationVerification.js"),
   ]);
 
   const determinism = await runDeterminismVerification();

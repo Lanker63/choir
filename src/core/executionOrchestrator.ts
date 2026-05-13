@@ -13,6 +13,7 @@ export type ExecutionOrchestrationStageName =
   | "candidate-synthesis"
   | "strategy-selection"
   | "simulation-precheck"
+  | "integrity-gate"
   | "policy-enforcement"
   | "execution"
   | "replay-verification";
@@ -102,32 +103,29 @@ function mapStage(stage: PipelineStageName): ExecutionOrchestrationStageName {
     return "simulation-precheck";
   }
 
+  if (stage === "integrity") {
+    return "integrity-gate";
+  }
+
   if (stage === "policy" || stage === "approval") {
     return "policy-enforcement";
+  }
+
+  if (stage === "execution") {
+    return "execution";
   }
 
   return "replay-verification";
 }
 
-function toStageResults(stages: PipelineStageResult[], includeExecutionStage: boolean): ExecutionOrchestrationStageResult[] {
+function toStageResults(stages: PipelineStageResult[]): ExecutionOrchestrationStageResult[] {
   const mapped = stages.map((stage) => ({
     stage: mapStage(stage.stage),
     status: stage.status,
     detail: stage.detail,
   }));
 
-  if (!includeExecutionStage) {
-    return mapped;
-  }
-
-  return [
-    ...mapped,
-    {
-      stage: "execution",
-      status: "success",
-      detail: "Execution committed with simulation parity enforcement.",
-    },
-  ];
+  return mapped;
 }
 
 export async function runExecutionOrchestrator(
@@ -172,14 +170,14 @@ export async function runExecutionOrchestrator(
         requiresApproval: unified.policy.requiresApproval,
         violations: unified.policy.violations.length,
       },
-      stageResults: toStageResults(unified.stageResults, true),
+      stageResults: toStageResults(unified.stageResults),
     };
   } catch (error) {
     if (error instanceof OrchestrationPipelineError) {
       throw new ExecutionOrchestrationError({
         failedStage: mapStage(error.failedStage),
         message: error.message,
-        stageResults: toStageResults(error.stageResults, false),
+        stageResults: toStageResults(error.stageResults),
       });
     }
 

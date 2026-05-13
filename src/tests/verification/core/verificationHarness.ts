@@ -2,7 +2,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { CONTROL_PLANE_VERSION, ControlPlane, Plan, Task } from "../schema.js";
+import { CONTROL_PLANE_VERSION, ControlPlane, Plan, Task } from "../../../schema.js";
 import {
   ExecutionInput,
   GlobalPlan,
@@ -16,7 +16,7 @@ import {
   hashState as hashGlobalState,
   replay,
   simulatePlan,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 import {
   STRATEGIES,
   Strategy,
@@ -24,7 +24,7 @@ import {
   evaluateStrategy,
   isImproved,
   iterateStrategy,
-} from "./strategyPlanner.js";
+} from "../../../core/strategyPlanner.js";
 import {
   buildSignature,
   canReuse,
@@ -33,15 +33,15 @@ import {
   recordStrategy,
   selectFromMemory,
   validatePlanStillApplies,
-} from "./strategyMemory.js";
-import { StatePlane, createEmptyStatePlane } from "./state.js";
+} from "../../../core/strategyMemory.js";
+import { StatePlane, createEmptyStatePlane } from "../../../core/state.js";
 import { runCompilerVerification } from "./compilerVerification.js";
 import { runTransactionVerification } from "./transactionVerification.js";
 import { runStateVerification } from "./stateVerification.js";
 import { runPolicyVerification } from "./policyVerification.js";
 import { runOrchestrationVerification } from "./orchestrationVerification.js";
 import { runProductionVerification } from "./productionVerification.js";
-import { resetProductionReadiness } from "./productionReadiness.js";
+import { resetProductionReadiness } from "../../../core/productionReadiness.js";
 
 export type VerificationCase = {
   name: string;

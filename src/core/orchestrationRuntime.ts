@@ -53,6 +53,7 @@ import {
   hasApprovalForPreview,
   hashState as hashStatePlane,
   readStatePlane,
+  type StatePlane,
   updateExecutionState,
   upsertPendingPreviewApproval,
 } from "./state.js";
@@ -60,6 +61,7 @@ import { controlPlaneToChoirConfig } from "./dslYamlCompiler.js";
 import { deterministicHash } from "./deterministicCore.js";
 import { simulatePlanOutcome, type FileChange } from "./executionPreview.js";
 import {
+  readLatestOrchestrationTrace,
   writeOrchestrationTrace,
   type OrchestrationReplaySummary,
   type OrchestrationSimulationContract,
@@ -86,8 +88,10 @@ export type PipelineStageName =
   | "orchestration-build"
   | "simulation"
   | "replay-verification"
+  | "integrity"
   | "policy"
-  | "approval";
+  | "approval"
+  | "execution";
 
 export type PipelineStageResult = {
   stage: PipelineStageName;
@@ -151,6 +155,40 @@ export type PipelineReplayVerification = {
   orchestrationDag: boolean;
   simulationContract: boolean;
   verified: boolean;
+};
+
+export type IntegrityViolationType =
+  | "PREVIEW_HASH_MISMATCH"
+  | "SIMULATION_EXECUTION_PARITY_MISMATCH"
+  | "REPLAY_PARITY_FAILURE"
+  | "DAG_HASH_MISMATCH"
+  | "DAG_CYCLE_DETECTED"
+  | "DAG_MISSING_NODE_REFERENCE"
+  | "DAG_CANONICAL_ORDER_MISMATCH"
+  | "STRATEGY_ID_MISMATCH"
+  | "ORCHESTRATION_HASH_MISMATCH"
+  | "STATE_SNAPSHOT_INVALID"
+  | "STATE_SNAPSHOT_MISMATCH"
+  | "STALE_SIMULATION_ARTIFACT";
+
+export type IntegrityViolation = {
+  type: IntegrityViolationType;
+  detail: string;
+};
+
+export type ExecutionIntegritySnapshot = {
+  planId: string;
+  strategyId: string;
+  controlPlaneHash: string;
+  previewHash: string;
+  predictedExecutionHash: string;
+  simulationFutureStateHash: string;
+  orchestrationHash: string;
+  nodeHash: string;
+  edgeHash: string;
+  canonicalStageHash: string;
+  stateSnapshotHash: string;
+  integrityHash: string;
 };
 
 export type PipelineCandidateView = {
@@ -296,6 +334,24 @@ type GenerateSimulationContractResult = {
   };
   globalPlan: GlobalPlan;
   repos: Repo[];
+};
+
+type ExecutionIntegrityGateInput = {
+  root: string;
+  controlPlane: ControlPlane;
+  requestedPreviewRef?: string;
+  selected: RankedPlan;
+  selectedExecutionPlan: Plan;
+  simulationContract: PipelineSimulationContract;
+  generatedSimulation: GenerateSimulationContractResult;
+  executionDag: PipelineExecutionDAG;
+  replayVerification: PipelineReplayVerification;
+};
+
+type ExecutionIntegrityGateResult = {
+  valid: boolean;
+  snapshot: ExecutionIntegritySnapshot;
+  violations: IntegrityViolation[];
 };
 
 function sortedUnique(values: string[]): string[] {
@@ -486,6 +542,448 @@ function executionPolicyViolations(violations: string[]): PipelinePolicy["violat
   }));
 }
 
+function integrityViolation(type: IntegrityViolationType, detail: string): IntegrityViolation {
+  return { type, detail };
+}
+
+function formatIntegrityViolation(violation: IntegrityViolation): string {
+  return `IntegrityViolation: type=${violation.type}; detail=${violation.detail}`;
+}
+
+function formatIntegrityViolations(violations: IntegrityViolation[]): string {
+  return violations.map((entry) => formatIntegrityViolation(entry)).join("; ");
+}
+
+function normalizePreviewReference(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function stateSnapshotForIntegrity(state: StatePlane): unknown {
+  return {
+    version: state.version,
+    intent: state.intent,
+    ast: state.ast,
+    graph: state.graph,
+    ruleViolations: state.ruleViolations,
+    plans: state.plans,
+    astIndex: state.astIndex,
+    symbolGraph: state.symbolGraph,
+    violations: state.violations,
+    metrics: state.metrics,
+    dependencyGraph: state.dependencyGraph,
+    execution: state.execution,
+    strategyHistory: state.strategyHistory,
+  };
+}
+
+function hashExecutionStateSnapshot(state: StatePlane): string {
+  return deterministicHash(stateSnapshotForIntegrity(state));
+}
+
+function safeReadStateSnapshot(root: string): { state: StatePlane; snapshotHash: string; readError?: string } {
+  try {
+    const state = readStatePlane(root) ?? createEmptyStatePlane();
+    return {
+      state,
+      snapshotHash: hashExecutionStateSnapshot(state),
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const fallback = createEmptyStatePlane();
+    return {
+      state: fallback,
+      snapshotHash: hashExecutionStateSnapshot(fallback),
+      readError: message,
+    };
+  }
+}
+
+function hashDagNodes(nodes: string[]): string {
+  return deterministicHash([...nodes]);
+}
+
+function hashDagEdges(edges: Array<{ from: string; to: string }>): string {
+  const canonical = [...edges]
+    .map((edge) => ({ from: edge.from, to: edge.to }))
+    .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
+  return deterministicHash(canonical);
+}
+
+function hashCanonicalStages(stageGroups: Array<{ id: string; order: number; units: string[] }>): string {
+  const canonical = [...stageGroups]
+    .map((stage) => ({
+      id: stage.id,
+      order: stage.order,
+      units: [...stage.units],
+    }))
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  return deterministicHash(canonical);
+}
+
+function buildExecutionIntegritySnapshot(input: {
+  selected: RankedPlan;
+  selectedExecutionPlan: Plan;
+  controlPlane: ControlPlane;
+  simulationContract: PipelineSimulationContract;
+  executionDag: PipelineExecutionDAG;
+  stateSnapshotHash: string;
+  predictedExecutionHash: string;
+}): ExecutionIntegritySnapshot {
+  const nodeHash = hashDagNodes(input.executionDag.nodes);
+  const edgeHash = hashDagEdges(input.executionDag.edges);
+  const canonicalStageHash = hashCanonicalStages(input.executionDag.stageGroups);
+
+  const payload = {
+    planId: input.selectedExecutionPlan.id,
+    strategyId: input.selected.strategyType,
+    controlPlaneHash: deterministicHash(controlPlaneToChoirConfig(input.controlPlane)),
+    previewHash: input.selected.previewHash,
+    predictedExecutionHash: input.predictedExecutionHash,
+    simulationFutureStateHash: input.simulationContract.futureStateHash,
+    orchestrationHash: input.executionDag.hash,
+    nodeHash,
+    edgeHash,
+    canonicalStageHash,
+    stateSnapshotHash: input.stateSnapshotHash,
+  };
+
+  return {
+    ...payload,
+    integrityHash: deterministicHash(payload),
+  };
+}
+
+function parseExecutionIntegritySnapshot(value: unknown): ExecutionIntegritySnapshot | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const fields = [
+    "planId",
+    "strategyId",
+    "controlPlaneHash",
+    "previewHash",
+    "predictedExecutionHash",
+    "simulationFutureStateHash",
+    "orchestrationHash",
+    "nodeHash",
+    "edgeHash",
+    "canonicalStageHash",
+    "stateSnapshotHash",
+    "integrityHash",
+  ] as const;
+
+  if (!fields.every((field) => typeof record[field] === "string")) {
+    return undefined;
+  }
+
+  return {
+    planId: record.planId as string,
+    strategyId: record.strategyId as string,
+    controlPlaneHash: record.controlPlaneHash as string,
+    previewHash: record.previewHash as string,
+    predictedExecutionHash: record.predictedExecutionHash as string,
+    simulationFutureStateHash: record.simulationFutureStateHash as string,
+    orchestrationHash: record.orchestrationHash as string,
+    nodeHash: record.nodeHash as string,
+    edgeHash: record.edgeHash as string,
+    canonicalStageHash: record.canonicalStageHash as string,
+    stateSnapshotHash: record.stateSnapshotHash as string,
+    integrityHash: record.integrityHash as string,
+  };
+}
+
+function topologicalOrderFromEdges(nodes: string[], edges: Array<{ from: string; to: string }>): { order: string[]; cyclic: boolean } {
+  const indegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+
+  for (const nodeId of nodes) {
+    indegree.set(nodeId, 0);
+    outgoing.set(nodeId, []);
+  }
+
+  for (const edge of edges) {
+    if (!indegree.has(edge.from) || !indegree.has(edge.to)) {
+      continue;
+    }
+
+    outgoing.set(edge.from, [...(outgoing.get(edge.from) ?? []), edge.to].sort((left, right) => left.localeCompare(right)));
+    indegree.set(edge.to, (indegree.get(edge.to) ?? 0) + 1);
+  }
+
+  const ready = [...indegree.entries()]
+    .filter(([, degree]) => degree === 0)
+    .map(([nodeId]) => nodeId)
+    .sort((left, right) => left.localeCompare(right));
+  const order: string[] = [];
+
+  while (ready.length > 0) {
+    const nodeId = ready.shift() as string;
+    order.push(nodeId);
+
+    for (const dependent of outgoing.get(nodeId) ?? []) {
+      const nextDegree = (indegree.get(dependent) ?? 0) - 1;
+      indegree.set(dependent, nextDegree);
+      if (nextDegree === 0) {
+        ready.push(dependent);
+        ready.sort((left, right) => left.localeCompare(right));
+      }
+    }
+  }
+
+  return {
+    order,
+    cyclic: order.length !== nodes.length,
+  };
+}
+
+function validateExecutionDagIntegrity(input: {
+  executionDag: PipelineExecutionDAG;
+  selected: RankedPlan;
+  selectedExecutionPlan: Plan;
+}): IntegrityViolation[] {
+  const violations: IntegrityViolation[] = [];
+  const dag = input.executionDag;
+  const canonicalNodes = [...dag.nodes].sort((left, right) => left.localeCompare(right));
+  if (deterministicHash(dag.nodes) !== deterministicHash(canonicalNodes)) {
+    violations.push(integrityViolation("DAG_CANONICAL_ORDER_MISMATCH", "Execution DAG nodes are not in canonical order."));
+  }
+
+  const canonicalEdges = [...dag.edges]
+    .map((edge) => ({ from: edge.from, to: edge.to }))
+    .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
+  if (deterministicHash(dag.edges) !== deterministicHash(canonicalEdges)) {
+    violations.push(integrityViolation("DAG_CANONICAL_ORDER_MISMATCH", "Execution DAG edges are not in canonical order."));
+  }
+
+  const nodeSet = new Set(dag.nodes);
+  const planTaskIds = sortedUnique(input.selectedExecutionPlan.tasks.map((task) => task.id));
+  if (deterministicHash(planTaskIds) !== deterministicHash(canonicalNodes)) {
+    violations.push(integrityViolation("DAG_HASH_MISMATCH", "Execution DAG nodes differ from selected execution plan task ids."));
+  }
+
+  for (const task of input.selectedExecutionPlan.tasks) {
+    for (const dependencyId of task.dependsOn ?? []) {
+      if (!nodeSet.has(dependencyId)) {
+        violations.push(integrityViolation(
+          "DAG_MISSING_NODE_REFERENCE",
+          `Plan dependency ${dependencyId} referenced by ${task.id} is missing from execution DAG nodes.`
+        ));
+      }
+    }
+  }
+
+  for (const edge of dag.edges) {
+    if (!nodeSet.has(edge.from) || !nodeSet.has(edge.to)) {
+      violations.push(integrityViolation(
+        "DAG_MISSING_NODE_REFERENCE",
+        `Execution DAG edge ${edge.from} -> ${edge.to} references missing node(s).`
+      ));
+    }
+  }
+
+  const topo = topologicalOrderFromEdges(canonicalNodes, canonicalEdges);
+  if (topo.cyclic) {
+    violations.push(integrityViolation("DAG_CYCLE_DETECTED", "Execution DAG contains a dependency cycle."));
+  }
+
+  const canonicalStageGroups = [...dag.stageGroups]
+    .map((stage) => ({
+      id: stage.id,
+      order: stage.order,
+      units: [...stage.units],
+    }))
+    .sort((left, right) => left.order - right.order || left.id.localeCompare(right.id));
+  if (deterministicHash(dag.stageGroups) !== deterministicHash(canonicalStageGroups)) {
+    violations.push(integrityViolation("DAG_CANONICAL_ORDER_MISMATCH", "Execution stage groups are not in canonical deterministic order."));
+  }
+
+  const topologicalOrder = canonicalStageGroups
+    .flatMap((stage) => stage.units)
+    .filter((unitId, index, all) => all.indexOf(unitId) === index);
+  if (deterministicHash(topologicalOrder) !== deterministicHash(dag.topologicalOrder)) {
+    violations.push(integrityViolation("DAG_CANONICAL_ORDER_MISMATCH", "Execution topological order diverges from stage-group projection."));
+  }
+
+  if (input.selected.orchestrationGraph.hash !== dag.hash) {
+    violations.push(integrityViolation("DAG_HASH_MISMATCH", "Ranked orchestration graph hash differs from execution DAG hash."));
+  }
+
+  return violations;
+}
+
+function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): ExecutionIntegrityGateResult {
+  const violations: IntegrityViolation[] = [];
+  const stateSnapshot = safeReadStateSnapshot(input.root);
+  if (stateSnapshot.readError) {
+    violations.push(integrityViolation("STATE_SNAPSHOT_INVALID", stateSnapshot.readError));
+  }
+
+  const predictedExecutionHash = hashGlobalState(input.generatedSimulation.simulation.finalState);
+  if (predictedExecutionHash !== input.simulationContract.futureStateHash) {
+    violations.push(integrityViolation(
+      "SIMULATION_EXECUTION_PARITY_MISMATCH",
+      `simulation.futureStateHash=${input.simulationContract.futureStateHash} predictedExecutionHash=${predictedExecutionHash}`
+    ));
+  }
+
+  const simulatedTrace = input.generatedSimulation.simulation.trace.deterministicTrace;
+  if (!simulatedTrace) {
+    violations.push(integrityViolation("REPLAY_PARITY_FAILURE", "Simulation trace is missing deterministic replay metadata."));
+  } else {
+    const replayHash = hashGlobalState(replay(simulatedTrace));
+    if (replayHash !== input.simulationContract.replayHash) {
+      violations.push(integrityViolation(
+        "REPLAY_PARITY_FAILURE",
+        `simulation.replayHash=${input.simulationContract.replayHash} computedReplayHash=${replayHash}`
+      ));
+    }
+  }
+
+  if (!input.replayVerification.verified) {
+    violations.push(integrityViolation("REPLAY_PARITY_FAILURE", "Replay verification is not authoritative for this execution candidate."));
+  }
+
+  if (input.simulationContract.orchestrationHash !== input.executionDag.hash) {
+    violations.push(integrityViolation(
+      "ORCHESTRATION_HASH_MISMATCH",
+      `simulation.orchestrationHash=${input.simulationContract.orchestrationHash} executionDag.hash=${input.executionDag.hash}`
+    ));
+  }
+
+  if (input.selected.strategyType.trim() !== input.selected.strategyId.trim()) {
+    violations.push(integrityViolation(
+      "STRATEGY_ID_MISMATCH",
+      `selected.strategyType=${input.selected.strategyType} selected.strategyId=${input.selected.strategyId}`
+    ));
+  }
+
+  violations.push(...validateExecutionDagIntegrity({
+    executionDag: input.executionDag,
+    selected: input.selected,
+    selectedExecutionPlan: input.selectedExecutionPlan,
+  }));
+
+  const snapshot = buildExecutionIntegritySnapshot({
+    selected: input.selected,
+    selectedExecutionPlan: input.selectedExecutionPlan,
+    controlPlane: input.controlPlane,
+    simulationContract: input.simulationContract,
+    executionDag: input.executionDag,
+    stateSnapshotHash: stateSnapshot.snapshotHash,
+    predictedExecutionHash,
+  });
+
+  const requestedPreviewRef = normalizePreviewReference(input.requestedPreviewRef);
+  if (requestedPreviewRef && requestedPreviewRef !== snapshot.previewHash) {
+    violations.push(integrityViolation(
+      "PREVIEW_HASH_MISMATCH",
+      `requestedPreviewRef=${requestedPreviewRef} currentPreviewHash=${snapshot.previewHash}`
+    ));
+  }
+
+  const lastPreview = stateSnapshot.state.execution.lastPreview;
+  if (lastPreview) {
+    const lastPreviewHash = normalizePreviewReference(lastPreview.hash);
+    if (lastPreviewHash && lastPreviewHash !== snapshot.previewHash) {
+      violations.push(integrityViolation(
+        "PREVIEW_HASH_MISMATCH",
+        `state.lastPreview.hash=${lastPreviewHash} currentPreviewHash=${snapshot.previewHash}`
+      ));
+    }
+
+    if (lastPreview.planId !== input.selectedExecutionPlan.id) {
+      violations.push(integrityViolation(
+        "STALE_SIMULATION_ARTIFACT",
+        `state.lastPreview.planId=${lastPreview.planId} selectedExecutionPlan.id=${input.selectedExecutionPlan.id}`
+      ));
+    }
+  }
+
+  const requiresHistoricalArtifact = Boolean(lastPreview) || Boolean(requestedPreviewRef);
+  const latestTrace = readLatestOrchestrationTrace(input.root);
+  if (requiresHistoricalArtifact && !latestTrace) {
+    violations.push(integrityViolation(
+      "STALE_SIMULATION_ARTIFACT",
+      "No orchestration trace artifact found for preview/simulation binding."
+    ));
+  }
+
+  if (requiresHistoricalArtifact && latestTrace && latestTrace.status === "success") {
+    const latestIntegrity = parseExecutionIntegritySnapshot((latestTrace.modeMetadata as Record<string, unknown> | undefined)?.integrity);
+    if (!latestIntegrity) {
+      violations.push(integrityViolation(
+        "STALE_SIMULATION_ARTIFACT",
+        `Latest orchestration trace ${latestTrace.id} is missing integrity metadata.`
+      ));
+    } else {
+      if (latestIntegrity.previewHash !== snapshot.previewHash) {
+        violations.push(integrityViolation(
+          "STALE_SIMULATION_ARTIFACT",
+          `latestTrace.previewHash=${latestIntegrity.previewHash} currentPreviewHash=${snapshot.previewHash}`
+        ));
+      }
+
+      if (latestIntegrity.controlPlaneHash !== snapshot.controlPlaneHash) {
+        violations.push(integrityViolation(
+          "STALE_SIMULATION_ARTIFACT",
+          "Latest orchestration artifact control-plane hash differs from current control-plane hash."
+        ));
+      }
+
+      if (latestIntegrity.stateSnapshotHash !== snapshot.stateSnapshotHash) {
+        violations.push(integrityViolation(
+          "STATE_SNAPSHOT_MISMATCH",
+          `latestTrace.stateSnapshotHash=${latestIntegrity.stateSnapshotHash} currentStateSnapshotHash=${snapshot.stateSnapshotHash}`
+        ));
+      }
+
+      if (latestIntegrity.orchestrationHash !== snapshot.orchestrationHash
+        || latestIntegrity.nodeHash !== snapshot.nodeHash
+        || latestIntegrity.edgeHash !== snapshot.edgeHash) {
+        violations.push(integrityViolation(
+          "DAG_HASH_MISMATCH",
+          "Latest orchestration artifact DAG signature differs from current deterministic DAG signature."
+        ));
+      }
+
+      if (latestIntegrity.canonicalStageHash !== snapshot.canonicalStageHash) {
+        violations.push(integrityViolation(
+          "DAG_CANONICAL_ORDER_MISMATCH",
+          "Latest orchestration artifact canonical stage ordering differs from current deterministic stage ordering."
+        ));
+      }
+
+      if (latestIntegrity.predictedExecutionHash !== snapshot.predictedExecutionHash
+        || latestIntegrity.simulationFutureStateHash !== snapshot.simulationFutureStateHash) {
+        violations.push(integrityViolation(
+          "SIMULATION_EXECUTION_PARITY_MISMATCH",
+          "Latest simulation artifact future-state projection differs from current deterministic simulation projection."
+        ));
+      }
+
+      if (latestIntegrity.strategyId !== snapshot.strategyId) {
+        violations.push(integrityViolation(
+          "STRATEGY_ID_MISMATCH",
+          `latestTrace.strategyId=${latestIntegrity.strategyId} currentStrategyId=${snapshot.strategyId}`
+        ));
+      }
+    }
+  }
+
+  return {
+    valid: violations.length === 0,
+    snapshot,
+    violations,
+  };
+}
+
 export function buildExecutionDAG(selectedPlan: RankedPlan): PipelineExecutionDAG {
   return {
     hash: selectedPlan.orchestrationGraph.hash,
@@ -664,13 +1162,18 @@ export async function runOrchestrationPipeline(
     });
   };
 
-  let controlPlane: ControlPlane;
+  let controlPlane: ControlPlane | undefined;
   let optimized: OptimizedPlanResult;
   let candidatePlans: PipelineCandidateView[] = [];
   let planComparisons: Array<{ from: string; to: string; diff: PlanDiff }> = [];
   let previewResult: PipelineResult["preview"];
   let simulateResult: PipelineResult["simulate"];
   let executeResult: PipelineResult["execute"];
+  let integritySnapshot: ExecutionIntegritySnapshot | undefined;
+  let integrityViolations: IntegrityViolation[] = [];
+  let selectedForTrace: RankedPlan | undefined;
+  let selectedExecutionPlanForTrace: Plan | undefined;
+  let generatedSimulationForTrace: GenerateSimulationContractResult | undefined;
 
   try {
     const requestedPlanId = intent.requestedPlanId?.trim();
@@ -682,8 +1185,14 @@ export async function runOrchestrationPipeline(
       return fail("compile", message);
     }
 
+    if (!controlPlane) {
+      return fail("compile", "Control plane could not be resolved for orchestration runtime.");
+    }
+
+    const activeControlPlane = controlPlane;
+
     try {
-      compileInput(intent.command, controlPlane);
+      compileInput(intent.command, activeControlPlane);
       markSuccess("compile", "Compiler gates passed for unified orchestration pipeline.");
       markSuccess("structural-validation", "Structural validation passed.");
       markSuccess("semantic-validation", "Semantic validation passed.");
@@ -700,13 +1209,13 @@ export async function runOrchestrationPipeline(
     try {
       const effectiveControlPlane = requestedPlanId
         ? {
-          ...controlPlane,
+          ...activeControlPlane,
           execution: {
-            ...controlPlane.execution,
-            plans: controlPlane.execution.plans.filter((plan) => plan.id === requestedPlanId),
+            ...activeControlPlane.execution,
+            plans: activeControlPlane.execution.plans.filter((plan) => plan.id === requestedPlanId),
           },
         }
-        : controlPlane;
+        : activeControlPlane;
 
       optimized = await synthesizeAndOptimizePlans({
         root: intent.root,
@@ -738,6 +1247,8 @@ export async function runOrchestrationPipeline(
       return fail("strategy-selection", "Unable to resolve selected strategy candidate.");
     }
 
+    selectedForTrace = selected;
+
     selectedPlanId = selected.id;
     selectedStrategyType = selected.strategyType;
     planSource = selected.synthesized ? "synthesized" : "configured";
@@ -753,9 +1264,10 @@ export async function runOrchestrationPipeline(
     markSuccess("orchestration-build", `Execution DAG built with hash ${executionDag.hash.slice(0, 12)}.`);
 
     const selectedExecutionPlan = optimized.selectedExecutionPlan;
-    const selectedExecutionControl = mergeExecutionPlan(controlPlane, selectedExecutionPlan);
+    selectedExecutionPlanForTrace = selectedExecutionPlan;
+    const selectedExecutionControl = mergeExecutionPlan(activeControlPlane, selectedExecutionPlan);
     const diffs = computeDiff(
-      controlPlaneToChoirConfig(controlPlane),
+      controlPlaneToChoirConfig(activeControlPlane),
       controlPlaneToChoirConfig(selectedExecutionControl)
     );
 
@@ -801,6 +1313,7 @@ export async function runOrchestrationPipeline(
       orchestrationHash: executionDag.hash,
       executionPolicies,
     });
+    generatedSimulationForTrace = generatedSimulation;
 
     simulationContract = generatedSimulation.simulationContract;
     markSuccess("simulation", `Simulation contract generated (futureStateHash=${simulationContract.futureStateHash.slice(0, 12)}).`);
@@ -808,7 +1321,7 @@ export async function runOrchestrationPipeline(
     const replayOutcome = await verifyReplayDeterminism({
       root: intent.root,
       command: intent.command,
-      controlPlane,
+      controlPlane: activeControlPlane,
       ...(intent.targetGoal ? { targetGoal: intent.targetGoal } : {}),
       selected: optimized,
       simulationContract,
@@ -821,6 +1334,32 @@ export async function runOrchestrationPipeline(
     }
 
     markSuccess("replay-verification", "Replay verification confirmed deterministic synthesis, ranking, selection, DAG, and simulation contract.");
+
+    if (mode === "execute") {
+      const integrity = validateExecutionIntegrity({
+        root: intent.root,
+        controlPlane: activeControlPlane,
+        requestedPreviewRef: intent.requestedPreviewRef,
+        selected,
+        selectedExecutionPlan,
+        simulationContract,
+        generatedSimulation,
+        executionDag,
+        replayVerification,
+      });
+
+      integritySnapshot = integrity.snapshot;
+      integrityViolations = integrity.violations;
+
+      if (!integrity.valid) {
+        return fail("integrity", formatIntegrityViolations(integrity.violations));
+      }
+
+      markSuccess(
+        "integrity",
+        `Execution integrity gate passed (integrityHash=${integrity.snapshot.integrityHash.slice(0, 12)}).`
+      );
+    }
 
     if (policy.requiresApproval) {
       const dslApproved = !evaluation.result.requiresApproval
@@ -1021,17 +1560,17 @@ export async function runOrchestrationPipeline(
         );
 
         if (!rollout.success) {
-          return fail("approval", `Execution failed: ${rollout.failures.join("; ") || "rollout execution failure"}`);
+          return fail("execution", `Execution failed: ${rollout.failures.join("; ") || "rollout execution failure"}`);
         }
 
         const finalStateHash = hashGlobalState(rollout.finalStates);
         if (simulationContract.futureStateHash !== finalStateHash) {
-          return fail("approval", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
+          return fail("execution", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
         }
 
         const deterministicTrace = rollout.trace.deterministicTraces[rollout.trace.deterministicTraces.length - 1] ?? generatedSimulation.simulation.trace.deterministicTrace;
         if (!deterministicTrace) {
-          return fail("approval", "Execution trace missing deterministic replay metadata.");
+          return fail("execution", "Execution trace missing deterministic replay metadata.");
         }
 
         const replayStateHash = hashGlobalState(replay(deterministicTrace));
@@ -1040,7 +1579,7 @@ export async function runOrchestrationPipeline(
         const replayHashMatches = replayStateHash === finalStateHash;
 
         if (!traceValid || !replayValid || !replayHashMatches) {
-          return fail("approval", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
+          return fail("execution", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
         }
 
         const transactionId = rollout.trace.transactionTraces[rollout.trace.transactionTraces.length - 1]?.transactionId
@@ -1093,17 +1632,17 @@ export async function runOrchestrationPipeline(
         });
 
         if (!execution.success) {
-          return fail("approval", `Execution failed: ${execution.audit.violations.join("; ") || "global execution failure"}`);
+          return fail("execution", `Execution failed: ${execution.audit.violations.join("; ") || "global execution failure"}`);
         }
 
         const finalStateHash = hashGlobalState(execution.finalStates);
         if (simulationContract.futureStateHash !== finalStateHash) {
-          return fail("approval", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
+          return fail("execution", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
         }
 
         const deterministicTrace = execution.trace.deterministicTrace;
         if (!deterministicTrace) {
-          return fail("approval", "Execution trace missing deterministic replay metadata.");
+          return fail("execution", "Execution trace missing deterministic replay metadata.");
         }
 
         const replayStateHash = hashGlobalState(replay(deterministicTrace));
@@ -1112,7 +1651,7 @@ export async function runOrchestrationPipeline(
         const replayHashMatches = replayStateHash === finalStateHash;
 
         if (!traceValid || !replayValid || !replayHashMatches) {
-          return fail("approval", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
+          return fail("execution", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
         }
 
         const transactionId = execution.trace.transactionTrace?.transactionId ?? `tx-${globalPlan.id}`;
@@ -1150,6 +1689,31 @@ export async function runOrchestrationPipeline(
           simulationFutureStateHash: simulationContract.futureStateHash,
         };
       }
+
+      markSuccess(
+        "execution",
+        `Execution committed transaction ${executeResult?.transactionId ?? "unknown"} with verified replay parity.`
+      );
+    }
+
+    if (!integritySnapshot && selectedForTrace && selectedExecutionPlanForTrace && generatedSimulationForTrace && controlPlane) {
+      const stateSnapshot = safeReadStateSnapshot(intent.root);
+      if (stateSnapshot.readError) {
+        integrityViolations = [
+          ...integrityViolations,
+          integrityViolation("STATE_SNAPSHOT_INVALID", stateSnapshot.readError),
+        ];
+      }
+
+      integritySnapshot = buildExecutionIntegritySnapshot({
+        selected: selectedForTrace,
+        selectedExecutionPlan: selectedExecutionPlanForTrace,
+        controlPlane,
+        simulationContract,
+        executionDag,
+        stateSnapshotHash: stateSnapshot.snapshotHash,
+        predictedExecutionHash: hashGlobalState(generatedSimulationForTrace.simulation.finalState),
+      });
     }
 
     const trace = writeOrchestrationTrace(intent.root, {
@@ -1181,6 +1745,10 @@ export async function runOrchestrationPipeline(
         policyDecision: policy.decision,
         approvalRequired: approval.required,
         approvalSatisfied: approval.approved,
+        ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
+        ...(integrityViolations.length > 0
+          ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
+          : {}),
       },
     });
 
@@ -1200,6 +1768,10 @@ export async function runOrchestrationPipeline(
         replayVerification,
         candidatePlans,
         planComparisons,
+        ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
+        ...(integrityViolations.length > 0
+          ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
+          : {}),
       },
     });
 
@@ -1229,6 +1801,26 @@ export async function runOrchestrationPipeline(
       : "compile";
     const message = error instanceof Error ? error.message : String(error);
 
+    if (!integritySnapshot && selectedForTrace && selectedExecutionPlanForTrace && generatedSimulationForTrace && controlPlane) {
+      const stateSnapshot = safeReadStateSnapshot(intent.root);
+      if (stateSnapshot.readError) {
+        integrityViolations = [
+          ...integrityViolations,
+          integrityViolation("STATE_SNAPSHOT_INVALID", stateSnapshot.readError),
+        ];
+      }
+
+      integritySnapshot = buildExecutionIntegritySnapshot({
+        selected: selectedForTrace,
+        selectedExecutionPlan: selectedExecutionPlanForTrace,
+        controlPlane,
+        simulationContract,
+        executionDag,
+        stateSnapshotHash: stateSnapshot.snapshotHash,
+        predictedExecutionHash: hashGlobalState(generatedSimulationForTrace.simulation.finalState),
+      });
+    }
+
     const trace = writeOrchestrationTrace(intent.root, {
       mode,
       command: intent.command,
@@ -1247,6 +1839,10 @@ export async function runOrchestrationPipeline(
           status: "failed",
           stage: failedStage,
         },
+        ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
+        ...(integrityViolations.length > 0
+          ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
+          : {}),
       },
     });
 
@@ -1265,6 +1861,10 @@ export async function runOrchestrationPipeline(
           status: "failed",
           stage: failedStage,
         },
+        ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
+        ...(integrityViolations.length > 0
+          ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
+          : {}),
       },
     });
 

@@ -3,13 +3,13 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as YAML from "yaml";
-import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
-import { generateExecutionPreview } from "./executionPreview.js";
+import { ControlPlane, ControlPlaneSchema, Plan } from "../../../schema.js";
+import { generateExecutionPreview } from "../../../core/executionPreview.js";
 import {
   PlanOptimizationError,
   synthesizeAndOptimizePlans,
-} from "./planOptimizationOrchestrator.js";
-import { stableStringify } from "./deterministicCore.js";
+} from "../../../core/planOptimizationOrchestrator.js";
+import { stableStringify } from "../../../core/deterministicCore.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

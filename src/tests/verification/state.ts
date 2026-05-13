@@ -1,4 +1,4 @@
-import { formatStateVerificationReport, runStateVerification } from "../../core/stateVerification.js";
+import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
 
 async function main(): Promise<void> {
   try {

@@ -1,7 +1,7 @@
 import {
   formatExecutionVerificationReport,
   runExecutionVerification,
-} from "../../core/executionVerification.js";
+} from "./core/executionVerification.js";
 
 async function main(): Promise<void> {
   try {

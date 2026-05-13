@@ -140,7 +140,8 @@ prepare -> simulate -> validate -> commit|rollback
 Hard constraints:
 
 - no write before validation
-- no execution without valid preview hash approval
+- deterministic integrity gate is mandatory before execution transaction start
+- approval policy is governance-only and must not control deterministic integrity enforcement
 - simulation mode never commits
 - rollback restores pre-execution state on failure
 
@@ -189,11 +190,19 @@ execution(mode=simulation) == execution(mode=execution)
 - Execution must synthesize deterministic candidate plans from current control/state/workspace inputs when persisted plans are absent.
 - Execution strategy selection must be deterministic and stable for identical inputs.
 - Execution must run simulation parity precheck before any transaction begins.
+- Execution must run deterministic integrity validation before any transaction begins:
+   - preview/execution hash consistency
+   - simulation/execution parity
+   - orchestration DAG integrity (nodes, edges, canonical order, hash/signature)
+   - deterministic replay/hash integrity
+   - state snapshot integrity
 - Execution policy gates (org -> repo -> environment) must be enforced before transaction execution.
 - Preview-bound execution (`execute --preview <id-or-hash>`) must validate binding against approved preview hashes before execution.
 - Execution and simulation must share the same orchestration and mutation path; execution cannot use alternate commit logic.
 - Transaction lifecycle remains strict: prepare -> simulate -> validate -> commit|rollback.
 - Post-execution replay verification must match committed final state hash; mismatch fails closed.
+- Pre-transaction integrity failures abort execution without opening a transaction.
+- Post-transaction runtime failures must rollback and preserve no partial writes.
 
 ## Refactor Contract (PASS 1)
 
@@ -334,7 +343,7 @@ Workspace detection contract:
 
 1. Control plane authority is strict; derived state is never user-authored.
 2. All mutation decisions pass through policy and enforcer logic.
-3. Preview hash must match at execution time or execution is rejected.
+3. Preview hash, simulation contract, orchestration DAG signature, replay hash, and state snapshot integrity must match at execution time or execution is rejected before transaction start.
 4. Incremental and full recomputation results must be equivalent; mismatch triggers deterministic full fallback.
 5. State writes are atomic and rollback-safe.
 6. Replay and distributed sync must be integrity-checked and deterministic.

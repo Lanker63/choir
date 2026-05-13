@@ -1,7 +1,7 @@
 import {
   formatPlanningVerificationReport,
   runPlanningVerification,
-} from "../../core/planningVerification.js";
+} from "./core/planningVerification.js";
 
 async function main(): Promise<void> {
   try {

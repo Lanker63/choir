@@ -1,7 +1,7 @@
 import {
   formatCompilerVerificationReport,
   runCompilerVerification,
-} from "../../core/compilerVerification.js";
+} from "./core/compilerVerification.js";
 
 async function main(): Promise<void> {
   try {

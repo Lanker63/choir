@@ -3,16 +3,16 @@ import os from "os";
 import path from "path";
 import { fileURLToPath } from "url";
 import * as YAML from "yaml";
-import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
-import { generateExecutionPreview } from "./executionPreview.js";
+import { ControlPlane, ControlPlaneSchema, Plan } from "../../../schema.js";
+import { generateExecutionPreview } from "../../../core/executionPreview.js";
 import {
   synthesizePreviewContract,
   PreviewSynthesisContract,
-} from "./previewOrchestrator.js";
-import { approvePendingDiff } from "./state.js";
-import { stableStringify } from "./deterministicCore.js";
-import { controlPlaneToChoirConfig } from "./dslYamlCompiler.js";
-import { hashDiff, computeDiff } from "./policyEngine.js";
+} from "../../../core/previewOrchestrator.js";
+import { approvePendingDiff } from "../../../core/state.js";
+import { stableStringify } from "../../../core/deterministicCore.js";
+import { controlPlaneToChoirConfig } from "../../../core/dslYamlCompiler.js";
+import { hashDiff, computeDiff } from "../../../core/policyEngine.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);

@@ -4,18 +4,18 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { formatCIRunResult, runCI } from "./core/ci.js";
-import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
-import { formatCompilerVerificationReport, runCompilerVerification } from "./core/compilerVerification.js";
-import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
-import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
-import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
-import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
-import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
-import { formatProductionVerificationReport, runProductionVerification } from "./core/productionVerification.js";
-import { formatPhase8HardeningReport, runPhase8Hardening } from "./core/phase8Hardening.js";
+import { formatContractVerificationReport, runContractVerification } from "./tests/verification/core/contractVerification.js";
+import { formatCompilerVerificationReport, runCompilerVerification } from "./tests/verification/core/compilerVerification.js";
+import { formatDeterminismVerificationReport, runDeterminismVerification } from "./tests/verification/core/determinismVerification.js";
+import { formatTransactionVerificationReport, runTransactionVerification } from "./tests/verification/core/transactionVerification.js";
+import { formatStateVerificationReport, runStateVerification } from "./tests/verification/core/stateVerification.js";
+import { formatPolicyVerificationReport, runPolicyVerification } from "./tests/verification/core/policyVerification.js";
+import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./tests/verification/core/orchestrationVerification.js";
+import { formatProductionVerificationReport, runProductionVerification } from "./tests/verification/core/productionVerification.js";
+import { formatFullSystemVerificationReport, runFullSystemVerification } from "./tests/verification/core/fullSystemVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
-import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./core/propertyChaosHarness.js";
-import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
+import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./tests/verification/core/propertyChaosHarness.js";
+import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
 import { ControlPlaneSchema } from "./schema.js";
 
 function usage(): string {
@@ -167,12 +167,12 @@ async function main(): Promise<void> {
       }
 
       if (remaining.length === 1 && remaining[0] === "--full") {
-        const report = await runPhase8Hardening({
+        const report = await runFullSystemVerification({
           mode: "full",
           workspaceRoot: process.cwd(),
           throwOnFailure: false,
         });
-        console.log(formatPhase8HardeningReport(report));
+        console.log(formatFullSystemVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }

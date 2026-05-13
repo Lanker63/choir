@@ -1,7 +1,7 @@
 import {
   formatDeterminismVerificationReport,
   runDeterminismVerification,
-} from "../../core/determinismVerification.js";
+} from "./core/determinismVerification.js";
 
 async function main(): Promise<void> {
   try {

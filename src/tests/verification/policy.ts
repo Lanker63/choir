@@ -1,4 +1,4 @@
-import { formatPolicyVerificationReport, runPolicyVerification } from "../../core/policyVerification.js";
+import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
 
 async function main(): Promise<void> {
   try {

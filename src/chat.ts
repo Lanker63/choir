@@ -48,18 +48,18 @@ import {
 } from "./core/globalOrchestration.js";
 import { formatSimulationChatResult } from "./core/simulationChat.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
-import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
-import { formatCompilerVerificationReport, runCompilerVerification } from "./core/compilerVerification.js";
-import { formatDeterminismVerificationReport, runDeterminismVerification } from "./core/determinismVerification.js";
-import { formatTransactionVerificationReport, runTransactionVerification } from "./core/transactionVerification.js";
-import { formatStateVerificationReport, runStateVerification } from "./core/stateVerification.js";
-import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
-import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./core/orchestrationVerification.js";
-import { formatProductionVerificationReport, runProductionVerification } from "./core/productionVerification.js";
-import { formatPhase8HardeningReport, runPhase8Hardening } from "./core/phase8Hardening.js";
+import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
+import { formatCompilerVerificationReport, runCompilerVerification } from "./tests/verification/core/compilerVerification.js";
+import { formatDeterminismVerificationReport, runDeterminismVerification } from "./tests/verification/core/determinismVerification.js";
+import { formatTransactionVerificationReport, runTransactionVerification } from "./tests/verification/core/transactionVerification.js";
+import { formatStateVerificationReport, runStateVerification } from "./tests/verification/core/stateVerification.js";
+import { formatPolicyVerificationReport, runPolicyVerification } from "./tests/verification/core/policyVerification.js";
+import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./tests/verification/core/orchestrationVerification.js";
+import { formatProductionVerificationReport, runProductionVerification } from "./tests/verification/core/productionVerification.js";
+import { formatFullSystemVerificationReport, runFullSystemVerification } from "./tests/verification/core/fullSystemVerification.js";
 import { CompilerPipelineError, compileInput, formatCompilerErrors } from "./core/compilerPipeline.js";
-import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./core/propertyChaosHarness.js";
-import { formatContractVerificationReport, runContractVerification } from "./core/contractVerification.js";
+import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./tests/verification/core/propertyChaosHarness.js";
+import { formatContractVerificationReport, runContractVerification } from "./tests/verification/core/contractVerification.js";
 import {
     formatDSL,
     generateDSL,
@@ -728,12 +728,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     }
 
                     if (verifyChatCommand.mode === "full-system") {
-                        const report = await runPhase8Hardening({
+                        const report = await runFullSystemVerification({
                             mode: "full",
                             workspaceRoot,
                             throwOnFailure: false,
                         });
-                        stream.markdown(formatPhase8HardeningReport(report));
+                        stream.markdown(formatFullSystemVerificationReport(report));
                         return;
                     }
 

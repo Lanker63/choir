@@ -11,7 +11,7 @@ import {
   type GlobalPlan,
   type Repo,
   validatePhase,
-} from "./globalOrchestration.js";
+} from "../../../core/globalOrchestration.js";
 
 export type TransactionVerificationCheck = {
   name: string;

@@ -1,4 +1,4 @@
-import { formatVerificationReport, runFullVerification } from "../../core/verificationHarness.js";
+import { formatVerificationReport, runFullVerification } from "./core/verificationHarness.js";
 
 async function main(): Promise<void> {
   const mode = process.env.CHOIR_VERIFY_MODE === "quick" ? "quick" : "full";
