@@ -274,7 +274,20 @@ export class ChoirProductService {
   }
 
   private getWorkspaceRoot(): string | null {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+      return null;
+    }
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+      const activeFolder = vscode.workspace.getWorkspaceFolder(activeUri);
+      if (activeFolder) {
+        return activeFolder.uri.fsPath;
+      }
+    }
+
+    return folders[0]?.uri.fsPath ?? null;
   }
 
   private requireControlContext(): { root: string; controlPath: string; control: NonNullable<ReturnType<typeof readControlPlane>> } {

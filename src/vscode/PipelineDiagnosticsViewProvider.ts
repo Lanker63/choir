@@ -23,7 +23,10 @@ type DiagnosticsOutboundMessage =
   | { type: "error"; message: string };
 
 function getWorkspaceRoot(): string {
-  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  const activeRoot = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri)?.uri.fsPath : undefined;
+  const root = activeRoot ?? folders[0]?.uri.fsPath;
   if (!root) {
     throw new Error("No workspace folder found.");
   }

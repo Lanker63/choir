@@ -13,7 +13,20 @@ export interface RunPipelineOptions {
 }
 
 function getWorkspaceRoot(): string | null {
-  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  if (folders.length === 0) {
+    return null;
+  }
+
+  const activeUri = vscode.window.activeTextEditor?.document.uri;
+  if (activeUri) {
+    const activeFolder = vscode.workspace.getWorkspaceFolder(activeUri);
+    if (activeFolder) {
+      return activeFolder.uri.fsPath;
+    }
+  }
+
+  return folders[0]?.uri.fsPath ?? null;
 }
 
 export async function runPipelineForWorkspace(options: RunPipelineOptions = {}): Promise<PipelineResult | null> {

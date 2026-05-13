@@ -9,6 +9,11 @@ import {
   type Repo,
 } from "./globalOrchestration.js";
 import {
+  buildStateTimeline,
+  createEmptyStatePlane,
+  listSnapshots,
+} from "./state.js";
+import {
   loadAuditRecords,
   loadSnapshots,
   loadTransitionRecords,
@@ -160,6 +165,43 @@ export async function runStateVerification(): Promise<StateVerificationReport> {
       name: "crash-recovery-restores-state",
       passed: deterministicHash(recovered) === deterministicHash(execution.finalState),
       detail: "recoverState replayed logs to committed state",
+    });
+
+    // Append a malformed snapshot payload to ensure replay listing remains resilient
+    // when historical records contain unexpected ast shapes.
+    const malformedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "choir-state-verify-malformed-"));
+    let malformedReplayHandled = false;
+    try {
+      const snapshotsPath = path.join(malformedRoot, ".choir", "state.snapshots.jsonl");
+      fs.mkdirSync(path.dirname(snapshotsPath), { recursive: true });
+
+      const baselineState = createEmptyStatePlane();
+      const malformedSnapshot = {
+        id: "malformed-snapshot",
+        timestamp: new Date().toISOString(),
+        hash: "malformed-snapshot-hash",
+        state: {
+          ...baselineState,
+          ast: { broken: true },
+        },
+      };
+      fs.appendFileSync(snapshotsPath, `${JSON.stringify(malformedSnapshot)}\n`, "utf-8");
+
+      void listSnapshots(malformedRoot);
+      void buildStateTimeline(malformedRoot);
+      malformedReplayHandled = true;
+    } catch {
+      malformedReplayHandled = false;
+    } finally {
+      fs.rmSync(malformedRoot, { recursive: true, force: true });
+    }
+
+    checks.push({
+      name: "malformed-snapshot-does-not-break-replay",
+      passed: malformedReplayHandled,
+      detail: malformedReplayHandled
+        ? "listSnapshots/buildStateTimeline tolerated malformed ast payload"
+        : "malformed snapshot caused replay listing to fail",
     });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

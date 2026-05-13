@@ -15,7 +15,9 @@ export class ChoirEventBus {
 
   emit(event: ChoirEvent): void {
     for (const listener of this.listeners) {
-      void listener(event);
+      Promise.resolve(listener(event)).catch((error) => {
+        console.error("ChoirEventBus: listener failed", error, event);
+      });
     }
   }
 
@@ -86,7 +88,15 @@ export async function sendToWebview(
     viewId,
   });
 
-  return await webview.postMessage(message);
+  try {
+    return await webview.postMessage(message);
+  } catch (error) {
+    const text = error instanceof Error ? error.message : String(error);
+    if (!/webview is disposed/i.test(text)) {
+      console.error(`sendToWebview failed (${viewId}:${message.type})`, error);
+    }
+    return false;
+  }
 }
 
 export function traceInbound(

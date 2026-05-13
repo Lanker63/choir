@@ -21,6 +21,11 @@ function isGraphMode(value: unknown): value is GraphMode {
   return value === "full" || value === "focused" || value === "dependency" || value === "dependents";
 }
 
+function isDisposedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /disposed/i.test(message);
+}
+
 export class GraphViewProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private panel?: vscode.WebviewPanel;
@@ -54,8 +59,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
   openPanel(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
     if (this.panel) {
-      this.panel.reveal(column, false);
-      return;
+      try {
+        this.panel.reveal(column, false);
+        return;
+      } catch (error) {
+        if (!isDisposedError(error)) {
+          throw error;
+        }
+        this.panel = undefined;
+      }
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -114,7 +126,16 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
 
     webview.onDidReceiveMessage(async (message: GraphInboundMessage) => {
       traceInbound(this.traceStore, "graph", message as { type?: unknown });
-      await this.handleMessage(message);
+      try {
+        await this.handleMessage(message);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        console.error("GraphViewProvider: inbound message handling failed", error, message);
+        this.postMessage({
+          type: "error",
+          message: text,
+        });
+      }
     });
   }
 
@@ -179,7 +200,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
   }
 
   private getWorkspaceRoot(): string {
-    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    const activeRoot = activeUri ? vscode.workspace.getWorkspaceFolder(activeUri)?.uri.fsPath : undefined;
+    const root = activeRoot ?? folders[0]?.uri.fsPath;
     if (!root) {
       throw new Error("No workspace folder found.");
     }

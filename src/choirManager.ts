@@ -49,7 +49,49 @@ export function describeControlPlaneLoadError(error: unknown, controlPath: strin
 }
 
 function getWorkspaceRoot(): string | undefined {
-    return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+        return undefined;
+    }
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+        const activeFolder = vscode.workspace.getWorkspaceFolder(activeUri);
+        if (activeFolder) {
+            return activeFolder.uri.fsPath;
+        }
+    }
+
+    return folders[0]?.uri.fsPath;
+}
+
+function getWorkspaceRootsByPreference(): string[] {
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length === 0) {
+        return [];
+    }
+
+    const roots: string[] = [];
+    const seen = new Set<string>();
+    const pushRoot = (root: string | undefined) => {
+        if (!root || seen.has(root)) {
+            return;
+        }
+        seen.add(root);
+        roots.push(root);
+    };
+
+    const activeUri = vscode.window.activeTextEditor?.document.uri;
+    if (activeUri) {
+        const activeFolder = vscode.workspace.getWorkspaceFolder(activeUri);
+        pushRoot(activeFolder?.uri.fsPath);
+    }
+
+    for (const folder of folders) {
+        pushRoot(folder.uri.fsPath);
+    }
+
+    return roots;
 }
 
 const DEFAULT_POLICIES_DSL = [
@@ -120,12 +162,30 @@ function normalizeControlPlane(input: unknown): ControlPlane {
 }
 
 export function getControlPlanePath(): string | null {
-    const choirPath = getChoirPath();
-    if (!choirPath) {
+    const roots = getWorkspaceRootsByPreference();
+    if (roots.length === 0) {
         return null;
     }
 
-    return path.join(choirPath, "choir.config.yaml");
+    for (const root of roots) {
+        const choirPath = path.join(root, ".choir");
+        const yamlPath = path.join(choirPath, "choir.config.yaml");
+        if (fs.existsSync(yamlPath)) {
+            return yamlPath;
+        }
+
+        const ymlPath = path.join(choirPath, "choir.config.yml");
+        if (fs.existsSync(ymlPath)) {
+            return ymlPath;
+        }
+    }
+
+    const preferredRoot = roots[0];
+    if (!preferredRoot) {
+        return null;
+    }
+
+    return path.join(preferredRoot, ".choir", "choir.config.yaml");
 }
 
 export function readControlPlane(): ControlPlane | null {

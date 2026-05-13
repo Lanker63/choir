@@ -37,10 +37,22 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     // Intentionally no-op in productized UI mode.
   }
 
+  private isDisposedError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /disposed/i.test(message);
+  }
+
   public openPanel(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
     if (this.panel) {
-      this.panel.reveal(column, true);
-      return;
+      try {
+        this.panel.reveal(column, true);
+        return;
+      } catch (error) {
+        if (!this.isDisposedError(error)) {
+          throw error;
+        }
+        this.panel = undefined;
+      }
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -110,38 +122,49 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleEvent(event: ChoirEvent): Promise<void> {
-    if (this.webviews.size === 0) {
-      return;
-    }
-
-    if (
-      event.type === "STATE_UPDATED"
-      || event.type === "PLAN_UPDATED"
-      || event.type === "TIMELINE_UPDATED"
-      || event.type === "GRAPH_UPDATED"
-    ) {
-      // If the user just initiated a refresh with a role selection, avoid
-      // immediately overwriting their selection with a server-initiated
-      // refresh. Allow a short debounce window.
-      const now = Date.now();
-      if (now - this.lastClientRefreshAt < 800) {
+    try {
+      if (this.webviews.size === 0) {
         return;
       }
-      await this.postRefreshSnapshot();
-      return;
-    }
 
-    if (event.type === "NAVIGATE") {
-      const snapshot = await this.service.buildSnapshot((this.lastKnownRole ?? "conductor") as any);
-      // If the NAVIGATE intent includes a focusRule, pass it through so the
-      // webview can visually indicate the selected rule.
-      if ((event as any).intent && (event as any).intent.type === "focusRule" && (event as any).intent.ruleId) {
-        (snapshot as any).highlightRuleId = (event as any).intent.ruleId;
+      if (
+        event.type === "STATE_UPDATED"
+        || event.type === "PLAN_UPDATED"
+        || event.type === "TIMELINE_UPDATED"
+        || event.type === "GRAPH_UPDATED"
+      ) {
+        // If the user just initiated a refresh with a role selection, avoid
+        // immediately overwriting their selection with a server-initiated
+        // refresh. Allow a short debounce window.
+        const now = Date.now();
+        if (now - this.lastClientRefreshAt < 800) {
+          return;
+        }
+        await this.postRefreshSnapshot();
+        return;
       }
-      this.postMessage({
-        type: "snapshot",
-        payload: snapshot,
-      });
+
+      if (event.type === "NAVIGATE") {
+        const role = (this.lastKnownRole ?? "conductor") as any;
+        const result = await this.service.handleAction({
+          type: "refresh",
+          role,
+        });
+
+        const snapshot = result.snapshot;
+        // If the NAVIGATE intent includes a focusRule, pass it through so the
+        // webview can visually indicate the selected rule.
+        if ((event as any).intent && (event as any).intent.type === "focusRule" && (event as any).intent.ruleId) {
+          (snapshot as any).highlightRuleId = (event as any).intent.ruleId;
+        }
+
+        this.postMessage({
+          type: "snapshot",
+          payload: snapshot,
+        });
+      }
+    } catch (error) {
+      console.error("RuleEditorProvider: handleEvent failed", error, event);
     }
   }
 

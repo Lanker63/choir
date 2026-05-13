@@ -430,13 +430,28 @@ function parseStateIntent(value: unknown): StateIntent {
   });
 }
 
-function normalizeAstNodes(nodes: ASTStateNode[]): ASTStateNode[] {
-  return [...nodes]
-    .filter((node) => typeof node.id === "string" && node.id.length > 0 && typeof node.type === "string")
-    .map((node) => ({
-      id: node.id,
-      type: node.type,
-    }))
+function normalizeAstNodes(nodes: unknown): ASTStateNode[] {
+  if (!Array.isArray(nodes)) {
+    return [];
+  }
+
+  return nodes
+    .flatMap((node) => {
+      if (!isRecord(node)) {
+        return [];
+      }
+
+      const id = typeof node.id === "string" ? node.id.trim() : "";
+      const type = typeof node.type === "string" ? node.type.trim() : "";
+      if (id.length === 0 || type.length === 0) {
+        return [];
+      }
+
+      return [{
+        id,
+        type: type as ActionNode["type"],
+      } satisfies ASTStateNode];
+    })
     .sort((left, right) => left.id.localeCompare(right.id));
 }
 

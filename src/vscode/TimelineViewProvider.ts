@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { ChoirProductService } from "./ChoirProductService.js";
 import { ChoirEventBus, MessageTraceStore, WebviewRegistry, sendToWebview, traceInbound } from "./choirWebviewSync.js";
+import { createEmptyStatePlane } from "../core/state.js";
 import type { ProductActionRequest, ProductSnapshot } from "../ui/contracts.js";
 import type { ChoirEvent, HostToWebview, NavigationIntent, WebviewToHost } from "./webviewProtocol.js";
 
@@ -11,6 +12,11 @@ type TimelineProjection = {
   stateDiff?: ProductSnapshot["stateDiff"];
   replayTrace?: ProductSnapshot["replayTrace"];
 };
+
+type TimelineOutboundMessage =
+  | HostToWebview<TimelineProjection>
+  | { type: "NAVIGATE"; intent: NavigationIntent }
+  | { type: "ERROR"; message: string };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -42,11 +48,18 @@ function isExecuteCommandMessage(value: unknown): value is Extract<WebviewToHost
   return isRecord(value) && value.type === "EXECUTE_COMMAND" && isReplayControlCommand(value.command);
 }
 
+function isDisposedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /disposed/i.test(message);
+}
+
 export class TimelineViewProvider {
   private panel?: vscode.WebviewPanel;
   private readonly webviews = new Set<vscode.Webview>();
   private readonly webviewRegistrations = new Map<vscode.Webview, vscode.Disposable>();
   private readonly eventSubscription: vscode.Disposable;
+  private lastProjectionError = "";
+  private lastProjectionErrorAt = 0;
 
   constructor(
     private readonly context: vscode.ExtensionContext,
@@ -63,8 +76,15 @@ export class TimelineViewProvider {
 
   openPanel(column: vscode.ViewColumn = vscode.ViewColumn.Two): void {
     if (this.panel) {
-      this.panel.reveal(column, false);
-      return;
+      try {
+        this.panel.reveal(column, false);
+        return;
+      } catch (error) {
+        if (!isDisposedError(error)) {
+          throw error;
+        }
+        this.panel = undefined;
+      }
     }
 
     const panel = vscode.window.createWebviewPanel(
@@ -121,8 +141,46 @@ export class TimelineViewProvider {
     };
   }
 
+  private buildFallbackProjection(reason: string): TimelineProjection {
+    const state = createEmptyStatePlane();
+    return {
+      generatedAt: new Date().toISOString(),
+      timeline: {
+        currentIndex: -1,
+        canStepForward: false,
+        canStepBackward: false,
+        playing: false,
+        states: [],
+      },
+      stateInspector: {
+        intent: state.intent,
+        ast: state.ast,
+        violations: state.ruleViolations,
+        plans: state.plans,
+        why: [reason],
+        dependencyChain: [],
+      },
+    };
+  }
+
+  private async getProjectionSafe(): Promise<TimelineProjection> {
+    try {
+      return await this.getProjection();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const signature = `TimelineViewProvider: failed to build projection ${message}`;
+      const now = Date.now();
+      if (signature !== this.lastProjectionError || now - this.lastProjectionErrorAt > 5000) {
+        console.error("TimelineViewProvider: failed to build projection", error);
+        this.lastProjectionError = signature;
+        this.lastProjectionErrorAt = now;
+      }
+      return this.buildFallbackProjection(`Timeline fallback mode: ${message}`);
+    }
+  }
+
   private async pushInit(webview: vscode.Webview): Promise<void> {
-    const payload = await this.getProjection();
+    const payload = await this.getProjectionSafe();
     await sendToWebview(this.traceStore, "timeline", webview, {
       type: "INIT",
       payload,
@@ -134,14 +192,14 @@ export class TimelineViewProvider {
       return;
     }
 
-    const payload = await this.getProjection();
+    const payload = await this.getProjectionSafe();
     await this.broadcast({
       type: "UPDATE",
       payload,
     } satisfies HostToWebview<TimelineProjection>);
   }
 
-  private async broadcast(message: HostToWebview<TimelineProjection> | { type: "NAVIGATE"; intent: NavigationIntent }): Promise<void> {
+  private async broadcast(message: TimelineOutboundMessage): Promise<void> {
     for (const webview of this.webviews) {
       await sendToWebview(this.traceStore, "timeline", webview, message as { type: string; [key: string]: unknown });
     }
@@ -159,7 +217,13 @@ export class TimelineViewProvider {
 
     webview.onDidReceiveMessage(async (message: unknown) => {
       traceInbound(this.traceStore, "timeline", message as { type?: unknown });
-      await this.handleMessage(message, webview);
+      try {
+        await this.handleMessage(message, webview);
+      } catch (error) {
+        const text = error instanceof Error ? error.message : String(error);
+        console.error("TimelineViewProvider: inbound message handling failed", error, message);
+        await this.broadcast({ type: "ERROR", message: text });
+      }
     });
   }
 
@@ -281,6 +345,11 @@ export class TimelineViewProvider {
       if (message.type === 'INIT' || message.type === 'UPDATE') {
         model = message.payload;
         render();
+        return;
+      }
+
+      if (message.type === 'ERROR') {
+        statusLine.textContent = 'Error: ' + String(message.message || 'unknown error');
         return;
       }
 
