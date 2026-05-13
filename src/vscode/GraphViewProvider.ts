@@ -27,7 +27,6 @@ function isDisposedError(error: unknown): boolean {
 }
 
 export class GraphViewProvider implements vscode.WebviewViewProvider {
-  private view?: vscode.WebviewView;
   private panel?: vscode.WebviewPanel;
   private readonly webviews = new Set<vscode.Webview>();
   private readonly webviewRegistrations = new Map<vscode.Webview, vscode.Disposable>();
@@ -97,14 +96,12 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
-    this.view = view;
     this.configureWebview(view.webview);
 
     view.onDidDispose(() => {
       this.webviewRegistrations.get(view.webview)?.dispose();
       this.webviewRegistrations.delete(view.webview);
       this.webviews.delete(view.webview);
-      this.view = undefined;
     });
 
     void this.postSnapshot();

@@ -132,42 +132,6 @@ const DEFINE_TYPES = new Set<DefineType>([
 
 const RULE_WILDCARD_KEY = "*";
 
-function actionNodeTypes(): ASTNode["type"][] {
-  return [
-    "define",
-    "analyze",
-    "plan",
-    "refactor-rename",
-    "refactor-move",
-    "refactor-extract",
-    "refactor-inline",
-    "simulate",
-    "plan-approve",
-    "preview",
-    "execute",
-    "rollback",
-    "status",
-    "export",
-    "approve",
-    "reject",
-    "policy-status",
-    "import-library",
-    "library-list",
-    "library-install",
-    "library-update",
-    "library-lock",
-    "ci-run",
-    "audit-log",
-    "audit-report",
-    "audit-query",
-    "macro-list",
-    "macro-show",
-    "macro-run",
-    "abstraction-run",
-    "graph",
-  ];
-}
-
 function nodeIdForIndex(index: number): NodeId {
   return `action:${index}`;
 }

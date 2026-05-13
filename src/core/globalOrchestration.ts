@@ -3728,10 +3728,6 @@ function defaultTaskExecutor(task: GlobalPlanTask, state: SystemState): SystemSt
   return cloneUnknown(state);
 }
 
-function rollbackAllRepos(snapshot: Record<string, SystemState>): Record<string, SystemState> {
-  return cloneUnknown(snapshot);
-}
-
 export function executionPreviewHash(
   plan: GlobalPlan,
   baseState: GlobalState,

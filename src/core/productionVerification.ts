@@ -1,6 +1,5 @@
 import {
   executeGlobalPlan,
-  replay,
   type CompiledPolicy,
   type GlobalPlan,
   type Repo,

@@ -11,7 +11,6 @@ import {
 } from "../core/choirRouter.js";
 import {
   formatAbstractionRunResult,
-  getAbstraction,
   listAbstractions,
   runAbstraction,
 } from "../core/abstractions.js";
@@ -720,7 +719,7 @@ export class ChoirProductService {
     return "choir audit log";
   }
 
-  private async runDSLCommand(role: Role, dsl: string): Promise<{ message: string; trace: UITrace }> {
+  private async runDSLCommand(_role: Role, dsl: string): Promise<{ message: string; trace: UITrace }> {
     const { root, control, controlPath } = this.requireControlContext();
     const parsed = parseCommand(dsl);
 

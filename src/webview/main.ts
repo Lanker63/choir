@@ -165,7 +165,12 @@ function renderTabs(): void {
         return;
       }
 
+      if (surface === activeSurface) {
+        return;
+      }
+
       activeSurface = surface;
+      renderTabs();
       renderSurface();
     });
   });

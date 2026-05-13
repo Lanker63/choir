@@ -240,7 +240,6 @@ import {
   orderPlan as orderGlobalPlan,
   OrgPolicy,
   propagatePolicies,
-  rankStrategies,
   Repo,
   respectDependencies,
   RolloutStrategy,

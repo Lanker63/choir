@@ -42,7 +42,6 @@ import {
     computeRollbackSet,
     GlobalPlan,
     orderRollback,
-    Repo,
     RollbackTrace,
     RolloutStrategy,
     validateIsolation,
@@ -103,11 +102,6 @@ import {
 } from "./core/state.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
-
-type AbstractionChatCommand =
-    | { type: "list" }
-    | { type: "describe"; id: string }
-    | { type: "run"; id: string };
 
 type InitTrace = {
     stepsCompleted: number;
@@ -177,38 +171,6 @@ function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
         id: `global-${plan.id}`,
         tasks,
     };
-}
-
-function buildSimulationRepos(plans: GlobalPlan[]): Repo[] {
-    const taskById = new Map(plans.flatMap((plan) => plan.tasks.map((task) => [task.id, task] as const)));
-    const repoDependencies = new Map<string, Set<string>>();
-
-    for (const plan of plans) {
-        for (const task of plan.tasks) {
-            if (!repoDependencies.has(task.repoId)) {
-                repoDependencies.set(task.repoId, new Set<string>());
-            }
-
-            for (const dependencyId of task.dependsOn) {
-                const dependency = taskById.get(dependencyId);
-                if (!dependency) {
-                    continue;
-                }
-
-                if (dependency.repoId !== task.repoId) {
-                    repoDependencies.get(task.repoId)?.add(dependency.repoId);
-                }
-            }
-        }
-    }
-
-    return [...repoDependencies.entries()]
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([repoId, dependencies]) => ({
-            id: repoId,
-            dependencies: sortedUnique([...dependencies]),
-            state: {},
-        }));
 }
 
 function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace): void {

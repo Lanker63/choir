@@ -20,7 +20,6 @@ import {
 import {
   STRATEGIES,
   Strategy,
-  StrategyMetrics,
   StrategyOutcome,
   evaluateStrategy,
   isImproved,

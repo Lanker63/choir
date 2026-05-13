@@ -24,7 +24,6 @@ import {
   verifyReplay,
 } from "./globalOrchestration.js";
 import {
-  CandidatePlan,
   PlanDiff,
   PlanOptimizationError,
   RankedPlan,
@@ -303,10 +302,6 @@ function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
 }
 
-function normalizePath(value: string): string {
-  return value.split("\\").join("/");
-}
-
 function loadControlPlane(root: string): ControlPlane {
   const controlPath = path.join(root, ".choir", "choir.config.yaml");
   if (!fs.existsSync(controlPath)) {
@@ -477,14 +472,6 @@ function toDiagnosticsStages(stageResults: PipelineStageResult[]): PipelineDiagn
 
 function mapPolicyDecision(input: ReturnType<typeof evaluatePolicies>["trace"]["decision"]): "allow" | "require-approval" | "deny" {
   return input;
-}
-
-function mapExecutionStages(optimized: OptimizedPlanResult): Array<{ id: string; order: number; units: string[] }> {
-  return optimized.executionStages.map((stage) => ({
-    id: stage.id,
-    order: stage.order,
-    units: [...stage.units],
-  }));
 }
 
 function policyViolationId(message: string): string {

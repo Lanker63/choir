@@ -624,14 +624,6 @@ function splitRefactorTasks(plan: Plan, idPrefix: string): Plan {
   return composePlan(cloned, expanded, remap);
 }
 
-function splitLargeTasks(plan: Plan, _state: StatePlane): Plan {
-  return splitRefactorTasks(plan, "t-refactor-adp-aggressive");
-}
-
-function breakIntoSmallerTasks(plan: Plan, _state: StatePlane): Plan {
-  return splitRefactorTasks(plan, "t-refactor-adp-grouped");
-}
-
 function reorderByDependency(plan: Plan, state: StatePlane): Plan {
   return layeredStrategy(plan, state);
 }

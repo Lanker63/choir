@@ -60,7 +60,7 @@ function buildFixtureRepos(): Repo[] {
   ];
 }
 
-function optionsFor(plan: GlobalPlan): ExecuteGlobalPlanOptions {
+function optionsFor(): ExecuteGlobalPlanOptions {
   return {
     repos: buildFixtureRepos(),
     policies: [],
@@ -79,7 +79,7 @@ function optionsFor(plan: GlobalPlan): ExecuteGlobalPlanOptions {
 export async function runTransactionVerification(): Promise<TransactionVerificationReport> {
   const checks: TransactionVerificationCheck[] = [];
   const plan = buildFixturePlan();
-  const options = optionsFor(plan);
+  const options = optionsFor();
 
   const commitResult = await executeTransaction(plan, options, "execution");
   checks.push({

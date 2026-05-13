@@ -37,7 +37,7 @@ import {
   selectFromMemory,
   validatePlanStillApplies,
 } from "./strategyMemory.js";
-import { StatePlane, createEmptyStatePlane } from "./state.js";
+import { createEmptyStatePlane } from "./state.js";
 
 export type SystemInvariant =
   | "determinism"
@@ -626,7 +626,7 @@ function buildChaosExecutor(events: ChaosEvent[]): ExecuteTask | undefined {
     .filter((event): event is Extract<ChaosEvent, { type: "inject-latency" }> => event.type === "inject-latency")
     .reduce((sum, event) => sum + event.ms, 0);
 
-  return async (task, repoState, _repoId, _allStates, mode) => {
+  return async (task, repoState, _repoId, _allStates, _mode) => {
     if (task.action.startsWith("verify-fail:")) {
       throw new Error(`Chaos failure at ${task.id}`);
     }

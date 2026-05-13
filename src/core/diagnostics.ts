@@ -1,7 +1,6 @@
 import ts from "typescript";
 import {
   Diagnostic,
-  DiagnosticCategory,
   DiagnosticSeverity,
   SourceLocation,
 } from "./types.js";
