@@ -189,6 +189,8 @@ Org-wide simulation notes:
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
 - Pre-transaction integrity failures abort execution without opening a transaction; post-transaction runtime failures trigger rollback.
+- Execution failure output now includes rollback evidence metadata (`rollback=applied|not-applied`, and when available: `failedUnit`, `rollbackSet`, `rollbackOrder`) so rollback behavior is visible in CLI diagnostics.
+- Temporary rollback test hook: setting `CHOIR_TEST_ROLLBACK=1` forces a runtime error only during execution (never simulation) and only after at least one mutation executes, so rollback paths can be exercised deterministically in tests.
 - Invalid simulation intent (for example, unknown explicit plan/unit targets) is blocked before simulation runs.
 - Invalid execution intent (for example, unknown explicit plan targets) is blocked before execution runs.
 

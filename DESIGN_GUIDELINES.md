@@ -144,6 +144,8 @@ Hard constraints:
 - approval policy is governance-only and must not control deterministic integrity enforcement
 - simulation mode never commits
 - rollback restores pre-execution state on failure
+- temporary test-only failure hook: `CHOIR_TEST_ROLLBACK=1` may force a runtime error only in execution mode (never simulation) and only after at least one mutation executes, to validate rollback handling deterministically
+- execution-stage failure diagnostics must surface rollback evidence (`rollback=applied|not-applied`, and when available: failed unit and rollback scope/order) so rollback outcomes are explicit in operator-facing output
 
 ## Production Readiness and Observability Contract
 

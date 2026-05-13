@@ -245,6 +245,7 @@ import {
   RolloutStrategy,
   selectBestStrategy,
   simulatePlan,
+  simulateTransaction,
   preparePhase,
   simulateUnits,
   synthesizeGlobalPlan,
@@ -365,20 +366,21 @@ function normalizeLineEndings(input: string): string {
 }
 
 async function withTemporaryEnv(
-  updates: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT", string | undefined>>,
+  updates: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK", string | undefined>>,
   run: () => Promise<void> | void
 ): Promise<void> {
-  const original: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT", string | undefined>> = {
+  const original: Partial<Record<"CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK", string | undefined>> = {
     CI: process.env.CI,
     NODE_ENV: process.env.NODE_ENV,
     CHOIR_ENVIRONMENT: process.env.CHOIR_ENVIRONMENT,
+    CHOIR_TEST_ROLLBACK: process.env.CHOIR_TEST_ROLLBACK,
   };
 
   for (const [key, value] of Object.entries(updates)) {
     if (value === undefined) {
-      delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"];
+      delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK"];
     } else {
-      process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"] = value;
+      process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK"] = value;
     }
   }
 
@@ -387,9 +389,9 @@ async function withTemporaryEnv(
   } finally {
     for (const [key, value] of Object.entries(original)) {
       if (value === undefined) {
-        delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"];
+        delete process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK"];
       } else {
-        process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT"] = value;
+        process.env[key as "CI" | "NODE_ENV" | "CHOIR_ENVIRONMENT" | "CHOIR_TEST_ROLLBACK"] = value;
       }
     }
   }
@@ -5969,6 +5971,51 @@ const pass6: TestPass = {
       },
     },
     {
+      id: "6.10gd",
+      name: "execute reports execution stage when forced rollback is execution-only",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          let failedStage = "";
+          let errorMessage = "";
+          let stageResults: Array<{ stage: string; status: "success" | "failure"; detail: string }> = [];
+
+          await withTemporaryEnv({ CHOIR_TEST_ROLLBACK: "1" }, async () => {
+            try {
+              await runOrchestrationPipeline("execute", {
+                root,
+                controlPlane: control,
+                command: "choir execute",
+              });
+            } catch (error) {
+              if (error instanceof OrchestrationPipelineError) {
+                failedStage = error.failedStage;
+                errorMessage = error.message;
+                stageResults = error.stageResults.map((stage) => ({
+                  stage: stage.stage,
+                  status: stage.status,
+                  detail: stage.detail,
+                }));
+              }
+            }
+          });
+
+          assert.strictEqual(failedStage, "execution");
+          assert.ok(errorMessage.includes("Forced rollback for testing"));
+          assert.ok(errorMessage.includes("rollback=applied"));
+          assert.strictEqual(
+            stageResults.some((stage) => stage.stage === "execution" && stage.status === "failure"),
+            true
+          );
+          assert.strictEqual(
+            stageResults.some((stage) => stage.stage === "simulation" && stage.status === "failure"),
+            false
+          );
+        });
+      },
+    },
+    {
       id: "6.10h",
       name: "strategy evaluation simulates all candidates deterministically",
       run: async () => {
@@ -6422,6 +6469,42 @@ const pass6: TestPass = {
         assert.strictEqual((result.finalState["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
         assert.strictEqual((result.finalState["repo-b"] as { meta?: { value?: string } }).meta?.value, "0");
         assert.deepStrictEqual(result.trace.stagesExecuted, []);
+      },
+    },
+    {
+      id: "6.10s1",
+      name: "transaction forced rollback hook only triggers in execution after mutation",
+      run: async () => {
+        const repos: Repo[] = [
+          { id: "repo-a", dependencies: [], state: { meta: { value: "0" } } },
+        ];
+
+        const plan = {
+          id: "transaction-forced-rollback",
+          tasks: [
+            { id: "repo-a:t1", repoId: "repo-a", action: "set:meta.value=1", dependsOn: [] },
+          ],
+        };
+
+        await withTemporaryEnv({ CHOIR_TEST_ROLLBACK: "1" }, async () => {
+          const simulation = await simulateTransaction(plan, {
+            repos,
+            policies: [],
+          });
+
+          assert.strictEqual(simulation.success, true);
+
+          const result = await executeTransaction(plan, {
+            repos,
+            policies: [],
+          });
+
+          assert.strictEqual(result.success, false);
+          assert.strictEqual(result.transaction.status, "aborted");
+          assert.strictEqual((result.finalState["repo-a"] as { meta?: { value?: string } }).meta?.value, "0");
+          assert.strictEqual(result.stepsExecuted.length > 0, true);
+          assert.ok(result.violations.some((entry) => entry.includes("Forced rollback for testing")));
+        });
       },
     },
     {

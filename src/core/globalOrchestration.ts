@@ -1942,7 +1942,7 @@ export async function executeTransaction(
   const stepsExecuted: string[] = [];
   const unitsAffected = new Set<string>();
   const committedStages: string[] = [];
-  let executedStages = 0;
+  let executedMutations = 0;
   const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
   const deterministicStages: DeterministicStageTrace[] = [];
   let expectedStageBeforeHash = hashState(baseState);
@@ -2170,10 +2170,11 @@ export async function executeTransaction(
           if (!validateState(stageTx.workingState[task.repoId], task.repoId)) {
             throw new Error(`State validation failed after task ${task.id}`);
           }
+
+          executedMutations += 1;
         }
 
-        executedStages += 1;
-        throwIfTestRollbackForced(executedStages);
+        throwIfTestRollbackForced(mode, executedMutations);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
@@ -2775,6 +2776,24 @@ function operationTypeFromAction(action: string): string {
   }
 
   return action.slice(0, separator);
+}
+
+function throwIfTestRollbackForced(mode: "simulation" | "execution", executedMutationCount: number): void {
+  if (mode !== "execution") {
+    return;
+  }
+
+  if (process.env.CHOIR_TEST_ROLLBACK !== "1") {
+    return;
+  }
+
+  if (executedMutationCount < 1) {
+    return;
+  }
+
+  throw new Error(
+    `Forced rollback for testing: CHOIR_TEST_ROLLBACK=1 after ${executedMutationCount} executed mutation${executedMutationCount === 1 ? "" : "s"}`
+  );
 }
 
 function assertDeterministic(condition: boolean, message: string): void {

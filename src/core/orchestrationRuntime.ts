@@ -518,6 +518,65 @@ function diagnosticsCategoryForMode(mode: PipelineMode): PipelineDiagnosticsCate
   return "planning";
 }
 
+function stageOrderForMode(mode: PipelineMode): PipelineStageName[] {
+  if (mode === "execute") {
+    return [
+      "compile",
+      "structural-validation",
+      "semantic-validation",
+      "cross-node-validation",
+      "candidate-synthesis",
+      "strategy-ranking",
+      "strategy-selection",
+      "orchestration-build",
+      "policy",
+      "simulation",
+      "replay-verification",
+      "integrity",
+      "approval",
+      "execution",
+    ];
+  }
+
+  return [
+    "compile",
+    "structural-validation",
+    "semantic-validation",
+    "cross-node-validation",
+    "candidate-synthesis",
+    "strategy-ranking",
+    "strategy-selection",
+    "orchestration-build",
+    "policy",
+    "simulation",
+    "replay-verification",
+    "approval",
+  ];
+}
+
+function fallbackFailedStageForMode(mode: PipelineMode): PipelineStageName {
+  if (mode === "execute") {
+    return "execution";
+  }
+
+  return "simulation";
+}
+
+function inferFailedStage(mode: PipelineMode, stageResults: PipelineStageResult[]): PipelineStageName {
+  const latestFailure = [...stageResults].reverse().find((stage) => stage.status === "failure");
+  if (latestFailure) {
+    return latestFailure.stage;
+  }
+
+  const completed = new Set(stageResults.map((stage) => stage.stage));
+  const next = stageOrderForMode(mode).find((stage) => !completed.has(stage));
+  if (next) {
+    return next;
+  }
+
+  return fallbackFailedStageForMode(mode);
+}
+
 function toDiagnosticsStages(stageResults: PipelineStageResult[]): PipelineDiagnosticsStage[] {
   return stageResults.map((stage) => ({
     stage: stage.stage,
@@ -1632,7 +1691,15 @@ export async function runOrchestrationPipeline(
         });
 
         if (!execution.success) {
-          return fail("execution", `Execution failed: ${execution.audit.violations.join("; ") || "global execution failure"}`);
+          const rollbackSummary = execution.rolledBack
+            ? execution.rollbackTrace
+              ? `rollback=applied failedUnit=${execution.rollbackTrace.failedUnit} rollbackSet=[${execution.rollbackTrace.rollbackSet.join(", ")}] rollbackOrder=[${execution.rollbackTrace.rollbackOrder.join(", ")}]`
+              : "rollback=applied"
+            : "rollback=not-applied";
+          return fail(
+            "execution",
+            `Execution failed (${rollbackSummary}): ${execution.audit.violations.join("; ") || "global execution failure"}`
+          );
         }
 
         const finalStateHash = hashGlobalState(execution.finalStates);
@@ -1798,8 +1865,16 @@ export async function runOrchestrationPipeline(
   } catch (error) {
     const failedStage = error instanceof OrchestrationPipelineError
       ? error.failedStage
-      : "compile";
+      : inferFailedStage(mode, stageResults);
     const message = error instanceof Error ? error.message : String(error);
+
+    if (!(error instanceof OrchestrationPipelineError) && !stageResults.some((stage) => stage.status === "failure")) {
+      stageResults.push({
+        stage: failedStage,
+        status: "failure",
+        detail: message,
+      });
+    }
 
     if (!integritySnapshot && selectedForTrace && selectedExecutionPlanForTrace && generatedSimulationForTrace && controlPlane) {
       const stateSnapshot = safeReadStateSnapshot(intent.root);
