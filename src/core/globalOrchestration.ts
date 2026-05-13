@@ -845,39 +845,6 @@ export function groupIntoStages(sortedUnits: GlobalUnit[]): Stage[] {
   });
 }
 
-export async function executeStage(
-  stage: Stage,
-  executeUnit?: (unit: GlobalUnit) => Promise<void>
-): Promise<{ executionOrder: string[]; failures: string[] }> {
-  const orderedUnits = [...stage.units].sort((left, right) => left.id.localeCompare(right.id));
-  const results = await Promise.all(orderedUnits.map(async (unit) => {
-    try {
-      await executeUnit?.(unit);
-      return {
-        unitId: unit.id,
-        ok: true,
-        error: "",
-      };
-    } catch (error) {
-      return {
-        unitId: unit.id,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      };
-    }
-  }));
-
-  const failures = results
-    .filter((entry) => !entry.ok)
-    .sort((left, right) => left.unitId.localeCompare(right.unitId))
-    .map((entry) => `${entry.unitId}: ${entry.error}`);
-
-  return {
-    executionOrder: orderedUnits.map((unit) => unit.id),
-    failures,
-  };
-}
-
 export function isolateFailure(unitId: string, dag: DAG): string[] {
   const affected = new Set<string>([unitId]);
   const queue: string[] = [unitId];
@@ -1073,13 +1040,6 @@ let traceStore: TraceStore = {
   version: 1,
   traces: new Map<string, DeterministicTrace>(),
 };
-
-export function getTraceStore(): TraceStore {
-  return {
-    version: traceStore.version,
-    traces: new Map(traceStore.traces),
-  };
-}
 
 export function appendTrace(store: TraceStore, trace: DeterministicTrace): TraceStore {
   const existing = store.traces.get(trace.traceId);
@@ -1982,6 +1942,7 @@ export async function executeTransaction(
   const stepsExecuted: string[] = [];
   const unitsAffected = new Set<string>();
   const committedStages: string[] = [];
+  let executedStages = 0;
   const taskById = new Map(effectivePlan.tasks.map((task) => [task.id, task] as const));
   const deterministicStages: DeterministicStageTrace[] = [];
   let expectedStageBeforeHash = hashState(baseState);
@@ -2210,6 +2171,9 @@ export async function executeTransaction(
             throw new Error(`State validation failed after task ${task.id}`);
           }
         }
+
+        executedStages += 1;
+        throwIfTestRollbackForced(executedStages);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
@@ -2417,27 +2381,6 @@ export async function executeTransaction(
       releaseLocks(lockOwnerToken);
     }
   }
-}
-
-export async function executeTransactionBatch(
-  plans: GlobalPlan[],
-  options: ExecuteGlobalPlanOptions,
-  mode: "simulation" | "execution" = "execution"
-): Promise<TransactionBatch> {
-  const orderedPlans = [...plans].sort((left, right) => left.id.localeCompare(right.id));
-  const transactions: Transaction[] = [];
-
-  for (const plan of orderedPlans) {
-    const result = await executeTransaction(plan, options, mode);
-    transactions.push(cloneUnknown(result.transaction));
-    if (!result.success) {
-      break;
-    }
-  }
-
-  return {
-    transactions,
-  };
 }
 
 export async function simulateTransaction(
@@ -3825,13 +3768,22 @@ export async function executeGlobalPlan(
   const baseStates = stateForRepos(normalizedRepos);
   const circuitKey = `executeGlobalPlan:${plan.id}`;
   const dependencyGraph = buildRollbackDependencyGraph(plan);
+  let planStageDerivationError: string | null = null;
   const planStages = (() => {
     try {
       return groupIntoStages(topologicalSort(buildGlobalDAG(planUnits(plan))));
-    } catch {
+    } catch (error) {
+      planStageDerivationError = error instanceof Error ? error.message : String(error);
       return [];
     }
   })();
+
+  if (planStageDerivationError) {
+    appendStructuredLog("warn", "Global plan stage derivation failed; continuing with empty stage trace", {
+      planId: plan.id,
+      error: planStageDerivationError,
+    });
+  }
 
   const finalizeGlobalResult = (result: GlobalExecutionResult): GlobalExecutionResult => {
     recordExecutionOutcome({

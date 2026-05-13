@@ -1125,8 +1125,9 @@ export function readStatePlane(root: string): StatePlane | null {
     }
 
     return state;
-  } catch {
-    throw new Error(`Unable to read valid state.json at ${statePath}`);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(`Unable to read valid state.json at ${statePath}: ${reason}`);
   }
 }
 

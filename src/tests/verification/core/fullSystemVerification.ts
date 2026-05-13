@@ -325,12 +325,12 @@ function hasCheck(report: { checks: Array<{ name: string; passed: boolean }> }, 
 function buildRegressionPatterns(): Array<{ file: string; pattern: RegExp; description: string }> {
   return [
     {
-      file: path.join("src", "core", "policyVerification.ts"),
+      file: path.join("src", "tests", "verification", "core", "policyVerification.ts"),
       pattern: /preview-hash-approval-binding/,
       description: "preview hash approval binding regression",
     },
     {
-      file: path.join("src", "core", "stateVerification.ts"),
+      file: path.join("src", "tests", "verification", "core", "stateVerification.ts"),
       pattern: /audit-tamper-detected/,
       description: "audit tamper detection regression",
     },

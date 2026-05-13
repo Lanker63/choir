@@ -142,16 +142,22 @@ export function listMacros(root: string): Macro[] {
 }
 
 export function getMacro(root: string, macroId: string): Macro {
+  let libraryResolutionError: string | null = null;
   if (macroId.includes(".")) {
     try {
       return resolveLibraryMacro(root, macroId).macro;
-    } catch {
-      // Fall through to local registry lookup.
+    } catch (error) {
+      // Fall through to local registry lookup, but preserve details if no local macro exists.
+      libraryResolutionError = error instanceof Error ? error.message : String(error);
     }
   }
 
   const local = loadMacroRegistry(root).macros.find((entry) => entry.id === macroId || `${entry.id}` === macroId);
   if (!local) {
+    if (libraryResolutionError) {
+      throw new Error(`Macro not found: ${macroId}. Library resolution failed: ${libraryResolutionError}`);
+    }
+
     throw new Error(`Macro not found: ${macroId}`);
   }
 

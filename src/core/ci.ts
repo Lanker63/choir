@@ -358,6 +358,11 @@ function readCICache(root: string): { inputHash: string } | null {
 
     return { inputHash: parsed.inputHash };
   } catch {
+    try {
+      fs.unlinkSync(cachePath);
+    } catch {
+      // Best-effort cache recovery only.
+    }
     return null;
   }
 }

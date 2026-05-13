@@ -1,0 +1,28 @@
+{
+  "generatedAt": "2026-05-13T21:04:37.962Z",
+  "deterministic": {
+    "passed": true,
+    "failures": []
+  },
+  "policy": {
+    "passed": true,
+    "failures": []
+  },
+  "orchestration": {
+    "passed": true,
+    "failures": []
+  },
+  "continuousVerify": {
+    "passed": true,
+    "failures": [],
+    "checks": {
+      "determinism": true,
+      "replay": true,
+      "policy": true,
+      "orchestration": true
+    }
+  },
+  "observabilityFingerprint": "d874ab690e57fd7a832b553e9e6c9aa47b12ef5aebf775dd45522c8d35d9e2be",
+  "proofHash": "b3de261c04d1c648971db3d7c3bfb61803bbac1374a6be4c8d590c47a494ac3a",
+  "passed": true
+}
