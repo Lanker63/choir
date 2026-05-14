@@ -15,7 +15,9 @@ Validates all functional capabilities through a manual, step-by-step QA/QC proce
 
    - Confirm the build exits with code 0 before proceeding.
 
-3. Run `git status --short` and record any pre-existing local changes.
+3. If the workspace is a Git repository, run `git status --short` and record any pre-existing local changes.
+
+   - If the workspace is not a Git repository, record a baseline file snapshot by listing top-level files and noting modified targets before QA starts.
 
 ---
 
@@ -62,20 +64,24 @@ Validates all functional capabilities through a manual, step-by-step QA/QC proce
 1. In chat, enter `@choir analyze workspace`.
 
    - Confirm analysis completes without runtime errors.
+   - Confirm response includes workspace analysis payload (not only a generic no-change message).
 
 2. In chat, enter `@choir analyze hotspots`.
 
    - Confirm hotspot output is returned.
+   - Confirm response is command-specific (not only a generic no-change message).
    - Re-run with unchanged workspace and confirm stable output.
 
 3. In chat, enter `@choir analyze summary`.
 
    - Confirm the summary is coherent with workspace content.
+   - Confirm response is command-specific (not only a generic no-change message).
 
 4. In chat, enter `@choir plan --optimize`.
 
    - Confirm multiple candidate plans are evaluated.
    - Confirm a selected plan and strategy are returned.
+   - Confirm selected plan id is persisted in control plane (for example via `persistedPlan` in output or `.choir/choir.config.yaml`).
 
 5. Re-run `@choir plan --optimize` without changing any input.
 
@@ -84,6 +90,11 @@ Validates all functional capabilities through a manual, step-by-step QA/QC proce
 ---
 
 ## Topic 3: Simulation, Preview, Execution, and Rollout
+
+Topic setup for deterministic lineage:
+
+- For each strategy-specific execute run in this topic, start from a fresh checkpoint or re-run `@choir preview` immediately before execute to bind current state/workspace lineage.
+- If integrity reports `STATE_LINEAGE_DIVERGENCE` or `PREVIEW_HASH_MISMATCH`, treat it as a stale-lineage setup issue and refresh preview/simulation before retrying.
 
 1. In chat, enter `@choir simulate`.
 
@@ -101,21 +112,27 @@ Validates all functional capabilities through a manual, step-by-step QA/QC proce
    - Confirm pre-commit simulation parity and integrity checks are reported as passing.
    - Confirm post-execution replay verification succeeds.
 
-4. In chat, enter `@choir execute --strategy all-at-once`.
+4. In chat, enter `@choir preview`, then `@choir execute --strategy all-at-once`.
 
    - Confirm successful execution with rollout output.
+   - Confirm output includes `rolloutStrategy: all-at-once`.
+   - Confirm no integrity failure is reported for stale lineage (`STATE_LINEAGE_DIVERGENCE`, `PREVIEW_HASH_MISMATCH`).
 
-5. In chat, enter `@choir execute --strategy canary`.
+5. In chat, enter `@choir preview`, then `@choir execute --strategy canary`.
 
    - Confirm staged canary progression and per-stage validation are reported.
+   - Confirm output includes `rolloutStrategy: canary` and strategy-specific stage grouping.
 
-6. In chat, enter `@choir execute --strategy phased`.
+6. In chat, enter `@choir preview`, then `@choir execute --strategy phased`.
 
    - Confirm phased progression is reported.
+   - Confirm output includes `rolloutStrategy: phased` and strategy-specific stage grouping.
 
-7. In chat, enter `@choir execute --strategy batched`.
+7. In chat, enter `@choir preview`, then `@choir execute --strategy batched`.
 
    - Confirm batched progression is reported.
+   - Confirm output includes `rolloutStrategy: batched` and strategy-specific stage grouping.
+   - Confirm strategy-switch runs do not fail solely with `DAG_CANONICAL_ORDER_MISMATCH` when inputs are otherwise unchanged.
 
 8. In chat, enter `@choir status`.
 
@@ -132,15 +149,21 @@ Validates all functional capabilities through a manual, step-by-step QA/QC proce
 2. In chat, enter `@choir rollback`.
 
    - Confirm rollback completes successfully.
+   - Confirm `stateHashBefore` and `stateHashAfter` are both present in rollback output.
+   - Confirm `stateHashAfter` matches the pre-execution hash and differs from the post-execution hash.
    - Confirm state and workspace are restored to pre-execution values.
 
 3. In chat, enter `@choir rollback --stage <stageId>` using a valid stage id from a prior run.
 
    - Confirm stage-scoped rollback behavior is reported.
+   - Confirm deterministic alias selectors (for example `batch-L1-1`) resolve to a reported `resolvedStageId` when applicable.
 
 4. In chat, enter `@choir rollback <unitId>` using a valid unit id from a prior run.
 
    - Confirm unit-targeted rollback behavior is reported.
+   - Confirm canonical alias selectors (for example `packages.api` for `packages:api`) resolve to a reported `resolvedUnitId` when applicable.
+   - Confirm work-unit selectors (for example `wu-<hash>` from prior execution output) resolve to a reported `resolvedUnitId` when mapping is deterministic.
+   - Confirm work-unit selector resolution prefers the latest successful execute context (same run lineage) before synthesized fallback mapping.
 
 ---
 

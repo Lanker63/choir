@@ -29,6 +29,15 @@ Choir is deterministic, policy-driven workspace governance:
 
 Hard rule: chat compiles into YAML; YAML remains source of truth.
 
+Execute rollout mode must be behaviorally observable: `execute --strategy` must change reported execution stage grouping and expose rollout mode explicitly in runtime/chat output.
+Integrity lineage comparison must treat rollout mode as part of execution context; canonical-stage/DAG parity checks are only valid against rollout-compatible lineage artifacts.
+
+Read-only chat commands (for example analyze workspace/hotspots/summary) must still return command-specific result payloads; generic no-change mutation status alone is insufficient UX feedback.
+Plan optimization outputs must be promotable to plan approval without manual YAML edits; selected optimize plan ids must be persisted to the control plane when optimization is invoked interactively.
+Rollback commands must resolve and persist the deterministic previous state target; when a prior transition exists, `stateHash` after rollback must equal the previous transition hash rather than remaining unchanged.
+Rollback stage and unit selectors must support deterministic alias normalization (stage order aliases, canonical punctuation-insensitive unit ids, and resolvable work-unit ids like `wu-<hash>`) while still failing closed on ambiguous selector mappings.
+Work-unit selector resolution should prioritize bindings captured from the latest successful execute trace context before using synthesized fallback mappings.
+
 ## Compiler and Validation Pipeline
 
 Canonical flow:

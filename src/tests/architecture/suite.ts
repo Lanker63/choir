@@ -75,6 +75,8 @@ import {
   validateAST,
   validGrammar,
 } from "../../core/choirRouter.js";
+import { formatAnalyzeMarkdown } from "../../core/analyzeOutput.js";
+import { persistSelectedOptimizedPlan } from "../../core/planPersistence.js";
 import {
   Rule,
   applyFixes,
@@ -185,8 +187,10 @@ import {
   createEmptyStatePlane,
   hashState,
   listSnapshots,
+  listStateTransitions,
   persistStatePlane,
   readStatePlane,
+  resolveDeterministicRollbackTarget,
   replaySnapshots,
   rollbackState,
   validateConsistency,
@@ -262,9 +266,14 @@ import {
   simulationRiskLabel,
 } from "../../core/simulationChat.js";
 import {
+  resolveRollbackStageSelection,
+  resolveRollbackUnitSelection,
+} from "../../core/rollbackSelectors.js";
+import {
   OrchestrationPipelineError,
   runOrchestrationPipeline,
 } from "../../core/orchestrationRuntime.js";
+import { readLatestOrchestrationTrace } from "../../core/orchestrationRuntimeTrace.js";
 import { detectWorkspace } from "../../core/workspaceDetection.js";
 import {
   buildGraphSnapshot,
@@ -687,6 +696,30 @@ const pass2: TestPass = {
         });
         assert.strictEqual(validGrammar(sequence.ast), true);
         validateAST(sequence.ast);
+      },
+    },
+    {
+      id: "2.7a",
+      name: "analyze formatter emits target-specific deterministic output",
+      run: async () => {
+        const workspaceOnly = formatAnalyzeMarkdown("workspace", {
+          totalFiles: 4,
+          services: 1,
+          controllers: 1,
+          repositories: 0,
+        }, []);
+        assert.ok(workspaceOnly.includes("Workspace analysis:"));
+        assert.ok(workspaceOnly.includes("- totalFiles: 4"));
+        assert.ok(workspaceOnly.includes("- repositories: 0"));
+
+        const hotspotsOnly = formatAnalyzeMarkdown("hotspots", null, []);
+        assert.ok(hotspotsOnly.includes("Hotspots:"));
+        assert.ok(hotspotsOnly.includes("- none"));
+
+        const summary = formatAnalyzeMarkdown("summary", null, ["Large file: src/chat.ts"]);
+        assert.ok(summary.includes("Workspace analysis unavailable: no workspace folder found."));
+        assert.ok(summary.includes("Hotspots:"));
+        assert.ok(summary.includes("- Large file: src/chat.ts"));
       },
     },
     {
@@ -1278,6 +1311,100 @@ const pass2: TestPass = {
 
         assert.strictEqual(second.trace.fallbackToFullEvaluation, true);
         assert.deepStrictEqual(second.results, runRules(secondAst, rules, { controlPlane: control }));
+      },
+    },
+    {
+      id: "2.102",
+      name: "optimized selected plan can be persisted for immediate plan approve",
+      run: async () => {
+        const control = makeControlPlane();
+        const selectedPlan = {
+          id: "plan-optimize-selected",
+          title: "Optimized Selected",
+          derivedFrom: "goal" as const,
+          tasks: [
+            {
+              id: "task-1",
+              title: "Task 1",
+              type: "analysis" as const,
+              dependsOn: [],
+              successCriteria: ["criterion"],
+            },
+          ],
+          status: "draft" as const,
+        };
+
+        const persisted = persistSelectedOptimizedPlan(control, selectedPlan);
+        assert.ok(persisted.execution.plans.some((plan) => plan.id === selectedPlan.id));
+
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-plan-opt-persist-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        fs.mkdirSync(path.dirname(controlPath), { recursive: true });
+        fs.writeFileSync(controlPath, YAML.stringify(control), "utf-8");
+
+        const compiled = compileDSLAndWrite("choir plan approve plan-optimize-selected", persisted, controlPath, {
+          workspaceRoot: root,
+          actorId: "architecture-test",
+        });
+
+        assert.strictEqual(compiled.changed, true);
+        const approved = compiled.updatedControlPlane.execution.plans.find((plan) => plan.id === selectedPlan.id);
+        assert.strictEqual(approved?.status, "approved");
+      },
+    },
+    {
+      id: "2.103",
+      name: "rollback selector resolution supports stage and unit aliases deterministically",
+      run: async () => {
+        const plan = {
+          id: "selector-resolution",
+          tasks: [
+            { id: "task-a", repoId: "packages:api", action: "lint", dependsOn: [] },
+            { id: "task-b", repoId: "workspace:root", action: "test", dependsOn: ["task-a"] },
+          ],
+        };
+        const stages = buildStages(plan, { type: "batched", batchSize: 1 });
+        assert.strictEqual(stages.length > 0, true);
+
+        const stageAlias = resolveRollbackStageSelection("batch-L1-1", stages);
+        assert.strictEqual(stageAlias.stage?.id, stages[0]?.id);
+
+        const stageOrderAlias = resolveRollbackStageSelection("stage-1", stages);
+        assert.strictEqual(stageOrderAlias.stage?.id, stages[0]?.id);
+
+        const unitAlias = resolveRollbackUnitSelection("packages.api", ["packages:api", "workspace:root"]);
+        assert.strictEqual(unitAlias.unit, "packages:api");
+
+        const executionPlan = buildExecutionPlan([
+          {
+            id: "selector-plan",
+            title: "Selector Plan",
+            derivedFrom: "goal",
+            tasks: [
+              {
+                id: "task-1",
+                title: "API task",
+                type: "analysis",
+                dependsOn: [],
+                successCriteria: [],
+                scope: { files: ["packages/api/src/index.ts"] },
+              },
+            ],
+            status: "approved",
+          },
+        ]);
+        const wuId = executionPlan.executionPlan.batches[0]?.workUnits[0]?.id;
+        assert.ok(wuId);
+
+        const workUnitSelection = resolveRollbackUnitSelection(wuId as string, ["packages:api", "workspace:root"], {
+          workUnitBindings: {
+            [wuId as string]: ["packages:api"],
+          },
+        });
+        assert.strictEqual(workUnitSelection.unit, "packages:api");
+
+        const missingUnit = resolveRollbackUnitSelection("packages.web", ["packages:api", "workspace:root"]);
+        assert.strictEqual(typeof missingUnit.error, "string");
       },
     },
     {
@@ -3813,6 +3940,59 @@ const pass3: TestPass = {
         }
       },
     },
+    {
+      id: "3.16",
+      name: "rollback target resolution restores previous state hash",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-rollback-target-"));
+
+        try {
+          const baseline = createEmptyStatePlane();
+          persistStatePlane(root, baseline, {
+            action: "seed-state",
+            metadata: { unitId: "workspace:root" },
+          });
+
+          const executed = {
+            ...baseline,
+            intent: {
+              ...baseline.intent,
+              goals: ["executed-goal"],
+            },
+          };
+          executed.stateHash = hashState(executed);
+
+          persistStatePlane(root, executed, {
+            action: "execute",
+            metadata: { unitId: "workspace:root" },
+          });
+
+          const transitionsBeforeRollback = listStateTransitions(root);
+          const latestTransition = transitionsBeforeRollback[transitionsBeforeRollback.length - 1];
+          assert.ok(latestTransition);
+
+          const rollbackTarget = resolveDeterministicRollbackTarget(root);
+          assert.strictEqual(rollbackTarget.fromHash, latestTransition?.toHash);
+          if (latestTransition?.fromHash === "GENESIS") {
+            assert.strictEqual(rollbackTarget.toHash, createEmptyStatePlane().stateHash);
+          } else {
+            assert.strictEqual(rollbackTarget.toHash, latestTransition?.fromHash);
+          }
+
+          persistStatePlane(root, rollbackTarget.state, {
+            action: "rollback",
+            metadata: { unitId: "workspace:root" },
+          });
+
+          const reverted = readStatePlane(root);
+          assert.ok(reverted);
+          assert.strictEqual(reverted?.stateHash, rollbackTarget.toHash);
+          assert.notStrictEqual(reverted?.stateHash, rollbackTarget.fromHash);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
   ],
 };
 
@@ -4695,7 +4875,7 @@ const pass4: TestPass = {
       id: "4.29",
       name: "plan optimize synthesizes deterministic plans in fresh workspaces",
       run: async () => {
-        await withFixture("simple-project", async ({ root, harness }) => {
+        await withFixture("multi-module", async ({ root, harness }) => {
           const control = harness.loadControlPlane();
           control.execution.plans = [];
 
@@ -4731,7 +4911,7 @@ const pass4: TestPass = {
       id: "4.30",
       name: "plan optimize simulation hash matches execution preview hash",
       run: async () => {
-        await withFixture("simple-project", async ({ root, harness }) => {
+        await withFixture("multi-module", async ({ root, harness }) => {
           const control = harness.loadControlPlane();
           control.execution.plans = [];
 
@@ -5971,6 +6151,41 @@ const pass6: TestPass = {
       },
     },
     {
+      id: "6.10gc1",
+      name: "execute trace stores deterministic work-unit bindings for rollback selectors",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          await runOrchestrationPipeline("execute", {
+            root,
+            controlPlane: control,
+            command: "choir execute",
+          });
+
+          const trace = readLatestOrchestrationTrace(root);
+          assert.ok(trace);
+          assert.strictEqual(trace?.mode, "execute");
+          assert.strictEqual(trace?.status, "success");
+
+          const modeMetadata = (trace?.modeMetadata && typeof trace.modeMetadata === "object" && !Array.isArray(trace.modeMetadata))
+            ? trace.modeMetadata as Record<string, unknown>
+            : {};
+          const executionMetadata = (modeMetadata.execution && typeof modeMetadata.execution === "object" && !Array.isArray(modeMetadata.execution))
+            ? modeMetadata.execution as Record<string, unknown>
+            : {};
+          const workUnitBindings = (executionMetadata.workUnitBindings && typeof executionMetadata.workUnitBindings === "object" && !Array.isArray(executionMetadata.workUnitBindings))
+            ? executionMetadata.workUnitBindings as Record<string, unknown>
+            : {};
+
+          const bindingEntries = Object.entries(workUnitBindings)
+            .filter(([key, value]) => key.startsWith("wu-") && Array.isArray(value));
+          assert.strictEqual(bindingEntries.length > 0, true);
+          assert.strictEqual(bindingEntries.every(([, value]) => (value as unknown[]).every((entry) => typeof entry === "string")), true);
+        });
+      },
+    },
+    {
       id: "6.10gd",
       name: "execute reports execution stage when forced rollback is execution-only",
       run: async () => {
@@ -6011,6 +6226,38 @@ const pass6: TestPass = {
           assert.strictEqual(
             stageResults.some((stage) => stage.stage === "simulation" && stage.status === "failure"),
             false
+          );
+        });
+      },
+    },
+    {
+      id: "6.10ge",
+      name: "execute rollout strategy overrides reported execution stage grouping",
+      run: async () => {
+        await withFixture("simple-project", async ({ root, harness }) => {
+          const control = harness.loadControlPlane();
+
+          const canary = await runOrchestrationPipeline("execute", {
+            root,
+            controlPlane: control,
+            command: "choir execute --strategy canary --steps 10,100",
+            rolloutStrategy: { type: "canary", initialPercent: 10, steps: [10, 100] },
+          });
+
+          const batched = await runOrchestrationPipeline("execute", {
+            root,
+            controlPlane: control,
+            command: "choir execute --strategy batched --batch-size 1",
+            rolloutStrategy: { type: "batched", batchSize: 1 },
+          });
+
+          assert.ok(canary.execute);
+          assert.ok(batched.execute);
+          assert.strictEqual(canary.execute?.rolloutStrategy, "canary(initial=10,steps=10,100)");
+          assert.strictEqual(batched.execute?.rolloutStrategy, "batched(batchSize=1)");
+          assert.notDeepStrictEqual(
+            canary.execute?.executionStages.map((stage) => stage.id),
+            batched.execute?.executionStages.map((stage) => stage.id)
           );
         });
       },

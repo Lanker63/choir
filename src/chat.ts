@@ -18,6 +18,7 @@ import {
 import {
     evaluateAdaptivePlanSelection,
 } from "./conductor.js";
+import { analyzeWorkspace, findHotspots } from "./analyst.js";
 import {
     approveDiff,
     CompilationTrace,
@@ -33,7 +34,7 @@ import {
     runAbstraction,
 } from "./core/abstractions.js";
 import { formatCIRunResult, runCI } from "./core/ci.js";
-import { CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
+import { AST, AnalyzeTarget, CHOIR_DSL_GRAMMAR, parseCommand } from "./core/choirRouter.js";
 import { getMacro, listMacros, runMacro } from "./core/macros.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import {
@@ -47,6 +48,9 @@ import {
     validateIsolation,
 } from "./core/globalOrchestration.js";
 import { formatSimulationChatResult } from "./core/simulationChat.js";
+import { persistSelectedOptimizedPlan } from "./core/planPersistence.js";
+import { formatAnalyzeMarkdown } from "./core/analyzeOutput.js";
+import { resolveRollbackStageSelection, resolveRollbackUnitSelection } from "./core/rollbackSelectors.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
 import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
 import { formatCompilerVerificationReport, runCompilerVerification } from "./tests/verification/core/compilerVerification.js";
@@ -80,6 +84,8 @@ import {
     OrchestrationPipelineError,
     runOrchestrationPipeline,
 } from "./core/orchestrationRuntime.js";
+import { buildExecutionPlan } from "./core/scheduler.js";
+import { readLatestOrchestrationTrace } from "./core/orchestrationRuntimeTrace.js";
 import {
     InitApplyMode,
     InitWizard,
@@ -99,6 +105,7 @@ import {
     createEmptyStatePlane,
     persistStatePlane,
     readStatePlane,
+    resolveDeterministicRollbackTarget,
 } from "./core/state.js";
 
 type ChatParticipantHandler = Parameters<NonNullable<typeof vscode.chat.createChatParticipant>>[1];
@@ -173,6 +180,64 @@ function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
     };
 }
 
+function buildWorkUnitBindingsForPlan(plan: Plan): Record<string, string[]> {
+    const executionPlan = buildExecutionPlan([plan]);
+    const entries = executionPlan.executionPlan.batches
+        .flatMap((batch) => batch.workUnits)
+        .map((workUnit) => [workUnit.id, sortedUnique(workUnit.tasks.map((task) => deriveSimulationUnit(task)))] as const)
+        .sort(([left], [right]) => left.localeCompare(right));
+
+    return Object.fromEntries(entries);
+}
+
+function readTraceWorkUnitBindings(root: string): Record<string, string[]> {
+    const trace = readLatestOrchestrationTrace(root);
+    if (!trace || trace.mode !== "execute" || trace.status !== "success") {
+        return {};
+    }
+
+    const modeMetadata = trace.modeMetadata;
+    if (!modeMetadata || typeof modeMetadata !== "object" || Array.isArray(modeMetadata)) {
+        return {};
+    }
+
+    const execution = (modeMetadata as Record<string, unknown>).execution;
+    if (!execution || typeof execution !== "object" || Array.isArray(execution)) {
+        return {};
+    }
+
+    const rawBindings = (execution as Record<string, unknown>).workUnitBindings;
+    if (!rawBindings || typeof rawBindings !== "object" || Array.isArray(rawBindings)) {
+        return {};
+    }
+
+    const normalized: Record<string, string[]> = {};
+    for (const [workUnitId, units] of Object.entries(rawBindings as Record<string, unknown>)) {
+        if (typeof workUnitId !== "string" || workUnitId.trim().length === 0 || !Array.isArray(units)) {
+            continue;
+        }
+
+        const mappedUnits = sortedUnique(units.filter((unit): unit is string => typeof unit === "string" && unit.trim().length > 0));
+        if (mappedUnits.length > 0) {
+            normalized[workUnitId] = mappedUnits;
+        }
+    }
+
+    return normalized;
+}
+
+function mergeWorkUnitBindings(
+    base: Record<string, string[]>,
+    incoming: Record<string, string[]>
+): Record<string, string[]> {
+    const merged: Record<string, string[]> = { ...base };
+    for (const [workUnitId, units] of Object.entries(incoming)) {
+        merged[workUnitId] = sortedUnique([...(merged[workUnitId] ?? []), ...units]);
+    }
+
+    return merged;
+}
+
 function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace): void {
     const astJson = JSON.stringify(trace.ast, null, 2);
 
@@ -196,6 +261,24 @@ function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace)
         astJson,
         "```",
     ].join("\n"));
+}
+
+function extractAnalyzeTarget(ast: AST): AnalyzeTarget | null {
+    if (ast.type === "analyze") {
+        return ast.target;
+    }
+
+    if (ast.type === "sequence" && ast.actions.length === 1 && ast.actions[0].type === "analyze") {
+        return ast.actions[0].target;
+    }
+
+    return null;
+}
+
+function renderAnalyzeResult(stream: vscode.ChatResponseStream, target: AnalyzeTarget): void {
+    const summary = analyzeWorkspace();
+    const hotspots = findHotspots();
+    stream.markdown(formatAnalyzeMarkdown(target, summary, hotspots));
 }
 
 function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
@@ -1198,6 +1281,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ...(planNode.target ? { targetGoal: planNode.target } : {}),
                         });
                         const optimized = runtime.optimized;
+                        const persistedControl = persistSelectedOptimizedPlan(control, optimized.selectedExecutionPlan);
+                        writeControlPlane(persistedControl);
 
                         const rankingLines = optimized.rankedPlans.map((entry) =>
                             `- ${entry.rank}. ${entry.strategyId} (policy=${entry.policyDecision}, risk=${entry.riskScore}, dependencyRisk=${entry.dependencyRisk}, blastRadius=${entry.blastRadius}, rollbackComplexity=${entry.rollbackComplexity}, executionCost=${entry.executionCost}, changes=${entry.changeCount})`
@@ -1218,6 +1303,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         stream.markdown([
                             "Plan optimization complete.",
                             `- selectedPlan: ${optimized.selectedPlan.id}`,
+                            `- persistedPlan: ${optimized.selectedExecutionPlan.id}`,
                             `- strategy: ${optimized.selectedPlan.strategyId}`,
                             `- synthesized: ${optimized.selectedPlan.synthesized}`,
                             `- policyDecision: ${optimized.policyDecision}`,
@@ -1322,7 +1408,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             runtime.execute.success ? "Execution successful." : "Execution failed.",
                             `- mode: execute`,
                             `- plan: ${runtime.execute.planId} (${runtime.execute.planSource})`,
-                            `- strategy: ${runtime.execute.strategyId}`,
+                            `- selectionStrategy: ${runtime.execute.strategyId}`,
+                            `- rolloutStrategy: ${runtime.execute.rolloutStrategy}`,
                             `- transactionId: ${runtime.execute.transactionId}`,
                             `- executionHash: ${runtime.execute.executionHash}`,
                             `- finalStateHash: ${runtime.execute.finalStateHash}`,
@@ -1387,17 +1474,42 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         units: Object.fromEntries(allUnits.map((unit) => [unit, "executed" as const])),
                     };
 
+                    let workUnitBindings = buildWorkUnitBindingsForPlan(targetPlan);
+                    workUnitBindings = mergeWorkUnitBindings(workUnitBindings, readTraceWorkUnitBindings(workspaceRoot));
+
+                    if (rollbackNode.unitId?.startsWith("wu-") && !workUnitBindings[rollbackNode.unitId]) {
+                        try {
+                            const fallback = await runOrchestrationPipeline("optimize", {
+                                root: workspaceRoot,
+                                controlPlane: control,
+                                command: "choir plan --optimize",
+                            });
+
+                            if (fallback.optimized) {
+                                workUnitBindings = mergeWorkUnitBindings(
+                                    workUnitBindings,
+                                    buildWorkUnitBindingsForPlan(fallback.optimized.selectedExecutionPlan)
+                                );
+                            }
+                        } catch {
+                            // Best-effort fallback only; selector resolution will fail closed below if no mapping is found.
+                        }
+                    }
+
                     let failedUnit = rollbackNode.unitId ?? allUnits[allUnits.length - 1] as string;
                     let rollbackSet: string[];
+                    let resolvedStageId: string | undefined;
+                    let resolvedUnitId: string | undefined;
 
                     if (rollbackNode.stageId) {
                         const stageStrategy: RolloutStrategy = { type: "batched", batchSize: 1 };
                         const stages = buildStages(globalPlan, stageStrategy);
-                        const selectedStage = stages.find((stage) => stage.id === rollbackNode.stageId);
-                        if (!selectedStage) {
+                        const stageSelection = resolveRollbackStageSelection(rollbackNode.stageId, stages);
+                        if (!stageSelection.stage) {
                             const available = stages.slice(0, 5).map((stage) => `- ${stage.id}`).join("\n");
                             stream.markdown([
                                 `Rollback stage not found: ${rollbackNode.stageId}`,
+                                ...(stageSelection.error ? [stageSelection.error, ""] : []),
                                 "",
                                 "Available deterministic stage ids (batched=1):",
                                 ...(available.length > 0 ? [available] : ["- none"]),
@@ -1405,12 +1517,38 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             return;
                         }
 
+                        const selectedStage = stageSelection.stage;
+                        resolvedStageId = selectedStage.id;
+
                         failedUnit = selectedStage.units[0] ?? failedUnit;
+                        resolvedUnitId = failedUnit;
                         rollbackSet = sortedUnique(selectedStage.units);
                     } else {
-                        if (rollbackNode.unitId && !allUnits.includes(rollbackNode.unitId)) {
-                            stream.markdown(`Rollback unit not found in selected plan: ${rollbackNode.unitId}`);
-                            return;
+                        if (rollbackNode.unitId) {
+                            const unitSelection = resolveRollbackUnitSelection(rollbackNode.unitId, allUnits, {
+                                workUnitBindings,
+                            });
+                            if (!unitSelection.unit) {
+                                const availableUnits = allUnits.slice(0, 8).map((unit) => `- ${unit}`).join("\n");
+                                const availableWorkUnits = Object.keys(workUnitBindings)
+                                    .sort((left, right) => left.localeCompare(right))
+                                    .slice(0, 8)
+                                    .map((unit) => `- ${unit}`)
+                                    .join("\n");
+                                stream.markdown([
+                                    `Rollback unit not found in selected plan: ${rollbackNode.unitId}`,
+                                    ...(unitSelection.error ? [unitSelection.error, ""] : []),
+                                    "Available deterministic unit ids:",
+                                    ...(availableUnits.length > 0 ? [availableUnits] : ["- none"]),
+                                    "",
+                                    "Available deterministic work unit ids:",
+                                    ...(availableWorkUnits.length > 0 ? [availableWorkUnits] : ["- none"]),
+                                ].join("\n"));
+                                return;
+                            }
+
+                            failedUnit = unitSelection.unit;
+                            resolvedUnitId = unitSelection.unit;
                         }
 
                         rollbackSet = computeRollbackSet(failedUnit, dependencyGraph, executionState);
@@ -1430,8 +1568,27 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         duration: Date.now() - rollbackStart,
                     };
 
-                    const currentState = readStatePlane(workspaceRoot) ?? createEmptyStatePlane();
-                    persistStatePlane(workspaceRoot, currentState, {
+                    let rollbackStateTarget: {
+                        state: ReturnType<typeof createEmptyStatePlane>;
+                        fromHash: string;
+                        toHash: string;
+                        sourceTransitionId?: string;
+                    };
+
+                    try {
+                        rollbackStateTarget = resolveDeterministicRollbackTarget(workspaceRoot);
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        stream.markdown(`Rollback unavailable: ${message}`);
+                        return;
+                    }
+
+                    if (rollbackStateTarget.fromHash === rollbackStateTarget.toHash) {
+                        stream.markdown("Rollback skipped: no prior state transition available to restore.");
+                        return;
+                    }
+
+                    persistStatePlane(workspaceRoot, rollbackStateTarget.state, {
                         action: rollbackNode.stageId ? "rollback:stage" : rollbackNode.unitId ? "rollback:unit" : "rollback",
                         metadata: {
                             unitId: failedUnit,
@@ -1446,10 +1603,14 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         "Rollback isolation trace generated.",
                         `- plan: ${targetPlan.id}`,
                         `- selector: ${rollbackNode.stageId ? `stage=${rollbackNode.stageId}` : rollbackNode.unitId ? `unit=${rollbackNode.unitId}` : "auto"}`,
+                        ...(resolvedStageId ? [`- resolvedStageId: ${resolvedStageId}`] : []),
+                        ...(resolvedUnitId ? [`- resolvedUnitId: ${resolvedUnitId}`] : []),
                         `- failedUnit: ${rollbackTrace.failedUnit}`,
                         `- rollbackSet: [${rollbackTrace.rollbackSet.join(", ")}]`,
                         `- rollbackOrder: [${rollbackTrace.rollbackOrder.join(", ")}]`,
                         `- durationMs: ${rollbackTrace.duration}`,
+                        `- stateHashBefore: ${rollbackStateTarget.fromHash}`,
+                        `- stateHashAfter: ${rollbackStateTarget.toHash}`,
                         `- isolationValid: ${isolation.valid}`,
                         ...(isolation.errors.length > 0 ? ["", "Isolation Errors:", ...isolation.errors.map((entry) => `- ${entry}`)] : []),
                     ].join("\n"));
@@ -1976,7 +2137,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (!compiled.changed || compiled.decision === "no-change") {
-                    stream.markdown("No changes. YAML already reflects this DSL command.");
+                    const analyzeTarget = extractAnalyzeTarget(compiled.trace.ast);
+                    if (analyzeTarget) {
+                        renderAnalyzeResult(stream, analyzeTarget);
+                    } else {
+                        stream.markdown("No changes. YAML already reflects this DSL command.");
+                    }
                 } else {
                     stream.markdown("YAML updated successfully: .choir/choir.config.yaml");
                 }

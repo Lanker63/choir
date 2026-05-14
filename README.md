@@ -57,9 +57,15 @@ Entry point: @choir
 Core flow:
 
 - define, analyze, plan, simulate, preview, execute, status
+- analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
+- execute output reports both selectionStrategy (optimizer candidate strategy) and rolloutStrategy (requested rollout mode)
+- plan --optimize persists the selected execution plan to control plane so `plan approve <id>` can be executed immediately
+- integrity lineage checks are rollout-mode aware to avoid false canonical-stage mismatches when switching execute rollout modes
 - failure isolation rollback: choir rollback [<unitId>] | choir rollback --stage <stageId>
+- rollback must restore the previous persisted state hash (stateHash before rollback differs from stateHash after rollback when a reversible transition exists)
+- rollback selectors accept deterministic alias forms: stages support order aliases (for example batch-L1-1 -> stage order 1), units support canonical punctuation variants (for example packages.api -> packages:api), and work unit ids (for example wu-<hash>) map to deterministic unit ids when resolvable (prioritizing latest execute trace context)
 - approve/reject policy-gated diffs
 - export deterministic DSL projections
 

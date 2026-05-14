@@ -13,6 +13,7 @@ import {
   type RolloutStrategy,
   type CompiledPolicy as GlobalCompiledPolicy,
   evaluateCompiledGlobalPolicies,
+  buildStages,
   executionPreviewHash,
   hashState as hashGlobalState,
   replay,
@@ -63,6 +64,7 @@ import {
   generateMaterializationPlan,
   replayMaterializationFromLineage,
 } from "./materializationEngine.js";
+import { buildExecutionPlan } from "./scheduler.js";
 import { CanonicalWorkspaceHasher } from "./workspaceSnapshot.js";
 import {
   readLatestOrchestrationTrace,
@@ -200,6 +202,7 @@ export type IntegrityViolation = {
 export type ExecutionIntegritySnapshot = {
   planId: string;
   strategyId: string;
+  rolloutStrategy?: string;
   controlPlaneHash: string;
   previewHash: string;
   predictedExecutionHash: string;
@@ -331,6 +334,7 @@ export type PipelineResult = {
     verified: boolean;
     success: boolean;
     strategyId: string;
+    rolloutStrategy: string;
     planId: string;
     planSource: "configured" | "synthesized";
     simulationFutureStateHash: string;
@@ -377,6 +381,7 @@ type ExecutionIntegrityGateInput = {
   root: string;
   controlPlane: ControlPlane;
   requestedPreviewRef?: string;
+  requestedRolloutStrategy?: RolloutStrategy;
   selected: RankedPlan;
   selectedExecutionPlan: Plan;
   simulationContract: PipelineSimulationContract;
@@ -458,6 +463,16 @@ function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
     id: `global-${plan.id}`,
     tasks,
   };
+}
+
+function buildWorkUnitBindingsForPlan(plan: Plan): Record<string, string[]> {
+  const executionPlan = buildExecutionPlan([plan]);
+  const entries = executionPlan.executionPlan.batches
+    .flatMap((batch) => batch.workUnits)
+    .map((workUnit) => [workUnit.id, sortedUnique(workUnit.tasks.map((task) => deriveSimulationUnit(task)))] as const)
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  return Object.fromEntries(entries);
 }
 
 function buildSimulationRepos(plans: GlobalPlan[]): Repo[] {
@@ -738,6 +753,7 @@ function buildExecutionIntegritySnapshot(input: {
   predictedExecutionHash: string;
   preWorkspaceSnapshotHash: string;
   postWorkspaceSnapshotHash: string;
+  rolloutStrategy?: string;
 }): ExecutionIntegritySnapshot {
   const nodeHash = hashDagNodes(input.executionDag.nodes);
   const edgeHash = hashDagEdges(input.executionDag.edges);
@@ -746,6 +762,7 @@ function buildExecutionIntegritySnapshot(input: {
   const payload = {
     planId: input.selectedExecutionPlan.id,
     strategyId: input.selected.strategyType,
+    rolloutStrategy: input.rolloutStrategy,
     controlPlaneHash: deterministicHash(controlPlaneToChoirConfig(input.controlPlane)),
     previewHash: input.selected.previewHash,
     predictedExecutionHash: input.predictedExecutionHash,
@@ -795,6 +812,7 @@ function parseExecutionIntegritySnapshot(value: unknown): ExecutionIntegritySnap
   return {
     planId: record.planId as string,
     strategyId: record.strategyId as string,
+    ...(typeof record.rolloutStrategy === "string" ? { rolloutStrategy: record.rolloutStrategy as string } : {}),
     controlPlaneHash: record.controlPlaneHash as string,
     previewHash: record.previewHash as string,
     predictedExecutionHash: record.predictedExecutionHash as string,
@@ -1072,6 +1090,7 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
     predictedExecutionHash,
     preWorkspaceSnapshotHash: input.simulationContract.preWorkspaceSnapshotHash,
     postWorkspaceSnapshotHash: input.simulationContract.postWorkspaceSnapshotHash,
+    rolloutStrategy: formatRolloutStrategy(input.requestedRolloutStrategy),
   });
 
   if (
@@ -1127,6 +1146,10 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
         `Latest orchestration trace ${latestTrace.id} is missing integrity metadata.`
       ));
     } else {
+      const latestRollout = latestIntegrity.rolloutStrategy ?? "optimizer-default";
+      const currentRollout = snapshot.rolloutStrategy ?? "optimizer-default";
+      const rolloutCompatible = latestRollout === currentRollout;
+
       if (latestIntegrity.previewHash !== snapshot.previewHash) {
         violations.push(integrityViolation(
           "REPLAY_LINEAGE_DIVERGENCE",
@@ -1158,24 +1181,26 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
         ));
       }
 
-      if (latestIntegrity.orchestrationHash !== snapshot.orchestrationHash
-        || latestIntegrity.nodeHash !== snapshot.nodeHash
-        || latestIntegrity.edgeHash !== snapshot.edgeHash) {
+      if (rolloutCompatible
+        && (latestIntegrity.orchestrationHash !== snapshot.orchestrationHash
+          || latestIntegrity.nodeHash !== snapshot.nodeHash
+          || latestIntegrity.edgeHash !== snapshot.edgeHash)) {
         violations.push(integrityViolation(
           "DAG_HASH_MISMATCH",
           "Latest orchestration artifact DAG signature differs from current deterministic DAG signature."
         ));
       }
 
-      if (latestIntegrity.canonicalStageHash !== snapshot.canonicalStageHash) {
+      if (rolloutCompatible && latestIntegrity.canonicalStageHash !== snapshot.canonicalStageHash) {
         violations.push(integrityViolation(
           "DAG_CANONICAL_ORDER_MISMATCH",
           "Latest orchestration artifact canonical stage ordering differs from current deterministic stage ordering."
         ));
       }
 
-      if (latestIntegrity.predictedExecutionHash !== snapshot.predictedExecutionHash
-        || latestIntegrity.simulationFutureStateHash !== snapshot.simulationFutureStateHash) {
+      if (rolloutCompatible
+        && (latestIntegrity.predictedExecutionHash !== snapshot.predictedExecutionHash
+          || latestIntegrity.simulationFutureStateHash !== snapshot.simulationFutureStateHash)) {
         violations.push(integrityViolation(
           "SIMULATION_EXECUTION_PARITY_MISMATCH",
           "Latest simulation artifact future-state projection differs from current deterministic simulation projection."
@@ -1281,6 +1306,49 @@ export function buildExecutionDAG(selectedPlan: RankedPlan): PipelineExecutionDA
     stageGroups: selectedPlan.stages.map((stage) => ({
       id: stage.id,
       order: stage.order,
+      units: [...stage.units],
+    })),
+  };
+}
+
+function formatRolloutStrategy(strategy?: RolloutStrategy): string {
+  if (!strategy) {
+    return "optimizer-default";
+  }
+
+  if (strategy.type === "all-at-once") {
+    return "all-at-once";
+  }
+
+  if (strategy.type === "batched") {
+    return `batched(batchSize=${strategy.batchSize})`;
+  }
+
+  if (strategy.type === "phased") {
+    return `phased(phases=${strategy.phases.join(",")})`;
+  }
+
+  return `canary(initial=${strategy.initialPercent},steps=${strategy.steps.join(",")})`;
+}
+
+function applyRequestedRolloutStrategy(
+  selectedPlan: RankedPlan,
+  selectedExecutionPlan: Plan,
+  requested?: RolloutStrategy
+): RankedPlan {
+  if (!requested) {
+    return selectedPlan;
+  }
+
+  const globalPlan = toGlobalPlanFromPlan(selectedExecutionPlan);
+  const rolloutStages = buildStages(globalPlan, requested);
+
+  return {
+    ...selectedPlan,
+    stages: rolloutStages.map((stage) => ({
+      id: stage.id,
+      order: stage.order,
+      parallelizable: stage.units.length > 1,
       units: [...stage.units],
     })),
   };
@@ -1546,7 +1614,10 @@ export async function runOrchestrationPipeline(
       return fail("strategy-selection", "Unable to resolve selected strategy candidate.");
     }
 
-    selectedForTrace = selected;
+    const selectedExecutionPlan = optimized.selectedExecutionPlan;
+    const selectedWithRequestedRollout = applyRequestedRolloutStrategy(selected, selectedExecutionPlan, intent.rolloutStrategy);
+
+    selectedForTrace = selectedWithRequestedRollout;
 
     selectedPlanId = selected.id;
     selectedStrategyType = selected.strategyType;
@@ -1562,13 +1633,15 @@ export async function runOrchestrationPipeline(
       markSuccess("synthesize", `Selected deterministic orchestration candidate ${selected.id}.`);
     }
 
-    executionDag = buildExecutionDAG(selected);
+    executionDag = buildExecutionDAG(selectedWithRequestedRollout);
     markSuccess("orchestration-build", `Execution DAG built with hash ${executionDag.hash.slice(0, 12)}.`);
     if (mode === "execute") {
-      markSuccess("analyze", `Analyzed workspace and execution DAG (hash=${executionDag.hash.slice(0, 12)}).`);
+      markSuccess(
+        "analyze",
+        `Analyzed workspace and execution DAG (hash=${executionDag.hash.slice(0, 12)}, rollout=${formatRolloutStrategy(intent.rolloutStrategy)}).`
+      );
     }
 
-    const selectedExecutionPlan = optimized.selectedExecutionPlan;
     selectedExecutionPlanForTrace = selectedExecutionPlan;
     const selectedExecutionControl = mergeExecutionPlan(activeControlPlane, selectedExecutionPlan);
     const diffs = computeDiff(
@@ -1645,6 +1718,7 @@ export async function runOrchestrationPipeline(
         root: intent.root,
         controlPlane: activeControlPlane,
         requestedPreviewRef: intent.requestedPreviewRef,
+        requestedRolloutStrategy: intent.rolloutStrategy,
         selected,
         selectedExecutionPlan,
         simulationContract,
@@ -1968,6 +2042,7 @@ export async function runOrchestrationPipeline(
           transactionId,
           planId: selectedExecutionPlan.id,
           strategyId: selected.strategyType,
+          rolloutStrategy: formatRolloutStrategy(intent.rolloutStrategy),
           finalStateHash: simulationContract.futureStateHash,
           replayHash: simulationContract.replayHash,
           mutationHash: applied.mutationHash,
@@ -1993,7 +2068,7 @@ export async function runOrchestrationPipeline(
         postWorkspaceSnapshotId: applied.postWorkspaceSnapshotId,
         manifestId: applied.manifestId,
         manifestHash: applied.manifestHash,
-        executionStages: optimized.executionStages.map((stage) => ({
+        executionStages: executionDag.stageGroups.map((stage) => ({
           id: stage.id,
           order: stage.order,
           units: sortedUnique(stage.units),
@@ -2007,6 +2082,7 @@ export async function runOrchestrationPipeline(
         verified: true,
         success: true,
         strategyId: selected.strategyType,
+        rolloutStrategy: formatRolloutStrategy(intent.rolloutStrategy),
         planId: selectedExecutionPlan.id,
         planSource,
         simulationFutureStateHash: simulationContract.futureStateHash,
@@ -2041,6 +2117,7 @@ export async function runOrchestrationPipeline(
         predictedExecutionHash: hashGlobalState(generatedSimulationForTrace.simulation.finalState),
         preWorkspaceSnapshotHash: simulationContract.preWorkspaceSnapshotHash,
         postWorkspaceSnapshotHash: simulationContract.postWorkspaceSnapshotHash,
+        rolloutStrategy: formatRolloutStrategy(intent.rolloutStrategy),
       });
     }
 
@@ -2087,6 +2164,15 @@ export async function runOrchestrationPipeline(
               postWorkspaceSnapshotId: executeResult.postWorkspaceSnapshotId,
               manifestId: executeResult.manifestId,
               manifestHash: executeResult.manifestHash,
+            },
+            execution: {
+              planId: selectedExecutionPlan.id,
+              stages: executeResult.executionStages.map((stage) => ({
+                id: stage.id,
+                order: stage.order,
+                units: [...stage.units],
+              })),
+              workUnitBindings: buildWorkUnitBindingsForPlan(selectedExecutionPlan),
             },
           }
           : {}),

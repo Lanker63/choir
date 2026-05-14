@@ -2111,6 +2111,55 @@ export function stepBackward(root: string, currentIndex: number): ReplayResult {
   return jumpTo(root, previousIndex);
 }
 
+export function resolveDeterministicRollbackTarget(root: string): {
+  state: StatePlane;
+  fromHash: string;
+  toHash: string;
+  sourceTransitionId?: string;
+} {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const transitions = listStateTransitions(root);
+  if (transitions.length === 0) {
+    return {
+      state: current,
+      fromHash: current.stateHash,
+      toHash: current.stateHash,
+    };
+  }
+
+  const latest = transitions[transitions.length - 1] as StateTransition;
+  const fromHash = latest.toHash;
+
+  if (latest.fromHash === "GENESIS") {
+    const genesis = createEmptyStatePlane();
+    return {
+      state: genesis,
+      fromHash,
+      toHash: genesis.stateHash,
+      sourceTransitionId: latest.id,
+    };
+  }
+
+  let previousIndex = -1;
+  for (let index = transitions.length - 1; index >= 0; index -= 1) {
+    if (transitions[index]?.toHash === latest.fromHash) {
+      previousIndex = index;
+      break;
+    }
+  }
+  if (previousIndex < 0) {
+    throw new Error(`Rollback target not found for transition ${latest.id}`);
+  }
+
+  const replayed = jumpTo(root, previousIndex);
+  return {
+    state: replayed.state,
+    fromHash,
+    toHash: replayed.state.stateHash,
+    sourceTransitionId: latest.id,
+  };
+}
+
 export function rollbackState(root: string, snapshotId: string): StatePlane {
   const snapshots = listSnapshots(root);
   const target = snapshots.find((snapshot) => snapshot.id === snapshotId);
