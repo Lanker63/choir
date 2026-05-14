@@ -5,7 +5,22 @@ export const CONTROL_PLANE_VERSION = "1.0.0";
 
 const PlanDerivedFromSchema = z.enum(["goal", "constraint", "manual"]);
 const PlanStatusSchema = z.enum(["draft", "approved"]);
-const TaskTypeSchema = z.enum(["analysis", "refactor", "create", "delete", "enforce"]);
+const TaskTypeSchema = z.enum([
+    "analysis",
+    "refactor",
+    "create",
+    "delete",
+    "enforce",
+    "generate-typescript-module",
+    "generate-api-route",
+    "generate-model",
+    "generate-controller",
+    "generate-tests",
+    "generate-config",
+    "apply-ast-patch",
+    "create-directory",
+    "create-project-structure",
+]);
 
 const TaskScopeSchema = z.object({
     files: z.array(z.string().min(1)).optional(),

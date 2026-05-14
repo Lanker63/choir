@@ -29,6 +29,10 @@ import {
 } from "./scheduler.js";
 import { createEmptyStatePlane, readStatePlane, type StatePlane } from "./state.js";
 import type { Diagnostic } from "./types.js";
+import {
+  semanticDiagnosticsForFixes,
+  synthesizeSemanticFixesForWorkUnits,
+} from "./semanticMaterializerRegistry.js";
 
 export type PatchOperation = {
   id: string;
@@ -346,10 +350,18 @@ function createMaterializationEnforcer(
         persistState: false,
       });
 
-      const allFixes = pipelineResult.fixes
+      const semanticFixes = synthesizeSemanticFixesForWorkUnits({
+        root,
+        controlPlane,
+        workUnits,
+        files,
+      });
+      const semanticDiagnostics = semanticDiagnosticsForFixes(semanticFixes);
+
+      const allFixes = [...pipelineResult.fixes, ...semanticFixes]
         .map((fix) => cloneFix(root, fix))
         .sort((left, right) => left.id.localeCompare(right.id));
-      const allDiagnostics = pipelineResult.diagnostics
+      const allDiagnostics = [...pipelineResult.diagnostics, ...semanticDiagnostics]
         .map((diagnostic) => normalizeDiagnostic(root, diagnostic))
         .sort((left, right) => left.id.localeCompare(right.id));
 
@@ -679,13 +691,21 @@ function buildMutationSet(
   };
 }
 
-function summarizeTransactionFailures(transactions: Transaction[]): string[] {
+function summarizeTransactionFailures(
+  transactions: Transaction[],
+  rollbackReasonsByBatch?: Map<string, string>
+): string[] {
   return transactions
     .filter((transaction) => transaction.status !== "committed")
     .map((transaction) => {
       const errors = transaction.validation.errors ?? [];
-      return errors.length > 0
-        ? `${transaction.batchId}:${transaction.status} (${errors.join(" | ")})`
+      const failedChecks = transaction.validation.invariantChecks
+        .filter((check) => !check.passed)
+        .map((check) => check.details ? `${check.name}:${check.details}` : check.name);
+      const rollbackReason = rollbackReasonsByBatch?.get(transaction.batchId);
+      const details = [...errors, ...failedChecks, ...(rollbackReason ? [`rollback:${rollbackReason}`] : [])];
+      return details.length > 0
+        ? `${transaction.batchId}:${transaction.status} (${details.join(" | ")})`
         : `${transaction.batchId}:${transaction.status}`;
     });
 }
@@ -998,7 +1018,13 @@ export async function generateMaterializationPlan(
     executeLayersInParallel: false,
   });
 
-  const failures = summarizeTransactionFailures(result.transactions);
+  const rollbackReasonsByBatch = new Map(
+    result.traces
+      .filter((trace) => typeof trace.rollbackReason === "string" && trace.rollbackReason.trim().length > 0)
+      .map((trace) => [trace.batchId, trace.rollbackReason as string] as const)
+  );
+
+  const failures = summarizeTransactionFailures(result.transactions, rollbackReasonsByBatch);
   if (failures.length > 0) {
     throw new Error(`Materialization generation failed: ${failures.join(", ")}`);
   }
@@ -1178,7 +1204,13 @@ export async function applyMaterializationPlan(
         executeLayersInParallel: false,
       });
 
-      const failures = summarizeTransactionFailures(txResult.transactions);
+      const rollbackReasonsByBatch = new Map(
+        txResult.traces
+          .filter((trace) => typeof trace.rollbackReason === "string" && trace.rollbackReason.trim().length > 0)
+          .map((trace) => [trace.batchId, trace.rollbackReason as string] as const)
+      );
+
+      const failures = summarizeTransactionFailures(txResult.transactions, rollbackReasonsByBatch);
       if (failures.length > 0) {
         const rollback = await rollbackWithJournal(failures);
         return {

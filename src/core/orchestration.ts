@@ -1,6 +1,10 @@
 import { createHash } from "crypto";
 import { ControlPlane, Plan, Task } from "../schema.js";
 import { StatePlane } from "./state.js";
+import {
+  inferSemanticGenerationScenario,
+  semanticTasksForScenario,
+} from "./semanticMaterializerRegistry.js";
 
 export function taskExecutionKey(planId: string, taskId: string): string {
   return `${planId}:${taskId}`;
@@ -277,14 +281,14 @@ function createAnalysisTask(): Task {
   };
 }
 
-function createValidationTask(refactorTasks: Task[]): Task {
+function createValidationTask(executionTasks: Task[]): Task {
   return {
     id: "t-validate",
     title: "Validate all constraints",
     description: "Run policy enforcement to verify that constraints are satisfied.",
     type: "enforce",
-    dependsOn: refactorTasks.length > 0
-      ? refactorTasks.map((task) => task.id)
+    dependsOn: executionTasks.length > 0
+      ? executionTasks.map((task) => task.id)
       : ["t-analysis"],
     successCriteria: ["zero violations"],
   };
@@ -362,6 +366,23 @@ function deriveSource(control: ControlPlane): { derivedFrom: "goal" | "constrain
 }
 
 export function generatePlan(control: ControlPlane, state: StatePlane): Plan {
+  const semanticScenario = inferSemanticGenerationScenario(control);
+  if (semanticScenario) {
+    const analysisTask = createAnalysisTask();
+    const semanticTasks = semanticTasksForScenario(semanticScenario);
+    const validationTask = createValidationTask(semanticTasks);
+    const { derivedFrom, refs } = deriveSource(control);
+
+    return {
+      id: generateDeterministicId(control, []),
+      title: "Auto-generated semantic generation plan",
+      derivedFrom,
+      goalRefs: refs,
+      tasks: [analysisTask, ...semanticTasks, validationTask],
+      status: "draft",
+    };
+  }
+
   const filteredViolations = filterViolations(control, state);
   const grouped = groupByRule(filteredViolations);
   const files = sortedUnique(filteredViolations.map((violation) => normalizePath(violation.location.file)));

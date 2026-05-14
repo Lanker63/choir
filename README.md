@@ -163,6 +163,8 @@ analyze -> validate -> synthesize -> generate -> apply -> verify -> commit
 - Execute enforces a deterministic integrity gate before any transaction starts (preview hash, simulation parity, DAG signature, replay contract, and state snapshot integrity)
 - Transactional execution apply backend is scheduler-backed and filesystem materializing by default
 - Generate is read-only and emits deterministic mutation contracts (patch operations, workspace mutation grouping, mutation hash)
+- Goal-driven semantic generation is operational: intent can synthesize deterministic source artifacts (for example routes/models/controllers/tests) as transaction-bound mutation sets
+- Semantic generation selection is registry-driven and deterministic; same goal and input state produce byte-identical generated artifacts, patch ordering, and lineage hashes
 - Verify is mutation-aware and fail-closed (mutation hash parity, full-workspace snapshot parity, replay workspace equivalence)
 - Commit persists deterministic mutation artifacts under .choir/artifacts/materialization/ and authoritative workspace snapshots under .choir/artifacts/workspace-snapshots/
 - Authoritative workspace hashing is canonical and deterministic across full workspace scope (files, directories, symlinks, unicode paths, permissions metadata, create/delete/rename effects)

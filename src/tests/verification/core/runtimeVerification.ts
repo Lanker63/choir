@@ -51,6 +51,17 @@ function fixtureControlPlane(): ControlPlane {
   };
 }
 
+function semanticGenerationControlPlane(): ControlPlane {
+  const control = fixtureControlPlane();
+  return {
+    ...control,
+    intent: {
+      ...control.intent,
+      goals: ["Create sample API service with routes, models, and tests"],
+    },
+  };
+}
+
 function makeTempRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-runtime-verify-"));
   fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
@@ -63,18 +74,44 @@ function makeTempRoot(): string {
 }
 
 async function runMode(mode: PipelineMode, root: string): Promise<Awaited<ReturnType<typeof runOrchestrationPipeline>>> {
+  return runModeWithControl(mode, root, fixtureControlPlane());
+}
+
+async function runModeWithControl(
+  mode: PipelineMode,
+  root: string,
+  controlPlane: ControlPlane
+): Promise<Awaited<ReturnType<typeof runOrchestrationPipeline>>> {
   const command = mode === "optimize"
     ? "choir plan --optimize"
     : `choir ${mode}`;
 
   return runOrchestrationPipeline(mode, {
     root,
-    controlPlane: fixtureControlPlane(),
+    controlPlane,
     command,
     persistArtifacts: false,
     persistPreviewState: false,
     recordPendingApproval: false,
   });
+}
+
+const semanticExpectedFiles = [
+  "src/api/index.ts",
+  "src/routes/sample.routes.ts",
+  "src/models/sample.model.ts",
+  "src/controllers/sample.controller.ts",
+  "tests/sample-api.test.ts",
+];
+
+function readUtf8(filePath: string): string {
+  return fs.readFileSync(filePath, "utf-8");
+}
+
+function readSemanticFileMap(root: string): Record<string, string> {
+  return Object.fromEntries(
+    semanticExpectedFiles.map((file) => [file, readUtf8(path.join(root, file))] as const)
+  );
 }
 
 async function runPreviewWithState(root: string): Promise<Awaited<ReturnType<typeof runOrchestrationPipeline>>> {
@@ -272,6 +309,151 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
     } finally {
       fs.rmSync(generationRootA, { recursive: true, force: true });
       fs.rmSync(generationRootB, { recursive: true, force: true });
+    }
+
+    const semanticSourceRoot = makeTempRoot();
+    try {
+      const semanticExecute = await runModeWithControl("execute", semanticSourceRoot, semanticGenerationControlPlane());
+      const expectedDirectories = ["src", "src/routes", "src/models", "src/controllers", "src/api", "tests"];
+      const directoriesPresent = expectedDirectories
+        .every((entry) => fs.existsSync(path.join(semanticSourceRoot, entry)));
+      const filesPresent = semanticExpectedFiles
+        .every((entry) => fs.existsSync(path.join(semanticSourceRoot, entry)));
+
+      checks.push({
+        name: "semantic-source-generation-creates-project-structure-and-source-artifacts",
+        passed: Boolean(semanticExecute.execute?.manifestId) && directoriesPresent && filesPresent,
+        detail: `directoriesPresent=${directoriesPresent}, filesPresent=${filesPresent}`,
+      });
+    } finally {
+      fs.rmSync(semanticSourceRoot, { recursive: true, force: true });
+    }
+
+    const semanticDeterminismRootA = makeTempRoot();
+    const semanticDeterminismRootB = makeTempRoot();
+    try {
+      const first = await runModeWithControl("execute", semanticDeterminismRootA, semanticGenerationControlPlane());
+      const second = await runModeWithControl("execute", semanticDeterminismRootB, semanticGenerationControlPlane());
+
+      const firstFiles = readSemanticFileMap(semanticDeterminismRootA);
+      const secondFiles = readSemanticFileMap(semanticDeterminismRootB);
+
+      checks.push({
+        name: "semantic-generation-is-deterministic-across-runs",
+        passed: first.execute?.mutationHash === second.execute?.mutationHash
+          && first.execute?.workspaceHash === second.execute?.workspaceHash
+          && first.execute?.manifestHash === second.execute?.manifestHash
+          && JSON.stringify(firstFiles) === JSON.stringify(secondFiles),
+        detail: `firstMutation=${String(first.execute?.mutationHash ?? "")}, secondMutation=${String(second.execute?.mutationHash ?? "")}`,
+      });
+    } finally {
+      fs.rmSync(semanticDeterminismRootA, { recursive: true, force: true });
+      fs.rmSync(semanticDeterminismRootB, { recursive: true, force: true });
+    }
+
+    const semanticReplayRoot = makeTempRoot();
+    try {
+      const executed = await runModeWithControl("execute", semanticReplayRoot, semanticGenerationControlPlane());
+      const manifestId = executed.execute?.manifestId ?? "";
+
+      for (const file of semanticExpectedFiles) {
+        fs.rmSync(path.join(semanticReplayRoot, file), { force: true });
+      }
+
+      const replayed = await replayMaterializationFromLineage({
+        root: semanticReplayRoot,
+        manifestId,
+        restore: true,
+      });
+
+      const restoredFiles = semanticExpectedFiles
+        .every((file) => fs.existsSync(path.join(semanticReplayRoot, file)));
+
+      checks.push({
+        name: "semantic-replay-reconstructs-generated-source-after-delete",
+        passed: replayed.success
+          && restoredFiles
+          && replayed.workspaceHash === executed.execute?.workspaceHash,
+        detail: `replayed=${replayed.success}, restoredFiles=${restoredFiles}, workspace=${replayed.workspaceHash}`,
+      });
+    } finally {
+      fs.rmSync(semanticReplayRoot, { recursive: true, force: true });
+    }
+
+    const semanticRollbackRoot = makeTempRoot();
+    try {
+      const beforeHash = CanonicalWorkspaceHasher.capture(semanticRollbackRoot).snapshotHash;
+      let failedStage = "";
+      let message = "";
+
+      await withTemporaryEnv({ CHOIR_TEST_ROLLBACK: "1" }, async () => {
+        try {
+          await runModeWithControl("execute", semanticRollbackRoot, semanticGenerationControlPlane());
+        } catch (error) {
+          if (error instanceof OrchestrationPipelineError) {
+            failedStage = error.failedStage;
+            message = error.message;
+          }
+        }
+      });
+
+      const afterHash = CanonicalWorkspaceHasher.capture(semanticRollbackRoot).snapshotHash;
+      const anyGenerated = semanticExpectedFiles.some((file) => fs.existsSync(path.join(semanticRollbackRoot, file)));
+
+      checks.push({
+        name: "semantic-rollback-removes-generated-source-and-restores-workspace",
+        passed: failedStage === "execution"
+          && /rollback=applied/.test(message)
+          && beforeHash === afterHash
+          && !anyGenerated,
+        detail: `failedStage=${failedStage || "none"}, before=${beforeHash}, after=${afterHash}`,
+      });
+    } finally {
+      fs.rmSync(semanticRollbackRoot, { recursive: true, force: true });
+    }
+
+    const semanticIntegrityRoot = makeTempRoot();
+    try {
+      const executed = await runModeWithControl("execute", semanticIntegrityRoot, semanticGenerationControlPlane());
+      const manifestId = executed.execute?.manifestId ?? "";
+      const manifestPath = path.join(semanticIntegrityRoot, ".choir", "artifacts", "materialization", `${manifestId}.json`);
+      const manifest = JSON.parse(readUtf8(manifestPath)) as Record<string, unknown>;
+      manifest.postWorkspaceSnapshotHash = "tampered-semantic-post-hash";
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+
+      const replayed = await replayMaterializationFromLineage({
+        root: semanticIntegrityRoot,
+        manifestId,
+        restore: false,
+      });
+
+      checks.push({
+        name: "semantic-generated-manifest-tamper-fails-integrity",
+        passed: !replayed.success
+          && replayed.errors.some((entry) => /WORKSPACE_SNAPSHOT_DIVERGENCE|REPLAY_LINEAGE_DIVERGENCE/.test(entry)),
+        detail: replayed.errors.join(" | ") || "unexpected success",
+      });
+    } finally {
+      fs.rmSync(semanticIntegrityRoot, { recursive: true, force: true });
+    }
+
+    const semanticAstDeterminismRootA = makeTempRoot();
+    const semanticAstDeterminismRootB = makeTempRoot();
+    try {
+      await runModeWithControl("execute", semanticAstDeterminismRootA, semanticGenerationControlPlane());
+      await runModeWithControl("execute", semanticAstDeterminismRootB, semanticGenerationControlPlane());
+
+      const fileA = readUtf8(path.join(semanticAstDeterminismRootA, "src/api/index.ts"));
+      const fileB = readUtf8(path.join(semanticAstDeterminismRootB, "src/api/index.ts"));
+
+      checks.push({
+        name: "deterministic-ast-patch-produces-byte-identical-output",
+        passed: fileA === fileB && fileA.includes("export type ApiService = ReturnType<typeof buildApiService>"),
+        detail: `bytesA=${Buffer.byteLength(fileA)}, bytesB=${Buffer.byteLength(fileB)}`,
+      });
+    } finally {
+      fs.rmSync(semanticAstDeterminismRootA, { recursive: true, force: true });
+      fs.rmSync(semanticAstDeterminismRootB, { recursive: true, force: true });
     }
 
     const applyDeterminismRoot = makeTempRoot();

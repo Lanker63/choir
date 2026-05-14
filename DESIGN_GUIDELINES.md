@@ -145,6 +145,8 @@ Hard constraints:
 - approval policy is governance-only and must not control deterministic integrity enforcement
 - simulation mode never commits
 - generate stage is read-only and must emit canonical deterministic mutation contracts
+- semantic generation must compile goals into deterministic source-artifact work units (for example project structure, routes, models, controllers, tests, config)
+- semantic work-unit materializers must be discovered via deterministic registry ordering and must emit filesystem mutations only through PatchOperation -> WorkspaceMutation transaction flow
 - apply stage uses scheduler-backed transactional filesystem mutation as canonical backend
 - verify stage is mutation-aware and fail-closed (mutation hash parity, workspace hash parity, replay workspace equivalence)
 - commit persists mutation manifests and lineage artifacts

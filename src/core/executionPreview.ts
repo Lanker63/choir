@@ -18,6 +18,10 @@ import { ControlPlane, Plan } from "../schema.js";
 import { Diagnostic } from "./types.js";
 import { Fix, FixConflict, Patch, isTextPatch } from "../fix/types.js";
 import { StatePlane, createEmptyStatePlane, readStatePlane } from "./state.js";
+import {
+  semanticDiagnosticsForFixes,
+  synthesizeSemanticFixesForWorkUnits,
+} from "./semanticMaterializerRegistry.js";
 
 export type FileChange = {
   file: string;
@@ -270,10 +274,18 @@ function createPreviewEnforcer(
         persistState: false,
       });
 
-      const allFixes = pipelineResult.fixes
+      const semanticFixes = synthesizeSemanticFixesForWorkUnits({
+        root,
+        controlPlane,
+        workUnits,
+        files: currentFiles,
+      });
+      const semanticDiagnostics = semanticDiagnosticsForFixes(semanticFixes);
+
+      const allFixes = [...pipelineResult.fixes, ...semanticFixes]
         .map((fix) => cloneFix(root, fix))
         .sort((left, right) => left.id.localeCompare(right.id));
-      const allDiagnostics = pipelineResult.diagnostics
+      const allDiagnostics = [...pipelineResult.diagnostics, ...semanticDiagnostics]
         .map((diagnostic) => normalizeDiagnostic(root, diagnostic))
         .sort((left, right) => left.id.localeCompare(right.id));
 
