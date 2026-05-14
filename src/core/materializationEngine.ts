@@ -28,7 +28,6 @@ import {
   type TransactionPipeline,
 } from "./scheduler.js";
 import { createEmptyStatePlane, readStatePlane, type StatePlane } from "./state.js";
-import { cloneJson } from "../utils/clone.js";
 import type { Diagnostic } from "./types.js";
 import {
   semanticDiagnosticsForFixes,
@@ -168,7 +167,7 @@ function nowIso(): string {
 }
 
 function cloneState(value: StatePlane): StatePlane {
-  return cloneJson(value);
+  return JSON.parse(JSON.stringify(value)) as StatePlane;
 }
 
 async function atomicWriteJsonFile(filePath: string, payload: unknown): Promise<void> {
