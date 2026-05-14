@@ -1,713 +1,366 @@
-# Choir — Full End-to-End Smoke Test
+# Choir Manual QA/QC Procedure
 
-## Purpose
-
-This smoke test validates that the Choir platform is operational end-to-end across:
-
-- initialization
-- compiler pipeline
-- deterministic orchestration
-- planning
-- simulation
-- preview
-- execution
-- rollback
-- replay
-- policy enforcement
-- distributed orchestration
-- observability
-- verification harnesses
-- webviews
-
-This is NOT a deep correctness test.
-
-This is a:
-
-```text
-"Can the entire platform execute successfully end-to-end?"
-```
-
-validation.
+Validates all functional capabilities through a manual, step-by-step QA/QC procedure. Steps are grouped by what is being tested. Each numbered step describes the action to perform; sub-items describe what to validate as a result.
 
 ---
 
-# Preconditions
+## Preconditions
 
-## Environment
+1. Open the target workspace in VS Code.
 
-- VSCode Insiders installed
-- Choir extension installed
-- Extension Host operational
-- Node/npm installed
-- Workspace trusted
+   - Workspace must contain a TypeScript or JavaScript project.
+   - A terminal must be open at the repository root.
 
----
+2. Run `npm run build`.
 
-## Clean Workspace
+   - Confirm the build exits with code 0 before proceeding.
 
-Create a NEW empty workspace:
-
-```text
-choir-smoke-test/
-```
-
-Ensure NO existing:
-
-```text
-.choir/
-choir.config.yaml
-```
+3. Run `git status --short` and record any pre-existing local changes.
 
 ---
 
-# Phase 1 — Extension Startup
+## Topic 1: Initialization and Control-Plane Authoring
 
-## Step 1.1 — Extension Activation
+1. In chat, enter `@choir init` and respond to all prompts with a mission, vision, two goals, two constraints, and two non-goals.
 
-Open VSCode.
+   - Confirm `.choir/choir.config.yaml` is created.
+   - Confirm `.choir/state.json` is created.
+   - Confirm the mission, vision, goals, constraints, and non-goals in `.choir/choir.config.yaml` match exactly what was entered.
+   - Confirm the YAML file parses without schema errors.
 
-Open:
+2. In chat, enter `@choir status`.
 
-```text
-choir-smoke-test/
-```
+   - Confirm a summary of the control-plane and state-plane is returned.
+   - Confirm no runtime exception is shown.
 
-Assertions:
+3. In chat, enter `@choir define mission "<new mission text>"`.
 
-```text
-✔ Choir extension activates
-✔ no activation errors
-✔ extension host stable
-✔ commands registered
-✔ @choir visible in chat
-```
+   - Confirm the mission field updates in `.choir/choir.config.yaml`.
 
----
+4. In chat, enter `@choir define vision "<new vision text>"`.
 
-## Step 1.2 — Command Registration
+   - Confirm the vision field updates in `.choir/choir.config.yaml`.
 
-Open Command Palette.
+5. In chat, enter `@choir define goal "<goal-1>"` and then `@choir define goal "<goal-2>"`.
 
-Validate commands exist:
+   - Confirm both goals are present in the control plane.
+   - Confirm order is consistent across multiple reads.
 
-```text
-Choir: Init
-Choir: Preview
-Choir: Simulate
-Choir: Execute
-Choir: Verify
-Choir: Open Control Center
-Choir: Open Dependency Graph
-Choir: Open Timeline
-```
+6. In chat, enter `@choir define constraint "<constraint-1>"` and then `@choir define constraint "<constraint-2>"`.
 
-Assertions:
+   - Confirm both constraints are persisted.
 
-```text
-✔ all commands registered
-✔ no missing handlers
-```
+7. In chat, enter `@choir define non-goal "<non-goal-1>"` and then `@choir define non-goal "<non-goal-2>"`.
+
+   - Confirm both non-goals are persisted.
+   - Confirm `.choir/choir.config.yaml` remains valid YAML after all define operations.
 
 ---
 
-# Phase 2 — Initialization
+## Topic 2: Analysis and Planning
 
-## Step 2.1 — Smart Init
+1. In chat, enter `@choir analyze workspace`.
 
-Run:
+   - Confirm analysis completes without runtime errors.
 
-```text
-@choir init
-```
+2. In chat, enter `@choir analyze hotspots`.
 
-Assertions:
+   - Confirm hotspot output is returned.
+   - Re-run with unchanged workspace and confirm stable output.
 
-```text
-✔ init wizard appears
-✔ guided prompts shown
-✔ defaults suggested
-✔ workspace analyzed
-✔ deterministic config generated
-```
+3. In chat, enter `@choir analyze summary`.
 
-Expected files:
+   - Confirm the summary is coherent with workspace content.
 
-```text
-choir.config.yaml
-.choir/state.json
-.choir/audit/
-.choir/traces/
-```
+4. In chat, enter `@choir plan --optimize`.
+
+   - Confirm multiple candidate plans are evaluated.
+   - Confirm a selected plan and strategy are returned.
+
+5. Re-run `@choir plan --optimize` without changing any input.
+
+   - Confirm the same plan and strategy are selected (deterministic output).
 
 ---
 
-## Step 2.2 — Config Validation
+## Topic 3: Simulation, Preview, Execution, and Rollout
 
-Open:
+1. In chat, enter `@choir simulate`.
 
-```text
-choir.config.yaml
-```
+   - Confirm simulation completes successfully.
+   - Confirm no workspace writes or state commits occur as a side effect.
 
-Assertions:
+2. In chat, enter `@choir preview`.
 
-```text
-✔ valid YAML
-✔ canonical ordering
-✔ required fields present
-✔ no empty invalid sections
-```
+   - Confirm preview is generated successfully.
+   - Confirm a preview hash or identity token is present in the response.
 
----
+3. In chat, enter `@choir execute`.
 
-# Phase 3 — DSL + Compiler Pipeline
+   - Confirm execution succeeds from intent-first flow (no manually pre-created plan required).
+   - Confirm pre-commit simulation parity and integrity checks are reported as passing.
+   - Confirm post-execution replay verification succeeds.
 
-## Step 3.1 — Create Intent
+4. In chat, enter `@choir execute --strategy all-at-once`.
 
-Run:
+   - Confirm successful execution with rollout output.
 
-```text
-@choir set goal "Create sample API layer"
-```
+5. In chat, enter `@choir execute --strategy canary`.
 
-Assertions:
+   - Confirm staged canary progression and per-stage validation are reported.
 
-```text
-✔ goal accepted
-✔ DSL state updated
-✔ YAML updated
-```
+6. In chat, enter `@choir execute --strategy phased`.
 
----
+   - Confirm phased progression is reported.
 
-## Step 3.2 — Compiler Pipeline
+7. In chat, enter `@choir execute --strategy batched`.
 
-Run:
+   - Confirm batched progression is reported.
 
-```text
-@choir preview
-```
+8. In chat, enter `@choir status`.
 
-Assertions:
-
-```text
-✔ compiler executes
-✔ AST generated
-✔ validation passes
-✔ plan synthesized automatically
-✔ deterministic preview generated
-```
-
-Expected diagnostics:
-
-```text
-compile
-structural-validation
-semantic-validation
-cross-node-validation
-candidate-synthesis
-strategy-ranking
-strategy-selection
-orchestration-build
-simulation
-replay-verification
-```
+   - Confirm status reflects the latest execution state.
 
 ---
 
-# Phase 4 — Autonomous Planning
+## Topic 4: Rollback and Failure Isolation
 
-## Step 4.1 — Plan Optimization
+1. Trigger an execution that changes state.
 
-Run:
+   - Confirm the state change is observable before rollback.
 
-```text
-@choir plan --optimize
-```
+2. In chat, enter `@choir rollback`.
 
-Assertions:
+   - Confirm rollback completes successfully.
+   - Confirm state and workspace are restored to pre-execution values.
 
-```text
-✔ no preexisting plan required
-✔ multiple candidate plans synthesized automatically
-✔ candidate ranking visible
-✔ deterministic strategy selected
-✔ orchestration DAG generated
-✔ rollback scope computed
-```
+3. In chat, enter `@choir rollback --stage <stageId>` using a valid stage id from a prior run.
 
-Expected:
+   - Confirm stage-scoped rollback behavior is reported.
 
-```text
-strategy: ...
-plan: ... (synthesized)
-```
+4. In chat, enter `@choir rollback <unitId>` using a valid unit id from a prior run.
+
+   - Confirm unit-targeted rollback behavior is reported.
 
 ---
 
-## Step 4.2 — Determinism Check
+## Topic 5: Policy Enforcement and Approval Gates
 
-Run:
+1. Add a `deny` rule for a specific action prefix in `.choir/policies.dsl`.
 
-```text
-@choir plan --optimize
-```
+2. Execute the action covered by the deny rule.
 
-3 times.
+   - Confirm the action is blocked and the response is fail-closed (no partial write).
 
-Assertions:
+3. Replace the deny rule with a `require-approval` rule for the same action.
 
-```text
-✔ same plan ID
-✔ same strategy
-✔ same hashes
-✔ same orchestration ordering
-```
+4. Re-run the covered action.
 
----
+   - Confirm the response shows approval is required and includes a pending identifier or hash.
 
-# Phase 5 — Simulation
+5. Approve the pending action using the pending identifier, then re-run the action.
 
-## Step 5.1 — Autonomous Simulation
+   - Confirm the action proceeds only after approval.
 
-Run:
+6. Create a new pending action and reject it using `@choir reject <id>`.
 
-```text
-@choir simulate
-```
+   - Confirm the action remains blocked after rejection.
 
-Assertions:
+7. In chat, enter `@choir policy status`.
 
-```text
-✔ simulation succeeds
-✔ no persisted state mutation
-✔ replay verified
-✔ simulation hash generated
-✔ future state hash generated
-```
-
-Expected output sections:
-
-```text
-Simulation successful
-Replay verified
-hashMatch: true
-```
+   - Confirm the effective policy decision summary reflects the current rules correctly.
 
 ---
 
-## Step 5.2 — Simulation Determinism
+## Topic 6: Graph, Timeline, Diagnostics, and Webview Surfaces
 
-Run:
+1. Open the Command Palette and run **Choir: Open Control Center**.
 
-```text
-@choir simulate
-```
+   - Confirm the panel loads and renders without console or runtime errors.
 
-3 times.
+2. Open the Command Palette and run **Choir: Open Dependency Graph**.
 
-Assertions:
+   - Confirm the graph panel loads and dependency data renders.
 
-```text
-✔ identical futureState hashes
-✔ identical strategy IDs
-✔ identical traces
-✔ identical orchestration stages
-```
+3. Open the Command Palette and run **Choir: Open Timeline**.
 
----
+   - Confirm the timeline panel loads and prior transitions appear.
 
-# Phase 6 — Preview
+4. Open the Command Palette and run **Choir: Open Diagnostics**.
 
-## Step 6.1 — Execution Preview
+   - Confirm the diagnostics panel loads and displays entries.
 
-Run:
+5. In chat, enter `@choir graph`.
 
-```text
-@choir preview
-```
+   - Confirm a graph summary is returned.
 
-Assertions:
+6. In chat, enter `@choir graph focus <node>` using a known node id.
 
-```text
-✔ preview synthesized automatically
-✔ exact execution stages shown
-✔ policy decision shown
-✔ rollback scope shown
-✔ preview hash generated
-```
+   - Confirm focused node projection is returned.
 
-Expected sections:
+7. In chat, enter `@choir graph dependencies <node>`.
 
-```text
-Policy
-Execution stages
-Rollback scope
-Preview hash
-```
+   - Confirm the dependency list is returned and matches known structure.
+
+8. In chat, enter `@choir graph dependents <node>`.
+
+   - Confirm the dependents list is returned and matches known structure.
+
+9. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
+
+   - Confirm the trace opens and host-to-webview events are shown.
+
+10. Open the Command Palette and run **Choir: Show DSL Editor Trace**.
+
+    - Confirm the trace opens without rendering or runtime errors.
 
 ---
 
-## Step 6.2 — Preview Consistency
+## Topic 7: Governance, Audit, and Reporting
 
-Assertions:
+1. In chat, enter `@choir audit log`.
 
-```text
-✔ preview uses same strategy as simulation
-✔ preview hashes stable
-✔ preview deterministic
-```
+   - Confirm audit entries are returned.
 
----
+2. In chat, enter `@choir audit query`.
 
-# Phase 7 — Policy Enforcement
+   - Confirm query results are returned and readable.
 
-## Step 7.1 — Policy Evaluation
+3. In chat, enter `@choir audit report`.
 
-Assertions:
+   - Confirm compliance report artifacts are generated.
 
-```text
-✔ org policies evaluated
-✔ repo policies evaluated
-✔ environment policies evaluated
-✔ deny precedence enforced
-```
+4. Open `.choir/audit.log.jsonl` in a text editor or run `cat .choir/audit.log.jsonl`.
+
+   - Confirm the file exists and contains entries from the current run.
+   - Confirm no entries from the current run are missing or out of order.
 
 ---
 
-## Step 7.2 — Approval Enforcement
+## Topic 8: Refactor Feature Surface
 
-If preview requires approval:
+1. Run `@choir refactor rename <symbol> <newName>` using a real symbol in the workspace.
 
-Run:
+   - Confirm the refactor preview and execute path completes without corruption.
+   - Confirm the renamed symbol appears correctly across all affected source files.
 
-```text
-@choir execute
-```
+2. Run `@choir refactor inline <symbol>` using a valid symbol.
 
-Assertions:
+   - Confirm inline completes safely with no stray source artifacts.
 
-```text
-✔ execution blocked without approval
-✔ approval hash binding enforced
-```
+3. Run `@choir refactor move <symbol> <targetUnit>`.
 
----
+   - Confirm the command is accepted at the parse or plan level.
+   - Confirm execution fails closed with a clear message if the execution path is not yet enabled.
 
-# Phase 8 — Execution
+4. Run `@choir refactor extract <symbol> <targetUnit>`.
 
-## Step 8.1 — Autonomous Execution
-
-Run:
-
-```text
-@choir execute
-```
-
-Assertions:
-
-```text
-✔ no persisted plan required
-✔ plan synthesized automatically
-✔ simulation parity precheck passes
-✔ transaction begins
-✔ orchestration executes
-✔ commit succeeds
-✔ replay verified
-```
-
-Expected sections:
-
-```text
-Execution successful
-Replay verified
-finalState
-replayState
-```
+   - Confirm the command is accepted at the parse or plan level.
+   - Confirm execution fails closed with a clear message if the execution path is not yet enabled.
 
 ---
 
-## Step 8.2 — Simulation / Execution Equivalence
+## Topic 9: Library and Import Commands
 
-Capture:
+1. Run `@choir library list`.
 
-From simulation:
+   - Confirm the command returns a result without error.
 
-```text
-futureStateHash
-```
+2. Run `@choir import <lib>@<selector>` using a prepared library reference.
 
-From execution:
+   - Confirm the command completes without a runtime exception.
 
-```text
-finalStateHash
-```
+3. Run `@choir library install <lib>@<selector>`.
 
-Assertions:
+   - Confirm the install result is reported.
 
-```text
-✔ simulation.futureStateHash === execution.finalStateHash
-```
+4. Run `@choir library update <identifier>`.
 
----
+   - Confirm the update result is reported.
 
-## Step 8.3 — Replay Equivalence
+5. Run `@choir library lock`.
 
-Capture:
-
-```text
-execution.finalStateHash
-replay.hash
-```
-
-Assertions:
-
-```text
-✔ replay.hash === execution.finalStateHash
-```
+   - Confirm lock behavior and any lock artifacts are reported.
 
 ---
 
-# Phase 9 — Rollback
+## Topic 10: CI Pipeline
 
-## Step 9.1 — Forced Failure
+1. Confirm `.choir/choir.config.yaml` is valid (run `@choir status` if unsure).
 
-Inject invalid mutation.
+2. Run `@choir ci run`.
 
-Run:
-
-```text
-@choir execute
-```
-
-Assertions:
-
-```text
-✔ transaction failure detected
-✔ rollback executed
-✔ no partial commit
-✔ unrelated units preserved
-```
+   - Confirm the CI pipeline completes successfully.
+   - Confirm the canonical stage order is reported: `source → compile → plan → policy → preview → execute → audit`.
+   - Confirm CI artifacts are written under `.choir/artifacts/ci/`.
 
 ---
 
-# Phase 10 — Audit + Replay
+## Topic 11: CLI Verification Surface
 
-## Step 10.1 — Audit Validation
+Run each command below and confirm the stated result for each.
 
-Inspect:
+1. `node out/cli.js verify --compiler` — compiler verification passes with no failures.
 
-```text
-.choir/audit/
-```
+2. `node out/cli.js verify --determinism` — determinism verification passes.
 
-Assertions:
+3. `node out/cli.js verify --transactions` — transaction verification passes.
 
-```text
-✔ append-only logs exist
-✔ hashes present
-✔ transitions recorded
-✔ traces persisted
-```
+4. `node out/cli.js verify --state` — state integrity verification passes.
 
----
+5. `node out/cli.js verify --policy` — policy enforcement verification passes.
 
-## Step 10.2 — Replay Command
+6. `node out/cli.js verify --orchestration` — global orchestration verification passes.
 
-Run:
+7. `node out/cli.js verify --production` — production readiness verification passes.
 
-```text
-@choir replay
-```
+8. `node out/cli.js verify --property --seed 1337` — property test run reports zero failures.
 
-Assertions:
+9. `node out/cli.js verify --chaos moderate --seed 1337` — chaos test run reports zero failures.
 
-```text
-✔ replay succeeds
-✔ replay deterministic
-✔ hashes match execution
-```
+10. `node out/cli.js verify --full` — full-system gate passes with no unresolved invariant or hardening failures.
 
 ---
 
-# Phase 11 — Webviews
+## Topic 12: Determinism and Repeatability
 
-## Step 11.1 — Control Center
+Run each command below a second time on unchanged inputs and confirm stability.
 
-Open:
+1. Re-run `@choir plan --optimize`.
 
-```text
-Choir: Open Control Center
-```
+   - Confirm the same plan and strategy are selected.
 
-Assertions:
+2. Re-run `@choir preview`.
 
-```text
-✔ webview opens
-✔ no blank screen
-✔ state loaded
-✔ orchestration visible
-```
+   - Confirm the preview hash or identity token is identical to the first run.
+
+3. Re-run `@choir simulate`.
+
+   - Confirm the simulation outcome matches the first run.
 
 ---
 
-## Step 11.2 — Dependency Graph
+## Sign-Off
 
-Open:
+| Topic | Result | Notes |
+|---|---|---|
+| 1. Initialization and Control-Plane Authoring | PASS / FAIL | |
+| 2. Analysis and Planning | PASS / FAIL | |
+| 3. Simulation, Preview, Execution, and Rollout | PASS / FAIL | |
+| 4. Rollback and Failure Isolation | PASS / FAIL | |
+| 5. Policy Enforcement and Approval Gates | PASS / FAIL | |
+| 6. Graph, Timeline, Diagnostics, and Webview Surfaces | PASS / FAIL | |
+| 7. Governance, Audit, and Reporting | PASS / FAIL | |
+| 8. Refactor Feature Surface | PASS / FAIL | |
+| 9. Library and Import Commands | PASS / FAIL | |
+| 10. CI Pipeline | PASS / FAIL | |
+| 11. CLI Verification Surface | PASS / FAIL | |
+| 12. Determinism and Repeatability | PASS / FAIL | |
 
-```text
-Choir: Open Dependency Graph
-```
+**Overall result:** PASS / FAIL
 
-Assertions:
+**Tester:**
 
-```text
-✔ graph renders
-✔ nodes visible
-✔ edges visible
-✔ deterministic ordering
-```
+**Date:**
 
----
-
-## Step 11.3 — Timeline
-
-Open timeline.
-
-Assertions:
-
-```text
-✔ transitions visible
-✔ replay traces visible
-✔ execution stages visible
-```
-
----
-
-# Phase 12 — Verification Harnesses
-
-## Step 12.1 — Contract Verification
-
-Run:
-
-```bash
-npm run verify
-```
-
-Assertions:
-
-```text
-✔ verification passes
-✔ no contract failures
-```
-
----
-
-## Step 12.2 — Architecture Tests
-
-Run:
-
-```bash
-npm run test:architecture
-```
-
-Assertions:
-
-```text
-✔ architecture tests pass
-```
-
----
-
-## Step 12.3 — Property Tests
-
-Run:
-
-```bash
-npm run verify:property
-```
-
-Assertions:
-
-```text
-✔ invariants preserved
-✔ deterministic outputs
-```
-
----
-
-## Step 12.4 — Chaos Tests
-
-Run:
-
-```bash
-npm run verify:chaos
-```
-
-Assertions:
-
-```text
-✔ rollback remains correct
-✔ no corruption
-✔ invariants preserved
-```
-
----
-
-# Phase 13 — Final Contract Validation
-
-## Step 13.1 — Full Contract Verification
-
-Run:
-
-```text
-@choir verify --contracts
-```
-
-Assertions:
-
-```text
-✔ 14/14 contracts pass
-```
-
----
-
-# Final Smoke Test Acceptance Criteria
-
-Choir passes smoke testing ONLY if:
-
-```text
-✔ extension activates
-✔ init succeeds
-✔ compiler succeeds
-✔ plans synthesize automatically
-✔ simulation succeeds
-✔ preview succeeds
-✔ execution succeeds
-✔ rollback works
-✔ replay matches execution
-✔ policies enforced
-✔ orchestration deterministic
-✔ webviews functional
-✔ verification harnesses pass
-✔ no nondeterminism detected
-✔ all contracts pass
-```
-
----
-
-# Final Release Gate
-
-Choir is considered:
-
-```text
-SMOKE TEST PASSING
-```
-
-ONLY if:
-
-```text
-✔ no manual intervention required
-✔ no persisted plans required
-✔ autonomous orchestration operational
-✔ simulatio
+**Defects filed (if any):**
