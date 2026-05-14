@@ -9,6 +9,8 @@ import {
   stableStringify,
   type DeterministicContext,
 } from "./deterministicCore.js";
+import { isRecord } from "../utils/guards.js";
+import { cloneJsonOrUndefined } from "../utils/clone.js";
 import { SystemState } from "./distributedSync.js";
 import { recordCommittedTransaction } from "./persistentStateAudit.js";
 import {
@@ -497,7 +499,7 @@ export type TransactionTrace = {
   finalStateHash: string;
 };
 
-export type TransactionBatch = {
+type TransactionBatch = {
   transactions: Transaction[];
 };
 
@@ -618,20 +620,12 @@ type InternalRunResult = {
   failure?: ExecutionFailure;
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function stableSortUnknown(value: unknown): unknown {
   return canonicalizeUnknown(value);
 }
 
 function cloneUnknown<T>(value: T): T {
-  if (typeof value === "undefined") {
-    return value;
-  }
-
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJsonOrUndefined(value);
 }
 
 export function cloneState(state: GlobalState): GlobalState {
@@ -848,24 +842,37 @@ export function groupIntoStages(sortedUnits: GlobalUnit[]): Stage[] {
 export function isolateFailure(unitId: string, dag: DAG): string[] {
   const affected = new Set<string>([unitId]);
   const queue: string[] = [unitId];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
+  const enqueueSorted = (value: string): void => {
+    let insertAt = queue.length;
+    for (let index = queueIndex; index < queue.length; index += 1) {
+      if (value.localeCompare(queue[index] as string) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+
+    queue.splice(insertAt, 0, value);
+  };
+
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as string;
+    queueIndex += 1;
     for (const dependentId of dag.dependentsByNode[current] ?? []) {
       if (affected.has(dependentId)) {
         continue;
       }
 
       affected.add(dependentId);
-      queue.push(dependentId);
-      queue.sort((left, right) => left.localeCompare(right));
+      enqueueSorted(dependentId);
     }
   }
 
   return sortedUnique([...affected]);
 }
 
-export function rollbackScope(units: string[]): string[] {
+function rollbackScope(units: string[]): string[] {
   return sortedUnique(units);
 }
 
@@ -1519,9 +1526,23 @@ export function validateIsolation(
   const adjacency = graphAdjacencyBySource(graph);
   const reachable = new Set<string>([failedUnit]);
   const queue: string[] = [failedUnit];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
+  const enqueueSorted = (value: string): void => {
+    let insertAt = queue.length;
+    for (let index = queueIndex; index < queue.length; index += 1) {
+      if (value.localeCompare(queue[index] as string) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+
+    queue.splice(insertAt, 0, value);
+  };
+
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as string;
+    queueIndex += 1;
     const dependents = adjacency.get(current) ?? [];
     for (const dependent of dependents) {
       if (reachable.has(dependent)) {
@@ -1529,8 +1550,7 @@ export function validateIsolation(
       }
 
       reachable.add(dependent);
-      queue.push(dependent);
-      queue.sort((left, right) => left.localeCompare(right));
+      enqueueSorted(dependent);
     }
   }
 
@@ -1639,9 +1659,11 @@ function hasPath(from: string, to: string, graph: DependencyGraph): boolean {
   const adjacency = graphAdjacencyBySource(graph);
   const visited = new Set<string>();
   const queue: string[] = [from];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as string;
+    queueIndex += 1;
     if (visited.has(current)) {
       continue;
     }
@@ -1797,8 +1819,23 @@ function filterPlanForUnits(plan: GlobalPlan, units: string[]): GlobalPlan {
   );
 
   const queue = [...required].sort((left, right) => left.localeCompare(right));
-  while (queue.length > 0) {
-    const taskId = queue.shift() as string;
+  let queueIndex = 0;
+
+  const enqueueSortedDependency = (taskId: string): void => {
+    let insertAt = queue.length;
+    for (let index = queueIndex; index < queue.length; index += 1) {
+      if (taskId.localeCompare(queue[index] as string) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+
+    queue.splice(insertAt, 0, taskId);
+  };
+
+  while (queueIndex < queue.length) {
+    const taskId = queue[queueIndex] as string;
+    queueIndex += 1;
     const task = taskById.get(taskId);
     if (!task) {
       continue;
@@ -1810,8 +1847,7 @@ function filterPlanForUnits(plan: GlobalPlan, units: string[]): GlobalPlan {
       }
 
       required.add(dependencyId);
-      queue.push(dependencyId);
-      queue.sort((left, right) => left.localeCompare(right));
+      enqueueSortedDependency(dependencyId);
     }
   }
 
@@ -4535,7 +4571,7 @@ export function validateStage(
   };
 }
 
-export function rollbackStage(
+function rollbackStage(
   stage: ExecutionStage,
   stableState: GlobalState,
   currentState: GlobalState

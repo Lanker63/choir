@@ -2,7 +2,7 @@ import ts from "typescript";
 import { ValidationResult } from "../ast/model.js";
 import { SourceLocation } from "../core/types.js";
 
-export type ASTNode = ts.Node;
+type ASTNode = ts.Node;
 
 export type Patch =
   | ReplacePatch

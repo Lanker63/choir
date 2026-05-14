@@ -364,7 +364,7 @@ export function emitTelemetryEvent(type: TelemetryEvent["type"], payload: unknow
   return event;
 }
 
-export function emitMetric(name: string, value: number, tags: Record<string, string> = {}): Metric {
+function emitMetric(name: string, value: number, tags: Record<string, string> = {}): Metric {
   pushMetric(name, value, tags);
   emitTelemetryEvent("validation", {
     metric: {
@@ -470,7 +470,7 @@ export function appendStructuredLog(level: LogEntry["level"], message: string, c
   return entry;
 }
 
-export function formatStructuredLog(entry: LogEntry): string {
+function formatStructuredLog(entry: LogEntry): string {
   return stableStringify({
     level: entry.level,
     message: entry.message,
@@ -649,7 +649,7 @@ export function evaluateAlerts(root?: string): Alert[] {
   return [...store.alerts];
 }
 
-export function listIncidents(): Incident[] {
+function listIncidents(): Incident[] {
   return [...store.incidents];
 }
 
@@ -1023,15 +1023,15 @@ export function listTelemetryEvents(): TelemetryEvent[] {
   return [...store.telemetryEvents];
 }
 
-export function listMetrics(): Metric[] {
+function listMetrics(): Metric[] {
   return [...store.metrics];
 }
 
-export function listTraces(): Trace[] {
+function listTraces(): Trace[] {
   return [...store.traces];
 }
 
-export function listLogs(): Array<LogEntry & { id: string; logicalTime: number }> {
+function listLogs(): Array<LogEntry & { id: string; logicalTime: number }> {
   return [...store.logs];
 }
 
@@ -1061,7 +1061,7 @@ export function getProductionSnapshot(root?: string): ProductionSnapshotView {
   };
 }
 
-export function continuousVerificationEnabled(): boolean {
+function continuousVerificationEnabled(): boolean {
   return isFeatureEnabled("continuous-verification.enabled");
 }
 

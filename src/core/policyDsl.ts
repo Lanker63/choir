@@ -734,7 +734,7 @@ export function loadAllPolicies(root: string, environment: Environment): PolicyS
   return sources;
 }
 
-export function compilePolicy(ast: PolicyAST, source: PolicySource = "repo"): CompiledPolicy[] {
+function compilePolicy(ast: PolicyAST, source: PolicySource = "repo"): CompiledPolicy[] {
   return compileFromSource([ast], source);
 }
 

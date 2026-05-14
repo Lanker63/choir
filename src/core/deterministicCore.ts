@@ -1,10 +1,7 @@
 import { createHash } from "crypto";
+import { isRecord } from "../utils/guards.js";
 
 const DETERMINISTIC_EPOCH_MS = Date.UTC(2000, 0, 1);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function canonicalizeUnknown(value: unknown): unknown {
 	if (Array.isArray(value)) {
@@ -86,7 +83,7 @@ export function cloneDeterministicContext(context: DeterministicContext): Determ
 	};
 }
 
-export function nextLogicalTimestamp(context: DeterministicContext): number {
+function nextLogicalTimestamp(context: DeterministicContext): number {
 	context.logicalTime = Math.max(0, Math.floor(context.logicalTime)) + 1;
 	return Math.max(0, Math.floor(context.baseTimestamp)) + context.logicalTime;
 }

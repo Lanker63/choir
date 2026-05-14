@@ -10,6 +10,7 @@ import { detectEnvironment } from "./policyEngine.js";
 import { createEmptyStatePlane, StatePlane, readStatePlane, persistStatePlane } from "./state.js";
 import { Diagnostic, SchedulerTrace, TransactionTrace } from "./types.js";
 import { locationToOffsetRange } from "./diagnostics.js";
+import { cloneJson } from "../utils/clone.js";
 
 export type ExecutionNode = {
   id: string;
@@ -667,7 +668,7 @@ export async function runExecutionPlan(
 }
 
 function cloneStatePlane(state: StatePlane): StatePlane {
-  return JSON.parse(JSON.stringify(state)) as StatePlane;
+  return cloneJson(state);
 }
 
 function cloneFilesRecord(files: Record<string, string>): Record<string, string> {
@@ -1673,7 +1674,7 @@ async function simulateBatch(
   };
 }
 
-export async function runExecutionPlanSimulation(
+async function runExecutionPlanSimulation(
   executionPlan: ExecutionPlan,
   options: SimulationExecutionOptions
 ): Promise<ExecutionSimulationResult> {

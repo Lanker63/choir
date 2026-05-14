@@ -97,7 +97,7 @@ export function validatePatches(normalizedAst: NormalizedAST, patches: Patch[]):
   };
 }
 
-export function applyPatches(ast: AST, normalizedAst: NormalizedAST, patches: Patch[]): AST {
+function applyPatches(ast: AST, normalizedAst: NormalizedAST, patches: Patch[]): AST {
   const result = applyPatchesWithRoundTrip(ast, normalizedAst, patches);
   if (!result.roundTripSafe) {
     const reason = result.patchValidation.issues.map((issue) => issue.message).join(" | ");
@@ -335,6 +335,6 @@ export function applyPatchesWithRoundTrip(
   };
 }
 
-export function generateFixes(_diagnostics: Diagnostic[]): Fix[] {
+function generateFixes(_diagnostics: Diagnostic[]): Fix[] {
   return [];
 }

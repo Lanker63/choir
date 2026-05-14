@@ -33,10 +33,6 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     this.context.subscriptions.push(this.eventSubscription);
   }
 
-  public setDslText(_dsl: string) {
-    // Intentionally no-op in productized UI mode.
-  }
-
   private isDisposedError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /disposed/i.test(message);
@@ -70,11 +66,7 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     this.panel = panel;
     this.configureWebview(panel.webview);
     // Ensure the panel is revealed without stealing focus from editors
-    try {
-      panel.reveal(column, true);
-    } catch (_err) {
-      // ignore
-    }
+    panel.reveal(column, true);
 
     panel.onDidDispose(() => {
       this.webviewRegistrations.get(panel.webview)?.dispose();
@@ -107,12 +99,8 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
 
     // Persist the activeRole from snapshot so subsequent automatic refreshes
     // use the same role the client last asked for.
-    try {
-      if (result && result.snapshot && typeof result.snapshot.activeRole === "string") {
-        this.lastKnownRole = result.snapshot.activeRole;
-      }
-    } catch (err) {
-      // ignore
+    if (result && result.snapshot && typeof result.snapshot.activeRole === "string") {
+      this.lastKnownRole = result.snapshot.activeRole;
     }
 
     this.postMessage({
@@ -214,13 +202,9 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
         if (msg.type === "action" && "payload" in msg) {
           // Track client-initiated role refreshes so we don't immediately
           // override the user's selection with an automatic snapshot.
-          try {
-            if ((msg as any).payload && (msg as any).payload.type === "refresh" && typeof (msg as any).payload.role === "string") {
-              this.lastKnownRole = (msg as any).payload.role;
-              this.lastClientRefreshAt = Date.now();
-            }
-          } catch (_) {
-            // ignore
+          if ((msg as any).payload && (msg as any).payload.type === "refresh" && typeof (msg as any).payload.role === "string") {
+            this.lastKnownRole = (msg as any).payload.role;
+            this.lastClientRefreshAt = Date.now();
           }
 
           const result = await this.service.handleAction(msg.payload);

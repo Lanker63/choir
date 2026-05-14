@@ -254,7 +254,7 @@ export function validateNormalizedAST(normalized: NormalizedAST): ValidationResu
   };
 }
 
-export function validateAST(ast: AST): ValidationResult {
+function validateAST(ast: AST): ValidationResult {
   return validateNormalizedAST(normalizeAST(ast));
 }
 

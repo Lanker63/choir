@@ -510,7 +510,7 @@ export class PipelineDiagnosticsViewProvider {
       const category = categoryFilter.value;
       const query = searchInput.value.trim().toLowerCase();
 
-      return (model.entries || []).filter((entry) => {
+      return (model.entries ?? []).filter((entry) => {
         if (status !== "all" && entry.result !== status) {
           return false;
         }
@@ -572,7 +572,7 @@ export class PipelineDiagnosticsViewProvider {
         return;
       }
 
-      const stageRows = (selected.stages || []).map((stage) => {
+      const stageRows = (selected.stages ?? []).map((stage) => {
         return '<tr>' +
           '<td>' + escapeHtml(stage.stage) + '</td>' +
           '<td><span class="badge ' + escapeHtml(stage.status) + '">' + escapeHtml(stage.status) + '</span></td>' +
@@ -603,7 +603,7 @@ export class PipelineDiagnosticsViewProvider {
       }).join('');
 
       const comparisonRows = comparisons.map((comparison) => {
-        const diff = comparison.diff || {};
+        const diff = comparison.diff ?? {};
         return '<tr>' +
           '<td>' + escapeHtml(comparison.from || '') + '</td>' +
           '<td>' + escapeHtml(comparison.to || '') + '</td>' +

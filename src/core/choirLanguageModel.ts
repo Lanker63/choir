@@ -326,9 +326,11 @@ function tokenizeForCompletion(input: string): CompletionLexResult {
 function epsilonClosure(initial: Set<ParserState>): Set<ParserState> {
   const closure = new Set<ParserState>(initial);
   const queue: ParserState[] = [...initial];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const state = queue.shift() as ParserState;
+  while (queueIndex < queue.length) {
+    const state = queue[queueIndex] as ParserState;
+    queueIndex += 1;
 
     if (
       state === "plan-tail"

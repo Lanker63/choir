@@ -148,7 +148,7 @@ export function readPlanningTrace(root: string, traceId: string): PlanningTraceR
   }
 }
 
-export function readLatestPlanningTrace(root: string): PlanningTraceRecord | null {
+function readLatestPlanningTrace(root: string): PlanningTraceRecord | null {
   const filePath = latestTracePath(root);
   if (!fs.existsSync(filePath)) {
     return null;

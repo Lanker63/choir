@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { deterministicId, stableStringify } from "./deterministicCore.js";
+import { isRecord } from "../utils/guards.js";
 
 export type OrchestrationTraceStageResult = {
   stage: string;
@@ -87,10 +88,6 @@ function traceFilePath(root: string, traceId: string): string {
 
 function ensureTraceDir(root: string): void {
   fs.mkdirSync(tracesDir(root), { recursive: true });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseTrace(value: unknown): OrchestrationTraceRecord | null {

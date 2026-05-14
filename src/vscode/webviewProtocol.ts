@@ -24,7 +24,7 @@ export type WebviewToHost =
   | { type: "REQUEST_STATE" }
   | { type: "NAVIGATE"; intent: NavigationIntent };
 
-export type MessageTrace = {
+type MessageTrace = {
   direction: "host->webview" | "webview->host";
   type: string;
   timestamp: number;

@@ -2,6 +2,8 @@ import fs from "fs";
 import path from "path";
 import { deterministicHash, deterministicId, stableSortBy, stableStringify } from "./deterministicCore.js";
 import type { SystemState } from "./distributedSync.js";
+import { isNonNull } from "../utils/guards.js";
+import { cloneJson } from "../utils/clone.js";
 
 export type GlobalState = Record<string, SystemState>;
 
@@ -91,7 +93,7 @@ function auditPath(root: string): string {
 }
 
 function cloneUnknown<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJson(value);
 }
 
 function atomicWriteJson(filePath: string, payload: string): void {
@@ -326,7 +328,7 @@ export function loadTransitionRecords(root: string): TransitionRecord[] {
   return stableSortBy(
     readJsonLines(transitionsPath(root))
       .map((entry) => parseTransitionRecord(entry))
-      .filter((entry): entry is TransitionRecord => entry !== null),
+      .filter(isNonNull),
     (entry) => `${entry.logicalTime.toString().padStart(12, "0")}:${entry.id}`
   );
 }
@@ -336,7 +338,7 @@ export function loadSnapshots(root: string): Snapshot[] {
   return stableSortBy(
     readJsonLines(snapshotsPath(root))
       .map((entry) => parseSnapshot(entry))
-      .filter((entry): entry is Snapshot => entry !== null),
+      .filter(isNonNull),
     (entry) => `${entry.logicalTime.toString().padStart(12, "0")}:${entry.id}`
   );
 }
@@ -345,7 +347,7 @@ export function loadAuditRecords(root: string): AuditRecord[] {
   ensureStorage(root);
   return readJsonLines(auditPath(root))
     .map((entry) => parseAuditRecord(entry))
-    .filter((entry): entry is AuditRecord => entry !== null);
+    .filter(isNonNull);
 }
 
 function validateTransitionOrder(transitions: TransitionRecord[]): void {

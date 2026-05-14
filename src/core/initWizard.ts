@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { cloneJson } from "../utils/clone.js";
 
 export type InitTemplateName = "backend" | "frontend";
 
@@ -69,7 +70,7 @@ function normalizeText(input: string): string {
 }
 
 function cloneState(state: WizardState): WizardState {
-  return JSON.parse(JSON.stringify(state)) as WizardState;
+  return cloneJson(state);
 }
 
 function listIncludesNormalized(list: string[], candidate: string): boolean {

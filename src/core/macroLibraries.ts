@@ -408,7 +408,7 @@ export function resolveLibraryVersion(root: string, name: string, selector: stri
   return sortedMatches[sortedMatches.length - 1] as string;
 }
 
-export function resolveLibrary(root: string, name: string, selector: string): MacroLibrary {
+function resolveLibrary(root: string, name: string, selector: string): MacroLibrary {
   const resolved = resolveLibraryVersion(root, name, selector);
   return loadMacroLibrary(root, name, resolved);
 }

@@ -360,7 +360,7 @@ export async function runPipeline(input: PipelineInput): Promise<PipelineResult>
   };
 }
 
-export async function runEnforcer(root: string) {
+async function runEnforcer(root: string) {
   const { readControlPlane } = await import("../choirManager.js");
   const controlPlane = readControlPlane();
   if (!controlPlane) {

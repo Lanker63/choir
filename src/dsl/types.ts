@@ -44,7 +44,7 @@ export const DSLRuleSchema = z.object({
 }).strict();
 
 export const DSLRulesSchema = z.array(DSLRuleSchema);
-export const dslSchema = z.toJSONSchema(DSLRulesSchema, { target: "draft-07" });
+const dslSchema = z.toJSONSchema(DSLRulesSchema, { target: "draft-07" });
 
 export type DSLRule = z.infer<typeof DSLRuleSchema>;
 

@@ -68,7 +68,7 @@ export type ConflictResolver = (
 
 const conflictResolvers: ConflictResolver[] = [];
 
-export function registerConflictResolver(resolver: ConflictResolver): () => void {
+function registerConflictResolver(resolver: ConflictResolver): () => void {
   conflictResolvers.push(resolver);
   return () => {
     const index = conflictResolvers.indexOf(resolver);

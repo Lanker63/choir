@@ -13,6 +13,8 @@ import type { YAMLDiff } from "./policyEngine.js";
 import type { AST as DSLAST, ActionNode } from "./choirRouter.js";
 import type { RuleResult } from "./astValidation.js";
 import type { ControlPlane, Plan } from "../schema.js";
+import { isNonNull, isRecord } from "../utils/guards.js";
+import { cloneJson, cloneJsonOrUndefined } from "../utils/clone.js";
 
 export type AST = {
   rootNodeId: string;
@@ -275,15 +277,11 @@ function stableStringify(value: unknown): string {
 }
 
 function deepClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJson(value);
 }
 
 function cloneUnknown<T>(value: T): T {
-  if (typeof value === "undefined") {
-    return value;
-  }
-
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJsonOrUndefined(value);
 }
 
 function splitPath(pathValue: string): string[] {
@@ -576,10 +574,6 @@ function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function isTaskExecutionStatus(value: unknown): value is TaskExecutionStatus {
   return value === "pending" || value === "in-progress" || value === "complete" || value === "failed";
 }
@@ -724,7 +718,7 @@ function parseStrategyHistory(value: unknown): StrategyHistory[] {
     const patterns = Array.isArray(entry.patterns)
       ? entry.patterns
         .map((pattern) => parseFailurePatternRecord(pattern))
-        .filter((pattern): pattern is FailurePatternRecord => pattern !== null)
+        .filter(isNonNull)
       : [];
 
     return [{
@@ -1112,12 +1106,12 @@ export function readStatePlane(root: string): StatePlane | null {
       approvals: Array.isArray(record.approvals)
         ? record.approvals
           .map((entry) => parseApprovalRecord(entry))
-          .filter((entry): entry is ApprovalRecord => entry !== null)
+          .filter(isNonNull)
         : [],
       pendingApprovals: Array.isArray(record.pendingApprovals)
         ? record.pendingApprovals
           .map((entry) => parsePendingApprovalRecord(entry))
-          .filter((entry): entry is PendingApprovalRecord => entry !== null)
+          .filter(isNonNull)
         : [],
     });
 
@@ -1129,7 +1123,9 @@ export function readStatePlane(root: string): StatePlane | null {
     return state;
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`Unable to read valid state.json at ${statePath}: ${reason}`);
+    const wrapped = new Error(`Unable to read valid state.json at ${statePath}: ${reason}`);
+    (wrapped as Error & { cause?: unknown }).cause = error;
+    throw wrapped;
   }
 }
 
@@ -1825,7 +1821,7 @@ export function validateTransition(previous: StatePlane | null, next: StatePlane
   };
 }
 
-export function saveSnapshot(root: string, state: StatePlane, logicalTime?: number): StateSnapshot {
+function saveSnapshot(root: string, state: StatePlane, logicalTime?: number): StateSnapshot {
   const normalized = materializeStatePlane(state);
   const timestamp = typeof logicalTime === "number" && Number.isFinite(logicalTime) && logicalTime > 0
     ? deterministicTimestampFromCounter(Math.floor(logicalTime))
@@ -1884,7 +1880,7 @@ export function listSnapshots(root: string): StateSnapshot[] {
 export function listStateTransitions(root: string): StateTransition[] {
   return readJsonLines<unknown>(stateTransitionsPath(root))
     .map((entry) => normalizeStateTransition(entry))
-    .filter((entry): entry is StateTransition => entry !== null)
+    .filter(isNonNull)
     .sort((left, right) =>
       left.timestamp.localeCompare(right.timestamp)
       || left.id.localeCompare(right.id)
@@ -2085,7 +2081,7 @@ export function jumpTo(root: string, index: number): ReplayResult {
   }
 }
 
-export function replayTo(root: string, snapshotId: string): ReplayResult {
+function replayTo(root: string, snapshotId: string): ReplayResult {
   const transitions = listStateTransitions(root);
   const index = transitions.findIndex((entry) => entry.id === snapshotId || entry.toHash === snapshotId);
   if (index < 0) {

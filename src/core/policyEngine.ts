@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { PolicyEnvironment, PolicyRole } from "../schema.js";
 import { ChoirConfig, canonicalizeConfig } from "./dslYamlCompiler.js";
+import { isRecord } from "../utils/guards.js";
 
 export type Role = PolicyRole;
 export type Environment = PolicyEnvironment;
@@ -140,10 +141,6 @@ export function detectEnvironment(): Environment {
   }
 
   return "local";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function compareUnknown(left: unknown, right: unknown): boolean {

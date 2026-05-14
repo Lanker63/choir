@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import { deterministicId, stableStringify } from "./deterministicCore.js";
+import { isNonNull, isRecord } from "../utils/guards.js";
 
 export type PipelineDiagnosticsCategory =
   | "compiler"
@@ -57,10 +58,6 @@ function ensureDiagnosticsStorage(root: string): void {
   if (!fs.existsSync(filePath)) {
     fs.writeFileSync(filePath, "", "utf-8");
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function parseStage(value: unknown): PipelineDiagnosticsStage | null {
@@ -138,7 +135,7 @@ function parseRecord(value: unknown): PipelineDiagnosticsRecord | null {
   const stages = Array.isArray(value.stages)
     ? value.stages
       .map((entry) => parseStage(entry))
-      .filter((entry): entry is PipelineDiagnosticsStage => entry !== null)
+      .filter(isNonNull)
     : [];
 
   const metadata = isRecord(value.metadata) ? value.metadata : undefined;
@@ -235,7 +232,7 @@ export function readPipelineDiagnosticsRecords(
       }
     })
     .map((entry) => parseRecord(entry))
-    .filter((entry): entry is PipelineDiagnosticsRecord => entry !== null)
+    .filter(isNonNull)
     .sort((left, right) => right.timestamp.localeCompare(left.timestamp) || right.id.localeCompare(left.id));
 
   const limit = options.limit;

@@ -3,6 +3,8 @@ import * as fs from "fs";
 import * as path from "path";
 import { ControlPlane, ControlPlaneSchema, CONTROL_PLANE_VERSION } from "./schema.js";
 import * as YAML from "yaml";
+import { isRecord } from "./utils/guards.js";
+import { cloneJson } from "./utils/clone.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -130,10 +132,6 @@ function ensurePoliciesDSLFile(): void {
     fs.writeFileSync(policiesPath, DEFAULT_POLICIES_DSL, "utf-8");
 }
 
-function isRecord(value: unknown): value is UnknownRecord {
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizedVersion(input: UnknownRecord): string {
     const version = input.version;
     return typeof version === "string" && version.trim().length > 0
@@ -202,7 +200,9 @@ export function readControlPlane(): ControlPlane | null {
         const raw = fs.readFileSync(controlPath, "utf-8");
         return normalizeControlPlane(YAML.parse(raw));
     } catch (error) {
-        throw new Error(describeControlPlaneLoadError(error, controlPath));
+        const wrapped = new Error(describeControlPlaneLoadError(error, controlPath));
+        (wrapped as Error & { cause?: unknown }).cause = error;
+        throw wrapped;
     }
 }
 
@@ -225,7 +225,7 @@ export function updateControlPlane(updater: (current: ControlPlane) => ControlPl
     }
 
     // Serialize + parse to ensure immutable update input and deterministic writes.
-    const clone = JSON.parse(JSON.stringify(current)) as ControlPlane;
+    const clone = cloneJson(current);
     const updated = updater(clone);
     writeControlPlane(updated);
     return updated;

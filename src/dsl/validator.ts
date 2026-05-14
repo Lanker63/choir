@@ -1,6 +1,6 @@
 import { DSLRule } from "./types.js";
 
-export function validateDSLStructure(rules: DSLRule[]) {
+function validateDSLStructure(rules: DSLRule[]) {
   const errors: string[] = [];
 
   for (const rule of rules) {

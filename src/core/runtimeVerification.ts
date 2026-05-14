@@ -77,7 +77,7 @@ async function runPreviewWithState(root: string): Promise<Awaited<ReturnType<typ
   });
 }
 
-export async function runRuntimeVerification(): Promise<RuntimeVerificationReport> {
+async function runRuntimeVerification(): Promise<RuntimeVerificationReport> {
   const checks: RuntimeVerificationCheck[] = [];
 
   const modeRoots = {
@@ -329,7 +329,7 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
   };
 }
 
-export function formatRuntimeVerificationReport(report: RuntimeVerificationReport): string {
+function formatRuntimeVerificationReport(report: RuntimeVerificationReport): string {
   const lines = [
     `${report.passed ? "PASS" : "FAIL"} runtime verification`,
     ...report.checks.map((check) => `- ${check.name}: ${check.passed ? "PASS" : "FAIL"} (${check.detail})`),

@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { z } from "zod";
+import { sortByIdAndParameterName } from "../utils/registrySort.js";
 import { recordAudit } from "./audit.js";
 import {
   MacroLibraryTrace,
@@ -74,13 +75,11 @@ function macroFilePath(root: string): string {
 
 function sortRegistry(registry: MacroRegistry): MacroRegistry {
   return {
-    macros: [...registry.macros]
+    macros: sortByIdAndParameterName(registry.macros
       .map((macro) => ({
         ...macro,
-        parameters: [...(macro.parameters ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
         body: [...macro.body],
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
+      }))),
   };
 }
 

@@ -16,7 +16,7 @@ export function comparePositions(
   return left.character - right.character;
 }
 
-export function compareSourceLocations(left: SourceLocation, right: SourceLocation): number {
+function compareSourceLocations(left: SourceLocation, right: SourceLocation): number {
   if (left.file !== right.file) {
     return left.file.localeCompare(right.file);
   }
@@ -57,7 +57,7 @@ export function sortDiagnostics(diagnostics: Diagnostic[]): Diagnostic[] {
   });
 }
 
-export function severityFromTypeScriptCategory(category: ts.DiagnosticCategory): DiagnosticSeverity {
+function severityFromTypeScriptCategory(category: ts.DiagnosticCategory): DiagnosticSeverity {
   if (category === ts.DiagnosticCategory.Warning) {
     return "warning";
   }

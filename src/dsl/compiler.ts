@@ -198,7 +198,7 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
   };
 }
 
-export function compileAndRegister(
+function compileAndRegister(
   dslRules: DSLRule[],
   registry: RuleRegistry
 ) {

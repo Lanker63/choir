@@ -550,7 +550,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
 
     function persistSidebarWidth(width) {
-      const existing = vscode.getState() || {};
+      const existing = vscode.getState() ?? {};
       vscode.setState({
         ...existing,
         sidebarWidth: width,
@@ -608,10 +608,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const outgoing = new Map();
       const incoming = new Map();
       for (const edge of edges) {
-        const out = outgoing.get(edge.source) || [];
+        const out = outgoing.get(edge.source) ?? [];
         out.push(edge.target);
         outgoing.set(edge.source, sortedUnique(out));
-        const inc = incoming.get(edge.target) || [];
+        const inc = incoming.get(edge.target) ?? [];
         inc.push(edge.source);
         incoming.set(edge.target, sortedUnique(inc));
       }
@@ -621,13 +621,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     function traceFrom(start, adjacency) {
       const visited = new Set();
       const queue = [start];
-      while (queue.length > 0) {
-        const current = queue.shift();
+      let queueIndex = 0;
+      while (queueIndex < queue.length) {
+        const current = queue[queueIndex];
+        queueIndex += 1;
         if (visited.has(current)) {
           continue;
         }
         visited.add(current);
-        const next = adjacency.get(current) || [];
+        const next = adjacency.get(current) ?? [];
         for (const nodeId of next) {
           if (!visited.has(nodeId)) {
             queue.push(nodeId);
@@ -648,31 +650,44 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         }
 
         indegree.set(edge.target, (indegree.get(edge.target) || 0) + 1);
-        const existing = outgoing.get(edge.source) || [];
+        const existing = outgoing.get(edge.source) ?? [];
         existing.push(edge.target);
         outgoing.set(edge.source, sortedUnique(existing));
       }
 
       const layer = new Map(nodeIds.map(function(nodeId) { return [nodeId, 0]; }));
       const queue = nodeIds.filter(function(nodeId) { return (indegree.get(nodeId) || 0) === 0; }).sort(function(a, b) { return a.localeCompare(b); });
-      const visited = [];
+      const visitedSet = new Set();
+      let queueIndex = 0;
 
-      while (queue.length > 0) {
-        const current = queue.shift();
-        visited.push(current);
+      function enqueueSorted(nodeId) {
+        let insertAt = queue.length;
+        for (let index = queueIndex; index < queue.length; index += 1) {
+          if (nodeId.localeCompare(queue[index]) < 0) {
+            insertAt = index;
+            break;
+          }
+        }
+
+        queue.splice(insertAt, 0, nodeId);
+      }
+
+      while (queueIndex < queue.length) {
+        const current = queue[queueIndex];
+        queueIndex += 1;
+        visitedSet.add(current);
         const nextLayer = layer.get(current) || 0;
-        for (const next of outgoing.get(current) || []) {
+        for (const next of outgoing.get(current) ?? []) {
           const currentLayer = layer.get(next) || 0;
           layer.set(next, Math.max(currentLayer, nextLayer + 1));
           indegree.set(next, (indegree.get(next) || 0) - 1);
           if ((indegree.get(next) || 0) === 0) {
-            queue.push(next);
+            enqueueSorted(next);
           }
         }
-        queue.sort(function(a, b) { return a.localeCompare(b); });
       }
 
-      const remaining = nodeIds.filter(function(nodeId) { return !visited.includes(nodeId); });
+      const remaining = nodeIds.filter(function(nodeId) { return !visitedSet.has(nodeId); });
       if (remaining.length > 0) {
         const maxLayer = Math.max(0, ...Array.from(layer.values()));
         remaining.sort(function(a, b) { return a.localeCompare(b); }).forEach(function(nodeId, index) {
@@ -683,7 +698,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const grouped = new Map();
       for (const nodeId of nodeIds) {
         const nodeLayer = layer.get(nodeId) || 0;
-        const existing = grouped.get(nodeLayer) || [];
+        const existing = grouped.get(nodeLayer) ?? [];
         existing.push(nodeId);
         grouped.set(nodeLayer, existing.sort(function(a, b) { return a.localeCompare(b); }));
       }
@@ -691,7 +706,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const positions = new Map();
       const layers = Array.from(grouped.keys()).sort(function(a, b) { return a - b; });
       for (const layerId of layers) {
-        const list = grouped.get(layerId) || [];
+        const list = grouped.get(layerId) ?? [];
         list.forEach(function(nodeId, index) {
           const preserved = state.nodePositions.get(nodeId);
           if (preserved) {
@@ -870,7 +885,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       const changedSet = toSet(state.snapshot.changedNodeIds);
       const affectedSet = toSet(state.snapshot.affectedNodeIds);
       const violationSet = toSet(state.snapshot.violationNodeIds);
-      const hotspotSet = new Set((state.snapshot.hotspots || []).map(function(entry) { return entry.nodeId; }));
+      const hotspotSet = new Set((state.snapshot.hotspots ?? []).map(function(entry) { return entry.nodeId; }));
       const planOrder = new Map();
       if (state.snapshot.planOverlay && Array.isArray(state.snapshot.planOverlay.steps)) {
         for (const step of state.snapshot.planOverlay.steps) {
@@ -1053,8 +1068,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       modeSelect.value = snapshot.mode;
       statusLine.textContent = "nodes=" + snapshot.graph.nodes.length
         + ", edges=" + snapshot.graph.edges.length
-        + ", changed=" + (snapshot.changedNodeIds || []).length
-        + ", violations=" + (snapshot.violationNodeIds || []).length;
+        + ", changed=" + (snapshot.changedNodeIds ?? []).length
+        + ", violations=" + (snapshot.violationNodeIds ?? []).length;
 
       traceLine.textContent = "stateHash=" + snapshot.trace.sourceStateHash
         + ", rendered=" + snapshot.trace.nodesRendered + "/" + snapshot.trace.edgesRendered;
@@ -1162,7 +1177,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       applySidebarWidth(currentSidebarWidth(), false);
     });
 
-    const savedState = vscode.getState() || {};
+    const savedState = vscode.getState() ?? {};
     applySidebarWidth(parsePixelValue(savedState.sidebarWidth, 320), false);
 
     window.addEventListener("message", function(event) {

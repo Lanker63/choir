@@ -450,9 +450,23 @@ function buildDependencyOrder(snapshot: WorkspaceSnapshot, affectedUnits: string
 
   const queue = [...impacted].filter((unit) => (indegree.get(unit) ?? 0) === 0).sort((a, b) => a.localeCompare(b));
   const order: string[] = [];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const unit = queue.shift() as string;
+  const enqueueSorted = (unit: string): void => {
+    let insertAt = queue.length;
+    for (let index = queueIndex; index < queue.length; index += 1) {
+      if (unit.localeCompare(queue[index] as string) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+
+    queue.splice(insertAt, 0, unit);
+  };
+
+  while (queueIndex < queue.length) {
+    const unit = queue[queueIndex] as string;
+    queueIndex += 1;
     order.push(unit);
 
     const nextDependents = [...(dependents.get(unit) ?? new Set<string>())].sort((a, b) => a.localeCompare(b));
@@ -460,8 +474,7 @@ function buildDependencyOrder(snapshot: WorkspaceSnapshot, affectedUnits: string
       const next = (indegree.get(dependent) ?? 0) - 1;
       indegree.set(dependent, next);
       if (next === 0) {
-        queue.push(dependent);
-        queue.sort((a, b) => a.localeCompare(b));
+        enqueueSorted(dependent);
       }
     }
   }

@@ -313,7 +313,7 @@ export class TimelineViewProvider {
 
       statusLine.textContent = 'Generated: ' + model.generatedAt + ' | Current index: ' + model.timeline.currentIndex;
 
-      timelineList.innerHTML = (model.timeline.states || []).map((entry) => {
+      timelineList.innerHTML = (model.timeline.states ?? []).map((entry) => {
         const isCurrent = entry.index === model.timeline.currentIndex;
         return '<button class="timeline-item ' + (isCurrent ? 'current' : '') + '" data-index="' + entry.index + '">' + entry.label + ' - ' + entry.action + '</button>';
       }).join('');

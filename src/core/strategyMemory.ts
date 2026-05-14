@@ -5,6 +5,7 @@ import { ControlPlane, Plan, Task } from "../schema.js";
 import { StatePlane } from "./state.js";
 import { deterministicTimestampFromString } from "./deterministicCore.js";
 import type { StrategyMetrics, StrategyMutation, StrategyOutcome, StrategyType } from "./strategyPlanner.js";
+import { cloneJson } from "../utils/clone.js";
 
 export type ContextSignature = {
   goals: string[];
@@ -134,7 +135,7 @@ function normalizeAdaptiveFeedback(feedback: StrategyMemoryEntry["adaptive"] | u
 
 export function normalizePlan(plan: Plan): Plan {
   return {
-    ...JSON.parse(JSON.stringify(plan)) as Plan,
+    ...cloneJson(plan),
     tasks: plan.tasks.map((task) => normalizeTask(task)),
   };
 }
@@ -205,7 +206,7 @@ export function matchSignature(left: ContextSignature, right: ContextSignature):
   return JSON.stringify(normalizeSignature(left)) === JSON.stringify(normalizeSignature(right));
 }
 
-export function partialMatch(left: ContextSignature, right: ContextSignature): boolean {
+function partialMatch(left: ContextSignature, right: ContextSignature): boolean {
   const normalizedLeft = normalizeSignature(left);
   const normalizedRight = normalizeSignature(right);
 

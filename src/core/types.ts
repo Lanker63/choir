@@ -74,7 +74,7 @@ export type TransactionTrace = {
   durationMs: number;
 };
 
-export interface EnforcementResult {
+interface EnforcementResult {
   verdict: "pass" | "fail" | "warn";
   diagnostics: Diagnostic[];
 }

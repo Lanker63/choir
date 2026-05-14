@@ -2,6 +2,7 @@ import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
+import { cloneJson } from "../utils/clone.js";
 import { generatePlan } from "./orchestration.js";
 import {
   buildState,
@@ -408,7 +409,7 @@ export function upsertPlan(plans: Plan[], plan: Plan): Plan[] {
 }
 
 function snapshot(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value));
+  return cloneJson(value);
 }
 
 function trackChange(

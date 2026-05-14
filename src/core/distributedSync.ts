@@ -1,5 +1,7 @@
 import { createHash } from "crypto";
 import { gunzipSync, gzipSync } from "zlib";
+import { isRecord } from "../utils/guards.js";
+import { cloneJsonOrUndefined } from "../utils/clone.js";
 
 export type SystemState = Record<string, unknown>;
 
@@ -100,7 +102,7 @@ export type StateChangeEvent<TState extends SystemState = SystemState> = {
 
 export type StateChangeListener<TState extends SystemState = SystemState> = (event: StateChangeEvent<TState>) => void;
 
-export class SyncEventBus<TState extends SystemState = SystemState> {
+class SyncEventBus<TState extends SystemState = SystemState> {
   private listeners = new Set<StateChangeListener<TState>>();
 
   subscribe(listener: StateChangeListener<TState>): () => void {
@@ -188,10 +190,6 @@ const ZERO_CLOCK: LogicalClock = {
   nodeId: "GENESIS",
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizePath(pathValue: string): string {
   return pathValue
     .split(".")
@@ -227,11 +225,7 @@ function stableStringify(value: unknown): string {
 }
 
 function cloneUnknown<T>(value: T): T {
-  if (typeof value === "undefined") {
-    return value;
-  }
-
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJsonOrUndefined(value);
 }
 
 function valuesEqual(left: unknown, right: unknown): boolean {

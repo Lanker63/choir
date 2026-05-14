@@ -152,6 +152,6 @@ export function registerChoirLanguageSupport(context: vscode.ExtensionContext): 
   registerTraceCommand(context);
 }
 
-export function getEditorTrace(): EditorTrace {
+function getEditorTrace(): EditorTrace {
   return { ...trace };
 }

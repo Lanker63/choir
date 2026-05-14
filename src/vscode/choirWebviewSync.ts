@@ -15,9 +15,13 @@ export class ChoirEventBus {
 
   emit(event: ChoirEvent): void {
     for (const listener of this.listeners) {
-      Promise.resolve(listener(event)).catch((error) => {
-        console.error("ChoirEventBus: listener failed", error, event);
-      });
+      void (async () => {
+        try {
+          await listener(event);
+        } catch (error) {
+          console.error("ChoirEventBus: listener failed", error, event);
+        }
+      })();
     }
   }
 

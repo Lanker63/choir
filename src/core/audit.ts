@@ -3,6 +3,7 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { Environment, Role, YAMLDiff } from "./policyEngine.js";
+import { isNonNull, isRecord } from "../utils/guards.js";
 
 export type AuditEvent = {
   id: string;
@@ -89,10 +90,6 @@ function normalizePathSegment(value: string): string {
 
 function auditLogPath(root: string): string {
   return path.join(root, AUDIT_LOG_FILE);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function canonicalizeUnknown(value: unknown): unknown {
@@ -355,7 +352,7 @@ export function readAuditStore(root: string): AuditStore {
   const lines = fs.readFileSync(filePath, "utf-8").split(/\r?\n/);
   const records = lines
     .map((line) => parseAuditRecord(line))
-    .filter((record): record is AuditRecord => record !== null)
+    .filter(isNonNull)
     .sort((left, right) => left.chainIndex - right.chainIndex);
 
   for (let index = 0; index < records.length; index += 1) {

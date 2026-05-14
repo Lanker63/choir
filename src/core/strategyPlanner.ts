@@ -6,6 +6,7 @@ import { ValidationResult } from "./scheduler.js";
 import { FailurePatternRecord, StatePlane, StrategyHistory } from "./state.js";
 import { Diagnostic } from "./types.js";
 import { FileChange, simulatePlanOutcome } from "./executionPreview.js";
+import { cloneJson } from "../utils/clone.js";
 
 export type StrategyType = "minimal" | "grouped" | "layered" | "aggressive" | "adaptive";
 
@@ -169,11 +170,11 @@ function normalizePath(value: string): string {
 }
 
 function clonePlan(plan: Plan): Plan {
-  return JSON.parse(JSON.stringify(plan)) as Plan;
+  return cloneJson(plan);
 }
 
 function cloneState(state: StatePlane): StatePlane {
-  return JSON.parse(JSON.stringify(state)) as StatePlane;
+  return cloneJson(state);
 }
 
 function filesForTask(task: Task): string[] {
@@ -815,7 +816,7 @@ const BASE_MUTATIONS: StrategyMutation[] = [
   { type: "adjust-batching", size: 1 },
 ];
 
-export const MUTATIONS: StrategyMutation[] = [...BASE_MUTATIONS].sort(mutationSort);
+const MUTATIONS: StrategyMutation[] = [...BASE_MUTATIONS].sort(mutationSort);
 
 const MUTATION_RULES: MutationRule[] = [
   enforceLayeringMutation,
@@ -1607,7 +1608,7 @@ export function selectBestOutcome(results: StrategyOutcome[]): StrategyOutcome {
     )[0] as StrategyOutcome;
 }
 
-export function selectBestStrategy(results: StrategyOutcome[]): StrategyOutcome {
+function selectBestStrategy(results: StrategyOutcome[]): StrategyOutcome {
   return selectBestOutcome(results);
 }
 

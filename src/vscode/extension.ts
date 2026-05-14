@@ -190,14 +190,6 @@ export function activate(context: vscode.ExtensionContext) {
             graphProvider.openPanel(vscode.ViewColumn.One);
         }));
 
-        addSubscription(context, vscode.commands.registerCommand("choir.openRuleEditorPanel", () => {
-            try {
-                provider.openPanel(vscode.ViewColumn.One);
-            } catch (err) {
-                console.error("Choir: openRuleEditorPanel failed", err);
-            }
-        }));
-
         addSubscription(context, vscode.commands.registerCommand("choir.revealRuleEditorDebug", async () => {
             try {
                 provider.openPanel(vscode.ViewColumn.One);

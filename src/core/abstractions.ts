@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { z } from "zod";
+import { sortByIdAndParameterName } from "../utils/registrySort.js";
 import { DecisionTrace, recordAudit } from "./audit.js";
 import { parseCommand } from "./choirRouter.js";
 import {
@@ -145,13 +146,11 @@ function sortedUnique(values: string[]): string[] {
 
 function sortRegistry(registry: AbstractionRegistry): AbstractionRegistry {
   return {
-    abstractions: [...registry.abstractions]
+    abstractions: sortByIdAndParameterName(registry.abstractions
       .map((abstraction) => ({
         ...abstraction,
-        parameters: [...(abstraction.parameters ?? [])].sort((left, right) => left.name.localeCompare(right.name)),
         expandsTo: [...abstraction.expandsTo],
-      }))
-      .sort((left, right) => left.id.localeCompare(right.id)),
+      }))),
   };
 }
 

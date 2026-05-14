@@ -322,20 +322,32 @@ function orderedTasks(plan: Plan): Task[] {
     .map(([taskId]) => taskId)
     .sort((left, right) => left.localeCompare(right));
   const ordered: string[] = [];
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const taskId = queue.shift() as string;
+  const enqueueSorted = (taskId: string): void => {
+    let insertAt = queue.length;
+    for (let index = queueIndex; index < queue.length; index += 1) {
+      if (taskId.localeCompare(queue[index] as string) < 0) {
+        insertAt = index;
+        break;
+      }
+    }
+
+    queue.splice(insertAt, 0, taskId);
+  };
+
+  while (queueIndex < queue.length) {
+    const taskId = queue[queueIndex] as string;
+    queueIndex += 1;
     ordered.push(taskId);
 
     for (const next of outgoing.get(taskId) ?? []) {
       const nextValue = (indegree.get(next) ?? 1) - 1;
       indegree.set(next, nextValue);
       if (nextValue === 0) {
-        queue.push(next);
+        enqueueSorted(next);
       }
     }
-
-    queue.sort((left, right) => left.localeCompare(right));
   }
 
   if (ordered.length !== plan.tasks.length) {
@@ -531,8 +543,10 @@ function nodeReachability(
 
   const visited = new Set<string>();
   const queue = [focusNodeId];
-  while (queue.length > 0) {
-    const current = queue.shift() as string;
+  let queueIndex = 0;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as string;
+    queueIndex += 1;
     if (visited.has(current)) {
       continue;
     }

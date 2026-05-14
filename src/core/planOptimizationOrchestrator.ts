@@ -49,6 +49,8 @@ import {
   writePlanningTrace,
   type PlanningTraceRecord,
 } from "./planningTrace.js";
+import { isNonNull } from "../utils/guards.js";
+import { cloneJson } from "../utils/clone.js";
 
 export type ExecutionStrategy =
   | "minimal-change"
@@ -286,7 +288,7 @@ function toStableRelativePath(root: string, filePath: string): string {
 }
 
 function clonePlan(plan: Plan): Plan {
-  return JSON.parse(JSON.stringify(plan)) as Plan;
+  return cloneJson(plan);
 }
 
 function loadControlPlane(root: string): ControlPlane {
@@ -785,7 +787,7 @@ export function rankCandidatePlans(candidates: RankedCandidate[]): RankedCandida
     }));
 }
 
-export function optimizePlans(plans: RankedPlan[]): RankedPlan[] {
+function optimizePlans(plans: RankedPlan[]): RankedPlan[] {
   return rankCandidatePlans(plans);
 }
 
@@ -797,7 +799,7 @@ export function selectBestCandidate(rankedPlans: RankedCandidate[]): RankedCandi
   return [...rankedPlans].sort(rankingSort)[0] as RankedCandidate;
 }
 
-export function selectBestPlan(rankedPlans: RankedPlan[]): RankedPlan {
+function selectBestPlan(rankedPlans: RankedPlan[]): RankedPlan {
   return selectBestCandidate(rankedPlans);
 }
 
@@ -1038,7 +1040,7 @@ export async function synthesizeAndOptimizePlans(options: SynthesizeAndOptimizeP
       evaluateCandidatePlan(options.root, controlPlane, workspaceGraph, candidate)
     ));
 
-    evaluatedCandidates = evaluated.filter((entry): entry is EvaluatedCandidatePlan => entry !== null);
+    evaluatedCandidates = evaluated.filter(isNonNull);
     if (evaluatedCandidates.length === 0) {
       return fail("policy-evaluation", "All synthesized plans were denied by policy.");
     }

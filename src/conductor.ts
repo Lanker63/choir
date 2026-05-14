@@ -40,6 +40,7 @@ import {
   selectFromMemory,
   validatePlanStillApplies,
 } from "./core/strategyMemory.js";
+import { cloneJson } from "./utils/clone.js";
 
 export type TaskResult = {
   taskId: string;
@@ -146,7 +147,7 @@ function normalizePreviewHash(input: string | undefined): string | undefined {
 }
 
 function cloneState(state: StatePlane): StatePlane {
-  return JSON.parse(JSON.stringify(state)) as StatePlane;
+  return cloneJson(state);
 }
 
 function inferStrategyType(strategyId: string): StrategyType {
@@ -374,7 +375,7 @@ function selectPlansForPreview(
   };
 }
 
-export function upsertDraftPlan(
+function upsertDraftPlan(
   control: ControlPlane,
   state: StatePlane,
   goalOverride?: string
@@ -417,7 +418,7 @@ export function upsertDraftPlan(
   };
 }
 
-export function approvePlan(control: ControlPlane, planId: string): {
+function approvePlan(control: ControlPlane, planId: string): {
   updatedControl: ControlPlane;
   plan?: Plan;
 } {
@@ -925,7 +926,7 @@ export async function evaluateAdaptivePlanSelection(
   };
 }
 
-export async function executeSelectedPlansWithPreviewGuard(
+async function executeSelectedPlansWithPreviewGuard(
   control: ControlPlane,
   options: {
     root: string;
@@ -976,7 +977,7 @@ export async function executeSelectedPlansWithPreviewGuard(
   };
 }
 
-export function summarizePlanStatus(control: ControlPlane, state: StatePlane): PlanStatusSummary {
+function summarizePlanStatus(control: ControlPlane, state: StatePlane): PlanStatusSummary {
   const plans = control.execution.plans
     .map((plan) => {
       let pending = 0;

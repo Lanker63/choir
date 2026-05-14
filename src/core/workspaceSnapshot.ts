@@ -518,7 +518,7 @@ export function workspaceSnapshotFileContentMap(
   return files;
 }
 
-export function workspaceSnapshotFilesMap(snapshot: WorkspaceSnapshotManifest | WorkspaceSnapshot): Record<string, string> {
+function workspaceSnapshotFilesMap(snapshot: WorkspaceSnapshotManifest | WorkspaceSnapshot): Record<string, string> {
   return workspaceSnapshotFileContentMap(snapshot, { encoding: "utf8" });
 }
 

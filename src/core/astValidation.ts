@@ -6,6 +6,7 @@ import {
 } from "./choirRouter.js";
 import { ControlPlane } from "../schema.js";
 import { createHash } from "crypto";
+import { cloneJson } from "../utils/clone.js";
 
 export type ValidationSeverity = "error" | "warning";
 
@@ -342,7 +343,7 @@ function serializeFix(node: ASTNode): string {
 }
 
 function deepClone<T>(value: T): T {
-  return JSON.parse(JSON.stringify(value)) as T;
+  return cloneJson(value);
 }
 
 function pushUnexpectedNode(issues: ValidationIssue[], node: never, path: string): void {
@@ -850,12 +851,11 @@ export function diffAST(oldAST: AST | undefined, newAST: AST): ASTDiff {
 export function getAffectedNodes(diff: ASTDiff, graph: DependencyGraph): NodeId[] {
   const queue = sortNodeIds(diff.changedNodes.filter((nodeId) => graph.nodes.has(nodeId)));
   const visited = new Set<NodeId>(queue);
+  let queueIndex = 0;
 
-  while (queue.length > 0) {
-    const nodeId = queue.shift();
-    if (!nodeId) {
-      continue;
-    }
+  while (queueIndex < queue.length) {
+    const nodeId = queue[queueIndex] as NodeId;
+    queueIndex += 1;
 
     const downstream = graph.edges.get(nodeId) ?? [];
     for (const dependent of downstream) {
@@ -1011,11 +1011,10 @@ function dependencySignature(
 
   const queue = [nodeId];
   const upstream = new Set<NodeId>([nodeId]);
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) {
-      continue;
-    }
+  let queueIndex = 0;
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex] as NodeId;
+    queueIndex += 1;
 
     const incoming = reversed.get(current) ?? [];
     for (const parent of incoming) {
@@ -1496,6 +1495,6 @@ export function processAST(
   };
 }
 
-export function validateIdentifier(value: string): boolean {
+function validateIdentifier(value: string): boolean {
   return CHOIR_IDENTIFIER_PATTERN.test(value);
 }
