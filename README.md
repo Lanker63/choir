@@ -166,11 +166,18 @@ analyze -> validate -> synthesize -> generate -> apply -> verify -> commit
 - Verify is mutation-aware and fail-closed (mutation hash parity, full-workspace snapshot parity, replay workspace equivalence)
 - Commit persists deterministic mutation artifacts under .choir/artifacts/materialization/ and authoritative workspace snapshots under .choir/artifacts/workspace-snapshots/
 - Authoritative workspace hashing is canonical and deterministic across full workspace scope (files, directories, symlinks, unicode paths, permissions metadata, create/delete/rename effects)
+- Snapshot hashing supports incremental cache reuse and hash-only capture mode for large workspaces while preserving fail-closed integrity checks
+- Snapshot capture/projection enforce case-insensitive portability collision checks and NFC-normalized path handling
 - Preview, simulation, execute, and replay lineage include preWorkspaceSnapshotHash and postWorkspaceSnapshotHash bindings
 - Replay reconstruction is operational: execution lineage + mutation manifests + deterministic patch replay can reconstruct full workspace state
+- Replay reconstructs only patch-required text inputs from snapshots and fails closed for undecodable binary text-patch inputs
 - Integrity diagnostics are forensic and category-specific: MANIFEST_TAMPER, WORKSPACE_SNAPSHOT_DIVERGENCE, PATCH_ORDER_DIVERGENCE, REPLAY_LINEAGE_DIVERGENCE, STATE_LINEAGE_DIVERGENCE
 - Workspace mutation/replay paths use a cross-process lock coordinator to enforce deterministic isolation under concurrent execution
+- Workspace lock coordination is lease-based (owner token + heartbeat + stale-lease reclamation) for resilient multi-process contention handling
 - Rollback restores control-plane state and workspace filesystem snapshot on apply/verify failure
+- Transactional apply is crash-recoverable via materialization journals that restore pre-workspace snapshot and pre-state before new apply/replay
+- State persistence is journaled and idempotent, preventing partial transition/snapshot/audit commits after abrupt interruption
+- Lineage compaction prunes old materialization/snapshot/journal artifacts without weakening deterministic replay guarantees
 - Global orchestration validates full cross-repo graph and policy before execution
 - Global failure handling is isolation-first: rollback affects failed units and already-executed dependents only
 - Full rollback is fail-safe fallback only when isolated rollback cannot restore consistency

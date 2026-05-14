@@ -81,6 +81,7 @@ Write:
 - validate before write
 - atomic persistence with rollback
 - post-write validation
+- journaled idempotent persistence with deterministic recovery after interruption
 
 Transition record requirements:
 
@@ -148,11 +149,16 @@ Hard constraints:
 - verify stage is mutation-aware and fail-closed (mutation hash parity, workspace hash parity, replay workspace equivalence)
 - commit persists mutation manifests and lineage artifacts
 - workspace hash in runtime contracts is authoritative full-workspace snapshot hash (not mutation-scope hash)
+- workspace hashing must support deterministic hash-only capture and cache-assisted incremental recomputation for scale
 - preWorkspaceSnapshotHash and postWorkspaceSnapshotHash are required lineage fields for preview, simulation, execute, and replay contracts
 - replay must be operationally reconstructive: lineage + mutation manifest patch order + deterministic patch replay must reproduce postWorkspaceSnapshotHash
+- replay input decoding must be binary-safe and fail closed for undecodable text patch dependencies
 - integrity diagnostics must be categorized (MANIFEST_TAMPER, WORKSPACE_SNAPSHOT_DIVERGENCE, PATCH_ORDER_DIVERGENCE, REPLAY_LINEAGE_DIVERGENCE, STATE_LINEAGE_DIVERGENCE)
 - concurrent execute/replay mutation paths must use cross-process workspace lock coordination
+- lock coordination must be lease-based with heartbeat renewal, ownership tokens, and stale lease reclamation
 - rollback restores pre-execution control-plane state and workspace filesystem state on failure
+- interrupted apply/rollback paths must recover from materialization journals and restore pre-snapshot workspace + pre-state deterministically
+- lineage growth must be bounded with deterministic compaction/GC that preserves replay authority
 - temporary test-only failure hook: `CHOIR_TEST_ROLLBACK=1` may force a runtime error only in execution mode (never simulation) and only after at least one mutation executes, to validate rollback handling deterministically
 - execution-stage failure diagnostics must surface rollback evidence (`rollback=applied|not-applied`, and when available: failed unit and rollback scope/order) so rollback outcomes are explicit in operator-facing output
 

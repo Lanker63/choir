@@ -8,10 +8,11 @@ import { locationToOffsetRange } from "./diagnostics.js";
 import { FileChange, generateDiff, groupPatchesByFile, hashPreview } from "./executionPreview.js";
 import {
   CanonicalWorkspaceHasher,
+  compactWorkspaceSnapshotArtifacts,
   manifestFromWorkspaceSnapshot,
   readWorkspaceSnapshotManifest,
   restoreWorkspaceFromSnapshot,
-  workspaceSnapshotFilesMap,
+  workspaceSnapshotFileContentMap,
   type WorkspaceSnapshotManifest,
 } from "./workspaceSnapshot.js";
 import { withWorkspaceMutationLock } from "./workspaceLockCoordinator.js";
@@ -130,12 +131,47 @@ type RollbackSnapshot = {
   requestedFiles: string[];
 };
 
+type MaterializationJournalStatus = "prepared" | "applying" | "verifying" | "committed" | "rolled-back";
+
+type MaterializationJournal = {
+  schemaVersion: 1;
+  journalId: string;
+  planId: string;
+  strategyId: string;
+  mutationHash: string;
+  preWorkspaceSnapshotId: string;
+  preWorkspaceSnapshotHash: string;
+  requestedFiles: string[];
+  preState: StatePlane;
+  status: MaterializationJournalStatus;
+  createdAt: string;
+  updatedAt: string;
+  manifestId?: string;
+  errors: string[];
+};
+
 function normalizePath(value: string): string {
   return value.split("\\").join("/");
 }
 
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function nowIso(): string {
+  return new Date().toISOString();
+}
+
+function cloneState(value: StatePlane): StatePlane {
+  return JSON.parse(JSON.stringify(value)) as StatePlane;
+}
+
+async function atomicWriteJsonFile(filePath: string, payload: unknown): Promise<void> {
+  const serialized = `${stableStringify(payload)}\n`;
+  const tempPath = `${filePath}.tmp-${deterministicHash(serialized).slice(0, 12)}`;
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(tempPath, serialized, "utf-8");
+  await fs.rename(tempPath, filePath);
 }
 
 function toRelativePath(root: string, value: string): string {
@@ -658,17 +694,13 @@ async function captureRollbackSnapshot(root: string, executionPlan: ExecutionPla
   const txFs = createNodeTransactionFS(root);
   const workspaceSnapshot = CanonicalWorkspaceHasher.capture(root);
   const workspaceManifest = manifestFromWorkspaceSnapshot(workspaceSnapshot, { role: "pre" });
-  const workspaceFiles = workspaceSnapshotFilesMap(workspaceManifest);
   const planFiles = collectPlanFiles(executionPlan);
-  const requestedFiles = sortedUnique([...Object.keys(workspaceFiles), ...planFiles, ...extraFiles]);
+  const requestedFiles = sortedUnique([...planFiles, ...extraFiles]);
   const diskFiles = await txFs.readFiles(requestedFiles);
 
   return {
     workspaceManifest,
-    files: {
-      ...workspaceFiles,
-      ...diskFiles,
-    },
+    files: diskFiles,
     state: await txFs.readStateJson(),
     requestedFiles,
   };
@@ -687,17 +719,211 @@ function materializationArtifactDir(root: string): string {
   return path.join(root, ".choir", "artifacts", "materialization");
 }
 
+function materializationJournalDir(root: string): string {
+  return path.join(materializationArtifactDir(root), "journal");
+}
+
+function materializationJournalPath(root: string, journalId: string): string {
+  return path.join(materializationJournalDir(root), `${journalId}.json`);
+}
+
+async function persistMaterializationJournal(root: string, journal: MaterializationJournal): Promise<void> {
+  await atomicWriteJsonFile(materializationJournalPath(root, journal.journalId), journal);
+}
+
+async function readMaterializationJournal(root: string, fileName: string): Promise<MaterializationJournal | null> {
+  try {
+    const raw = (await fs.readFile(path.join(materializationJournalDir(root), fileName), "utf-8")).trim();
+    if (raw.length === 0) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<MaterializationJournal>;
+    if (
+      parsed.schemaVersion !== 1
+      || typeof parsed.journalId !== "string"
+      || typeof parsed.planId !== "string"
+      || typeof parsed.strategyId !== "string"
+      || typeof parsed.mutationHash !== "string"
+      || typeof parsed.preWorkspaceSnapshotId !== "string"
+      || typeof parsed.preWorkspaceSnapshotHash !== "string"
+      || !Array.isArray(parsed.requestedFiles)
+      || typeof parsed.preState !== "object"
+      || parsed.preState === null
+      || (parsed.status !== "prepared"
+        && parsed.status !== "applying"
+        && parsed.status !== "verifying"
+        && parsed.status !== "committed"
+        && parsed.status !== "rolled-back")
+      || typeof parsed.createdAt !== "string"
+      || typeof parsed.updatedAt !== "string"
+      || !Array.isArray(parsed.errors)
+    ) {
+      return null;
+    }
+
+    return {
+      schemaVersion: 1,
+      journalId: parsed.journalId,
+      planId: parsed.planId,
+      strategyId: parsed.strategyId,
+      mutationHash: parsed.mutationHash,
+      preWorkspaceSnapshotId: parsed.preWorkspaceSnapshotId,
+      preWorkspaceSnapshotHash: parsed.preWorkspaceSnapshotHash,
+      requestedFiles: parsed.requestedFiles.map((entry) => String(entry)),
+      preState: cloneState(parsed.preState as StatePlane),
+      status: parsed.status,
+      createdAt: parsed.createdAt,
+      updatedAt: parsed.updatedAt,
+      ...(typeof parsed.manifestId === "string" ? { manifestId: parsed.manifestId } : {}),
+      errors: parsed.errors.map((entry) => String(entry)),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function recoverPendingMaterializationJournals(root: string): Promise<{ recovered: number; failures: string[] }> {
+  const journalDirectory = materializationJournalDir(root);
+  try {
+    await fs.mkdir(journalDirectory, { recursive: true });
+  } catch {
+    return { recovered: 0, failures: [] };
+  }
+
+  const files = (await fs.readdir(journalDirectory))
+    .filter((entry) => entry.endsWith(".json"))
+    .sort((left, right) => left.localeCompare(right));
+
+  let recovered = 0;
+  const failures: string[] = [];
+
+  for (const fileName of files) {
+    const journal = await readMaterializationJournal(root, fileName);
+    if (!journal || journal.status === "committed" || journal.status === "rolled-back") {
+      continue;
+    }
+
+    const preSnapshot = readWorkspaceSnapshotManifest(root, journal.preWorkspaceSnapshotId);
+    if (!preSnapshot) {
+      failures.push(`journal=${journal.journalId} missing pre snapshot manifest ${journal.preWorkspaceSnapshotId}`);
+      continue;
+    }
+
+    try {
+      restoreWorkspaceFromSnapshot(root, preSnapshot);
+      const txFs = createNodeTransactionFS(root);
+      await txFs.writeState(cloneState(journal.preState));
+
+      const nextJournal: MaterializationJournal = {
+        ...journal,
+        status: "rolled-back",
+        updatedAt: nowIso(),
+        errors: [...journal.errors, "Recovered interrupted materialization via pre-snapshot restore"],
+      };
+      await persistMaterializationJournal(root, nextJournal);
+      recovered += 1;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      failures.push(`journal=${journal.journalId} recovery failed: ${message}`);
+    }
+  }
+
+  return { recovered, failures };
+}
+
+export async function recoverMaterializationLineage(root: string): Promise<{ recovered: number; failures: string[] }> {
+  return recoverPendingMaterializationJournals(root);
+}
+
 async function persistManifest(root: string, manifest: ArtifactManifest): Promise<{ manifestPath: string; manifestHash: string }> {
   const dir = materializationArtifactDir(root);
   await fs.mkdir(dir, { recursive: true });
 
   const manifestPath = path.join(dir, `${manifest.manifestId}.json`);
-  const payload = `${stableStringify(manifest)}\n`;
-  await fs.writeFile(manifestPath, payload, "utf-8");
+  await atomicWriteJsonFile(manifestPath, manifest);
 
   return {
     manifestPath,
     manifestHash: deterministicHash(manifest),
+  };
+}
+
+export async function compactMaterializationLineage(
+  root: string,
+  options?: { retainManifests?: number; retainJournals?: number; retainWorkspaceSnapshots?: number }
+): Promise<{
+  retainedManifests: number;
+  removedManifests: number;
+  retainedJournals: number;
+  removedJournals: number;
+  retainedWorkspaceSnapshots: number;
+  removedWorkspaceSnapshots: number;
+}> {
+  const retainManifests = Math.max(1, options?.retainManifests ?? 256);
+  const retainJournals = Math.max(1, options?.retainJournals ?? 256);
+  const directory = materializationArtifactDir(root);
+  await fs.mkdir(directory, { recursive: true });
+
+  const manifestFiles = (await fs.readdir(directory))
+    .filter((entry) => entry.endsWith(".json"))
+    .map(async (name) => {
+      const filePath = path.join(directory, name);
+      const stat = await fs.stat(filePath);
+      return {
+        name,
+        filePath,
+        mtimeMs: stat.mtimeMs,
+      };
+    });
+
+  const materializationEntries = (await Promise.all(manifestFiles))
+    .sort((left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
+  const manifestsToRemove = materializationEntries.slice(retainManifests);
+  for (const entry of manifestsToRemove) {
+    try {
+      await fs.rm(entry.filePath, { force: true });
+    } catch {
+      // Best-effort compaction only.
+    }
+  }
+
+  const journalDirectory = materializationJournalDir(root);
+  await fs.mkdir(journalDirectory, { recursive: true });
+  const journalEntries = (await Promise.all(
+    (await fs.readdir(journalDirectory))
+      .filter((entry) => entry.endsWith(".json"))
+      .map(async (name) => {
+        const filePath = path.join(journalDirectory, name);
+        const stat = await fs.stat(filePath);
+        return {
+          name,
+          filePath,
+          mtimeMs: stat.mtimeMs,
+        };
+      })
+  )).sort((left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
+
+  const journalsToRemove = journalEntries.slice(retainJournals);
+  for (const entry of journalsToRemove) {
+    try {
+      await fs.rm(entry.filePath, { force: true });
+    } catch {
+      // Best-effort compaction only.
+    }
+  }
+
+  const workspaceCompaction = compactWorkspaceSnapshotArtifacts(root, {
+    retainManifests: Math.max(1, options?.retainWorkspaceSnapshots ?? 512),
+  });
+
+  return {
+    retainedManifests: materializationEntries.length - manifestsToRemove.length,
+    removedManifests: manifestsToRemove.length,
+    retainedJournals: journalEntries.length - journalsToRemove.length,
+    removedJournals: journalsToRemove.length,
+    retainedWorkspaceSnapshots: workspaceCompaction.retained,
+    removedWorkspaceSnapshots: workspaceCompaction.removed,
   };
 }
 
@@ -837,209 +1063,288 @@ export async function applyMaterializationPlan(
       mutationHash: input.plan.mutationSet.mutationHash,
     }, 16),
     async () => {
-  const rollbackSnapshot = await captureRollbackSnapshot(
-    input.root,
-    input.plan.executionPlan,
-    input.plan.mutationSet.files
-  );
+      const recovered = await recoverPendingMaterializationJournals(input.root);
+      if (recovered.failures.length > 0) {
+        return {
+          success: false,
+          rolledBack: false,
+          transactionIds: [],
+          mutationHash: "",
+          workspaceHash: "",
+          replayWorkspaceHash: "",
+          preWorkspaceSnapshotId: "",
+          preWorkspaceSnapshotHash: "",
+          postWorkspaceSnapshotId: "",
+          postWorkspaceSnapshotHash: "",
+          manifestId: "",
+          manifestPath: "",
+          manifestHash: "",
+          errors: recovered.failures,
+        };
+      }
 
-  if (rollbackSnapshot.workspaceManifest.workspaceSnapshotHash !== input.plan.artifactManifest.preWorkspaceSnapshotHash) {
-    return {
-      success: false,
-      rolledBack: false,
-      transactionIds: [],
-      mutationHash: "",
-      workspaceHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-      replayWorkspaceHash: "",
-      preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-      preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-      postWorkspaceSnapshotId: "",
-      postWorkspaceSnapshotHash: "",
-      manifestId: "",
-      manifestPath: "",
-      manifestHash: "",
-      errors: [
-        `Workspace snapshot divergence before apply: expected=${input.plan.artifactManifest.preWorkspaceSnapshotHash} actual=${rollbackSnapshot.workspaceManifest.workspaceSnapshotHash}`,
-      ],
-    };
-  }
+      const rollbackSnapshot = await captureRollbackSnapshot(
+        input.root,
+        input.plan.executionPlan,
+        input.plan.mutationSet.files
+      );
 
-  const loadDiskFiles = async (): Promise<Record<string, string>> => {
-    const snapshot = buildWorkspaceSnapshot(input.root);
-    return toRelativeFilesMap(input.root, snapshot);
-  };
+      if (rollbackSnapshot.workspaceManifest.workspaceSnapshotHash !== input.plan.artifactManifest.preWorkspaceSnapshotHash) {
+        return {
+          success: false,
+          rolledBack: false,
+          transactionIds: [],
+          mutationHash: "",
+          workspaceHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+          replayWorkspaceHash: "",
+          preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+          preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+          postWorkspaceSnapshotId: "",
+          postWorkspaceSnapshotHash: "",
+          manifestId: "",
+          manifestPath: "",
+          manifestHash: "",
+          errors: [
+            `Workspace snapshot divergence before apply: expected=${input.plan.artifactManifest.preWorkspaceSnapshotHash} actual=${rollbackSnapshot.workspaceManifest.workspaceSnapshotHash}`,
+          ],
+        };
+      }
 
-  const txResult = await runExecutionPlanTransactionally(input.plan.executionPlan, {
-    root: input.root,
-    controlPlane: input.controlPlane,
-    enforcer: createMaterializationEnforcer(input.root, input.controlPlane, loadDiskFiles),
-    pipeline: createMaterializationPipeline(input.root, input.controlPlane, loadDiskFiles),
-    executeLayersInParallel: false,
-  });
+      CanonicalWorkspaceHasher.persistManifest(input.root, rollbackSnapshot.workspaceManifest);
 
-  const failures = summarizeTransactionFailures(txResult.transactions);
+      let journal: MaterializationJournal = {
+        schemaVersion: 1,
+        journalId: deterministicId("materialization-journal", {
+          planId: input.plan.planId,
+          strategyId: input.plan.strategyId,
+          mutationHash: input.plan.mutationSet.mutationHash,
+          preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+        }, 16),
+        planId: input.plan.planId,
+        strategyId: input.plan.strategyId,
+        mutationHash: input.plan.mutationSet.mutationHash,
+        preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+        preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+        requestedFiles: rollbackSnapshot.requestedFiles,
+        preState: cloneState(rollbackSnapshot.state),
+        status: "prepared",
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+        errors: [],
+      };
+      await persistMaterializationJournal(input.root, journal);
 
-  if (failures.length > 0) {
-    await rollbackWorkspace(input.root, rollbackSnapshot);
+      const updateJournal = async (
+        status: MaterializationJournalStatus,
+        options?: { errors?: string[]; manifestId?: string }
+      ): Promise<void> => {
+        journal = {
+          ...journal,
+          status,
+          updatedAt: nowIso(),
+          ...(typeof options?.manifestId === "string" ? { manifestId: options.manifestId } : {}),
+          ...(options?.errors
+            ? { errors: [...journal.errors, ...options.errors] }
+            : {}),
+        };
+        await persistMaterializationJournal(input.root, journal);
+      };
 
-    return {
-      success: false,
-      rolledBack: true,
-      transactionIds: txResult.transactions.map((transaction) => transaction.id),
-      mutationHash: "",
-      workspaceHash: "",
-      replayWorkspaceHash: "",
-      preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-      preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-      postWorkspaceSnapshotId: "",
-      postWorkspaceSnapshotHash: "",
-      manifestId: "",
-      manifestPath: "",
-      manifestHash: "",
-      errors: failures,
-    };
-  }
+      const rollbackWithJournal = async (errors: string[]): Promise<{ rolledBack: boolean; errors: string[] }> => {
+        try {
+          await rollbackWorkspace(input.root, rollbackSnapshot);
+          await updateJournal("rolled-back", { errors });
+          return { rolledBack: true, errors };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const combined = [...errors, `Rollback recovery failure: ${message}`];
+          await updateJournal("rolled-back", { errors: combined });
+          return { rolledBack: false, errors: combined };
+        }
+      };
 
-  const txFs = createNodeTransactionFS(input.root);
-  const actualFilesRead = await txFs.readFiles(input.plan.mutationSet.files);
-  const currentWorkspaceFiles = toRelativeFilesMap(input.root, buildWorkspaceSnapshot(input.root));
-  const afterFiles = {
-    ...currentWorkspaceFiles,
-    ...actualFilesRead,
-  };
+      await updateJournal("applying");
 
-  const patchOperations = buildPatchOperations(input.root, txResult.transactions);
-  const mutationSet = buildMutationSet(rollbackSnapshot.files, afterFiles, patchOperations);
-  const replayProjection = previewFilesFromPatches(rollbackSnapshot.files, mutationSet.patchOperations);
+      const loadDiskFiles = async (): Promise<Record<string, string>> => {
+        const snapshot = buildWorkspaceSnapshot(input.root);
+        return toRelativeFilesMap(input.root, snapshot);
+      };
 
-  if (replayProjection.errors.length > 0) {
-    await rollbackWorkspace(input.root, rollbackSnapshot);
+      const txResult = await runExecutionPlanTransactionally(input.plan.executionPlan, {
+        root: input.root,
+        controlPlane: input.controlPlane,
+        enforcer: createMaterializationEnforcer(input.root, input.controlPlane, loadDiskFiles),
+        pipeline: createMaterializationPipeline(input.root, input.controlPlane, loadDiskFiles),
+        executeLayersInParallel: false,
+      });
 
-    return {
-      success: false,
-      rolledBack: true,
-      transactionIds: txResult.transactions.map((transaction) => transaction.id),
-      mutationHash: mutationSet.mutationHash,
-      workspaceHash: "",
-      replayWorkspaceHash: "",
-      preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-      preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-      postWorkspaceSnapshotId: "",
-      postWorkspaceSnapshotHash: "",
-      manifestId: "",
-      manifestPath: "",
-      manifestHash: "",
-      errors: replayProjection.errors,
-    };
-  }
+      const failures = summarizeTransactionFailures(txResult.transactions);
+      if (failures.length > 0) {
+        const rollback = await rollbackWithJournal(failures);
+        return {
+          success: false,
+          rolledBack: rollback.rolledBack,
+          transactionIds: txResult.transactions.map((transaction) => transaction.id),
+          mutationHash: "",
+          workspaceHash: "",
+          replayWorkspaceHash: "",
+          preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+          preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+          postWorkspaceSnapshotId: "",
+          postWorkspaceSnapshotHash: "",
+          manifestId: "",
+          manifestPath: "",
+          manifestHash: "",
+          errors: rollback.errors,
+        };
+      }
 
-  const postWorkspaceSnapshot = CanonicalWorkspaceHasher.capture(input.root);
-  const postWorkspaceManifest = manifestFromWorkspaceSnapshot(postWorkspaceSnapshot, { role: "post" });
+      const txFs = createNodeTransactionFS(input.root);
+      const actualFilesRead = await txFs.readFiles(input.plan.mutationSet.files);
+      const currentWorkspaceFiles = toRelativeFilesMap(input.root, buildWorkspaceSnapshot(input.root));
+      const afterFiles = {
+        ...currentWorkspaceFiles,
+        ...actualFilesRead,
+      };
 
-  const replayWorkspaceManifest = CanonicalWorkspaceHasher.project(
-    rollbackSnapshot.workspaceManifest,
-    buildSnapshotUpdates(replayProjection.files, mutationSet.files)
-  );
+      const patchOperations = buildPatchOperations(input.root, txResult.transactions);
+      const mutationSet = buildMutationSet(rollbackSnapshot.files, afterFiles, patchOperations);
+      const replayProjection = previewFilesFromPatches(rollbackSnapshot.files, mutationSet.patchOperations);
 
-  const workspaceHash = postWorkspaceManifest.workspaceSnapshotHash;
-  const replayWorkspaceHash = replayWorkspaceManifest.workspaceSnapshotHash;
+      if (replayProjection.errors.length > 0) {
+        const rollback = await rollbackWithJournal(replayProjection.errors);
+        return {
+          success: false,
+          rolledBack: rollback.rolledBack,
+          transactionIds: txResult.transactions.map((transaction) => transaction.id),
+          mutationHash: mutationSet.mutationHash,
+          workspaceHash: "",
+          replayWorkspaceHash: "",
+          preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+          preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+          postWorkspaceSnapshotId: "",
+          postWorkspaceSnapshotHash: "",
+          manifestId: "",
+          manifestPath: "",
+          manifestHash: "",
+          errors: rollback.errors,
+        };
+      }
 
-  const mismatchErrors: string[] = [];
-  if (mutationSet.mutationHash !== input.plan.mutationSet.mutationHash) {
-    mismatchErrors.push(
-      `Mutation hash mismatch: expected=${input.plan.mutationSet.mutationHash}, actual=${mutationSet.mutationHash}`
-    );
-  }
+      await updateJournal("verifying");
 
-  if (mutationSet.previewHash !== input.plan.mutationSet.previewHash) {
-    mismatchErrors.push(
-      `Preview hash mismatch: expected=${input.plan.mutationSet.previewHash}, actual=${mutationSet.previewHash}`
-    );
-  }
+      const postWorkspaceSnapshot = CanonicalWorkspaceHasher.capture(input.root);
+      const postWorkspaceManifest = manifestFromWorkspaceSnapshot(postWorkspaceSnapshot, { role: "post" });
 
-  const actualPatchOrderHash = hashPatchOrder(mutationSet.patchOperations);
-  if (actualPatchOrderHash !== input.plan.artifactManifest.patchOrderHash) {
-    mismatchErrors.push(
-      `Patch order hash mismatch: expected=${input.plan.artifactManifest.patchOrderHash}, actual=${actualPatchOrderHash}`
-    );
-  }
+      const replayWorkspaceManifest = CanonicalWorkspaceHasher.project(
+        rollbackSnapshot.workspaceManifest,
+        buildSnapshotUpdates(replayProjection.files, mutationSet.files)
+      );
 
-  if (workspaceHash !== replayWorkspaceHash) {
-    mismatchErrors.push(`Workspace replay mismatch: execution=${workspaceHash}, replay=${replayWorkspaceHash}`);
-  }
+      const workspaceHash = postWorkspaceManifest.workspaceSnapshotHash;
+      const replayWorkspaceHash = replayWorkspaceManifest.workspaceSnapshotHash;
 
-  if (workspaceHash !== input.plan.artifactManifest.postWorkspaceSnapshotHash) {
-    mismatchErrors.push(
-      `Workspace snapshot hash mismatch: expected=${input.plan.artifactManifest.postWorkspaceSnapshotHash}, actual=${workspaceHash}`
-    );
-  }
+      const mismatchErrors: string[] = [];
+      if (mutationSet.mutationHash !== input.plan.mutationSet.mutationHash) {
+        mismatchErrors.push(
+          `Mutation hash mismatch: expected=${input.plan.mutationSet.mutationHash}, actual=${mutationSet.mutationHash}`
+        );
+      }
 
-  if (rollbackSnapshot.workspaceManifest.workspaceSnapshotHash !== input.plan.artifactManifest.preWorkspaceSnapshotHash) {
-    mismatchErrors.push(
-      `Pre-workspace snapshot hash mismatch: expected=${input.plan.artifactManifest.preWorkspaceSnapshotHash}, actual=${rollbackSnapshot.workspaceManifest.workspaceSnapshotHash}`
-    );
-  }
+      if (mutationSet.previewHash !== input.plan.mutationSet.previewHash) {
+        mismatchErrors.push(
+          `Preview hash mismatch: expected=${input.plan.mutationSet.previewHash}, actual=${mutationSet.previewHash}`
+        );
+      }
 
-  if (process.env.CHOIR_TEST_ROLLBACK === "1" && txResult.transactions.length > 0) {
-    mismatchErrors.push("Forced rollback for testing: CHOIR_TEST_ROLLBACK=1; rollback=applied");
-  }
+      const actualPatchOrderHash = hashPatchOrder(mutationSet.patchOperations);
+      if (actualPatchOrderHash !== input.plan.artifactManifest.patchOrderHash) {
+        mismatchErrors.push(
+          `Patch order hash mismatch: expected=${input.plan.artifactManifest.patchOrderHash}, actual=${actualPatchOrderHash}`
+        );
+      }
 
-  if (mismatchErrors.length > 0) {
-    await rollbackWorkspace(input.root, rollbackSnapshot);
+      if (workspaceHash !== replayWorkspaceHash) {
+        mismatchErrors.push(`Workspace replay mismatch: execution=${workspaceHash}, replay=${replayWorkspaceHash}`);
+      }
 
-    return {
-      success: false,
-      rolledBack: true,
-      transactionIds: txResult.transactions.map((transaction) => transaction.id),
-      mutationHash: mutationSet.mutationHash,
-      workspaceHash,
-      replayWorkspaceHash,
-      preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-      preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-      postWorkspaceSnapshotId: "",
-      postWorkspaceSnapshotHash: "",
-      manifestId: "",
-      manifestPath: "",
-      manifestHash: "",
-      errors: mismatchErrors,
-    };
-  }
+      if (workspaceHash !== input.plan.artifactManifest.postWorkspaceSnapshotHash) {
+        mismatchErrors.push(
+          `Workspace snapshot hash mismatch: expected=${input.plan.artifactManifest.postWorkspaceSnapshotHash}, actual=${workspaceHash}`
+        );
+      }
 
-  CanonicalWorkspaceHasher.persistManifest(input.root, rollbackSnapshot.workspaceManifest);
-  CanonicalWorkspaceHasher.persistManifest(input.root, postWorkspaceManifest);
+      if (rollbackSnapshot.workspaceManifest.workspaceSnapshotHash !== input.plan.artifactManifest.preWorkspaceSnapshotHash) {
+        mismatchErrors.push(
+          `Pre-workspace snapshot hash mismatch: expected=${input.plan.artifactManifest.preWorkspaceSnapshotHash}, actual=${rollbackSnapshot.workspaceManifest.workspaceSnapshotHash}`
+        );
+      }
 
-  const manifest = buildArtifactManifest({
-    planId: input.plan.planId,
-    strategyId: input.plan.strategyId,
-    transactionIds: txResult.transactions.map((transaction) => transaction.id),
-    mutationSet,
-    preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-    preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-    postWorkspaceSnapshotId: postWorkspaceManifest.manifestId,
-    postWorkspaceSnapshotHash: postWorkspaceManifest.workspaceSnapshotHash,
-    workspaceHashBefore: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-    workspaceHashAfter: workspaceHash,
-    replayWorkspaceHash,
-  });
+      if (process.env.CHOIR_TEST_ROLLBACK === "1" && txResult.transactions.length > 0) {
+        mismatchErrors.push("Forced rollback for testing: CHOIR_TEST_ROLLBACK=1; rollback=applied");
+      }
 
-  const persisted = await persistManifest(input.root, manifest);
+      if (mismatchErrors.length > 0) {
+        const rollback = await rollbackWithJournal(mismatchErrors);
+        return {
+          success: false,
+          rolledBack: rollback.rolledBack,
+          transactionIds: txResult.transactions.map((transaction) => transaction.id),
+          mutationHash: mutationSet.mutationHash,
+          workspaceHash,
+          replayWorkspaceHash,
+          preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+          preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+          postWorkspaceSnapshotId: "",
+          postWorkspaceSnapshotHash: "",
+          manifestId: "",
+          manifestPath: "",
+          manifestHash: "",
+          errors: rollback.errors,
+        };
+      }
 
-  return {
-    success: true,
-    rolledBack: false,
-    transactionIds: txResult.transactions.map((transaction) => transaction.id),
-    mutationHash: mutationSet.mutationHash,
-    workspaceHash,
-    replayWorkspaceHash,
-    preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
-    preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
-    postWorkspaceSnapshotId: postWorkspaceManifest.manifestId,
-    postWorkspaceSnapshotHash: postWorkspaceManifest.workspaceSnapshotHash,
-    manifestId: manifest.manifestId,
-    manifestPath: persisted.manifestPath,
-    manifestHash: persisted.manifestHash,
-    errors: [],
-  };
+      CanonicalWorkspaceHasher.persistManifest(input.root, postWorkspaceManifest);
+
+      const manifest = buildArtifactManifest({
+        planId: input.plan.planId,
+        strategyId: input.plan.strategyId,
+        transactionIds: txResult.transactions.map((transaction) => transaction.id),
+        mutationSet,
+        preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+        preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+        postWorkspaceSnapshotId: postWorkspaceManifest.manifestId,
+        postWorkspaceSnapshotHash: postWorkspaceManifest.workspaceSnapshotHash,
+        workspaceHashBefore: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+        workspaceHashAfter: workspaceHash,
+        replayWorkspaceHash,
+      });
+
+      const persisted = await persistManifest(input.root, manifest);
+      await updateJournal("committed", { manifestId: manifest.manifestId });
+
+      await compactMaterializationLineage(input.root, {
+        retainManifests: 256,
+        retainJournals: 256,
+        retainWorkspaceSnapshots: 512,
+      });
+
+      return {
+        success: true,
+        rolledBack: false,
+        transactionIds: txResult.transactions.map((transaction) => transaction.id),
+        mutationHash: mutationSet.mutationHash,
+        workspaceHash,
+        replayWorkspaceHash,
+        preWorkspaceSnapshotId: rollbackSnapshot.workspaceManifest.manifestId,
+        preWorkspaceSnapshotHash: rollbackSnapshot.workspaceManifest.workspaceSnapshotHash,
+        postWorkspaceSnapshotId: postWorkspaceManifest.manifestId,
+        postWorkspaceSnapshotHash: postWorkspaceManifest.workspaceSnapshotHash,
+        manifestId: manifest.manifestId,
+        manifestPath: persisted.manifestPath,
+        manifestHash: persisted.manifestHash,
+        errors: [],
+      };
     }
   );
 }
@@ -1058,6 +1363,27 @@ async function readArtifactManifest(root: string, manifestId: string): Promise<A
   }
 }
 
+function replayInputFilesFromSnapshot(snapshot: WorkspaceSnapshotManifest, patchOperations: PatchOperation[]): Record<string, string> {
+  const requiredPaths = sortedUnique(
+    patchOperations.flatMap((operation) => {
+      if (isTextPatch(operation.patch)) {
+        return [normalizePath(operation.patch.location.file)];
+      }
+
+      if (operation.patch.type === "rename-file") {
+        return [normalizePath(operation.patch.from)];
+      }
+
+      return [];
+    })
+  );
+
+  return workspaceSnapshotFileContentMap(snapshot, {
+    encoding: "utf8",
+    includePaths: requiredPaths,
+  });
+}
+
 export async function replayMaterializationFromLineage(input: {
   root: string;
   manifestId: string;
@@ -1070,6 +1396,17 @@ export async function replayMaterializationFromLineage(input: {
       manifestId: input.manifestId,
     }, 16),
     async () => {
+  const recovered = await recoverPendingMaterializationJournals(input.root);
+  if (recovered.failures.length > 0) {
+    return {
+      success: false,
+      restored: false,
+      manifestId: input.manifestId,
+      workspaceHash: "",
+      errors: recovered.failures,
+    };
+  }
+
   const manifest = await readArtifactManifest(input.root, input.manifestId);
   if (!manifest) {
     return {
@@ -1108,7 +1445,20 @@ export async function replayMaterializationFromLineage(input: {
     };
   }
 
-  const preFiles = workspaceSnapshotFilesMap(preSnapshot);
+  let preFiles: Record<string, string>;
+  try {
+    preFiles = replayInputFilesFromSnapshot(preSnapshot, manifest.mutationSet.patchOperations);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      restored: false,
+      manifestId: manifest.manifestId,
+      workspaceHash: "",
+      errors: [`PATCH_ORDER_DIVERGENCE: ${message}`],
+    };
+  }
+
   const replayProjection = previewFilesFromPatches(preFiles, manifest.mutationSet.patchOperations);
   if (replayProjection.errors.length > 0) {
     return {

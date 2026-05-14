@@ -210,6 +210,7 @@ export type ReplayResult = {
 };
 
 export type StateAudit = {
+  id: string;
   previousHash: string;
   newHash: string;
   diff: Record<string, unknown>;
@@ -1080,6 +1081,7 @@ export function createEmptyStatePlane(): StatePlane {
 }
 
 export function readStatePlane(root: string): StatePlane | null {
+  recoverStatePersistenceIfNeeded(root);
   const statePath = getStatePath(root);
   if (!fs.existsSync(statePath)) {
     return null;
@@ -1469,6 +1471,19 @@ function stateAuditPath(root: string): string {
   return path.join(root, ".choir", "state.audit.jsonl");
 }
 
+type StatePersistJournal = {
+  schemaVersion: 1;
+  transition: StateTransition;
+  snapshot?: StateSnapshot;
+  audit: StateAudit;
+  previousRaw: string | null;
+  nextPayload: string;
+};
+
+function statePersistJournalPath(root: string): string {
+  return path.join(root, ".choir", "state.persist.journal.json");
+}
+
 function readJsonLines<T>(filePath: string): T[] {
   if (!fs.existsSync(filePath)) {
     return [];
@@ -1484,6 +1499,144 @@ function readJsonLines<T>(filePath: string): T[] {
 function appendJsonLine(filePath: string, value: unknown): void {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.appendFileSync(filePath, `${stableStringify(value)}\n`, "utf-8");
+}
+
+function buildStateSnapshot(state: StatePlane, logicalTime: number): StateSnapshot {
+  const normalized = materializeStatePlane(state);
+  const timestamp = deterministicTimestampFromCounter(logicalTime);
+  return {
+    id: deterministicId("state", {
+      hash: normalized.stateHash,
+      logicalTime,
+      timestamp,
+    }, 12),
+    timestamp,
+    state: deepClone(normalized),
+    hash: normalized.stateHash,
+  };
+}
+
+function readStatePersistJournal(root: string): StatePersistJournal | null {
+  const filePath = statePersistJournalPath(root);
+  if (!fs.existsSync(filePath)) {
+    return null;
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8").trim();
+    if (raw.length === 0) {
+      return null;
+    }
+
+    const parsed = JSON.parse(raw) as Partial<StatePersistJournal>;
+    if (
+      parsed.schemaVersion !== 1
+      || !parsed.transition
+      || !parsed.audit
+      || (parsed.previousRaw !== null && typeof parsed.previousRaw !== "string")
+      || typeof parsed.nextPayload !== "string"
+    ) {
+      return null;
+    }
+
+    const transition = normalizeStateTransition(parsed.transition);
+    if (!transition) {
+      return null;
+    }
+
+    const snapshot = parsed.snapshot
+      ? {
+        id: String((parsed.snapshot as StateSnapshot).id),
+        timestamp: String((parsed.snapshot as StateSnapshot).timestamp),
+        state: materializeStatePlane((parsed.snapshot as StateSnapshot).state),
+        hash: String((parsed.snapshot as StateSnapshot).hash),
+      } satisfies StateSnapshot
+      : undefined;
+
+    const auditRecord = parsed.audit as Partial<StateAudit>;
+    if (
+      typeof auditRecord.id !== "string"
+      || typeof auditRecord.previousHash !== "string"
+      || typeof auditRecord.newHash !== "string"
+      || !isRecord(auditRecord.diff)
+    ) {
+      return null;
+    }
+
+    return {
+      schemaVersion: 1,
+      transition,
+      ...(snapshot ? { snapshot } : {}),
+      audit: {
+        id: auditRecord.id,
+        previousHash: auditRecord.previousHash,
+        newHash: auditRecord.newHash,
+        diff: cloneUnknown(auditRecord.diff),
+      },
+      previousRaw: parsed.previousRaw ?? null,
+      nextPayload: parsed.nextPayload,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function persistStatePersistJournal(root: string, journal: StatePersistJournal): void {
+  atomicWriteJson(statePersistJournalPath(root), `${stableStringify(journal)}\n`);
+}
+
+function removeStatePersistJournal(root: string): void {
+  try {
+    fs.rmSync(statePersistJournalPath(root), { force: true });
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
+function transitionExists(root: string, transitionId: string): boolean {
+  return listStateTransitions(root).some((entry) => entry.id === transitionId);
+}
+
+function snapshotExists(root: string, snapshotId: string): boolean {
+  return readJsonLines<unknown>(stateSnapshotsPath(root)).some((entry) => {
+    if (!isRecord(entry)) {
+      return false;
+    }
+
+    return typeof entry.id === "string" && entry.id === snapshotId;
+  });
+}
+
+function auditExists(root: string, auditId: string): boolean {
+  return readJsonLines<StateAudit>(stateAuditPath(root)).some((entry) => entry.id === auditId);
+}
+
+function applyStatePersistJournal(root: string, journal: StatePersistJournal): void {
+  const statePath = getStatePath(root);
+  atomicWriteJson(statePath, journal.nextPayload);
+
+  if (!transitionExists(root, journal.transition.id)) {
+    recordStateTransition(root, journal.transition);
+  }
+
+  if (journal.snapshot && !snapshotExists(root, journal.snapshot.id)) {
+    appendJsonLine(stateSnapshotsPath(root), journal.snapshot);
+  }
+
+  if (!auditExists(root, journal.audit.id)) {
+    recordStateAudit(root, journal.audit);
+  }
+
+  removeStatePersistJournal(root);
+}
+
+function recoverStatePersistenceIfNeeded(root: string): void {
+  const journal = readStatePersistJournal(root);
+  if (!journal) {
+    return;
+  }
+
+  applyStatePersistJournal(root, journal);
 }
 
 function computeStateDiff(previous: StatePlane | null, next: StatePlane): StateTransitionDiff {
@@ -1701,11 +1854,27 @@ function recordStateAudit(root: string, audit: StateAudit): void {
 }
 
 export function listSnapshots(root: string): StateSnapshot[] {
-  return readJsonLines<StateSnapshot>(stateSnapshotsPath(root))
-    .map((snapshot) => ({
-      ...snapshot,
-      state: materializeStatePlane(snapshot.state),
-    }))
+  return readJsonLines<unknown>(stateSnapshotsPath(root))
+    .flatMap((entry) => {
+      if (!isRecord(entry)) {
+        return [];
+      }
+
+      if (typeof entry.id !== "string" || typeof entry.timestamp !== "string" || typeof entry.hash !== "string" || !isRecord(entry.state)) {
+        return [];
+      }
+
+      try {
+        return [{
+          id: entry.id,
+          timestamp: entry.timestamp,
+          state: materializeStatePlane(entry.state as StatePlane),
+          hash: entry.hash,
+        } satisfies StateSnapshot];
+      } catch {
+        return [];
+      }
+    })
     .sort((left, right) =>
       left.timestamp.localeCompare(right.timestamp)
       || left.id.localeCompare(right.id)
@@ -2008,6 +2177,7 @@ function atomicWriteJson(filePath: string, payload: string): void {
 }
 
 export function persistStatePlane(root: string, state: StatePlane, options?: PersistStateOptions): string {
+  recoverStatePersistenceIfNeeded(root);
   const statePath = getStatePath(root);
   const previousRaw = fs.existsSync(statePath) ? fs.readFileSync(statePath, "utf-8") : null;
   const previousState = previousRaw ? readStatePlane(root) : null;
@@ -2036,81 +2206,84 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
   }
 
   const nextPayload = `${JSON.stringify(nextState, null, 2)}\n`;
+  const previousHash = previousState?.stateHash ?? "GENESIS";
+  const transitionNumber = transitionCountBeforeWrite + 1;
+  const timestamp = deterministicTimestampFromCounter(transitionNumber);
+  const transitionId = deterministicId("transition", {
+    fromHash: previousHash,
+    toHash: nextState.stateHash,
+    action: options?.action ?? "persist-state",
+    logicalTime: transitionNumber,
+  }, 12);
+  const transitionDiff = computeStateDiff(previousState, nextState);
+  const unitId = normalizeUnitId(options?.metadata?.unitId);
+  const metadata: StateMetadata = {
+    command: options?.metadata?.command ?? options?.action ?? "persist-state",
+    policyDecision: options?.metadata?.policyDecision ?? "allow",
+    auditId: options?.metadata?.auditId ?? `state-transition-${transitionId}`,
+    ...(options?.metadata?.ruleTriggers && options.metadata.ruleTriggers.length > 0
+      ? { ruleTriggers: sortedUnique(options.metadata.ruleTriggers) }
+      : {}),
+    ...(options?.metadata?.dependencyChain && options.metadata.dependencyChain.length > 0
+      ? { dependencyChain: [...options.metadata.dependencyChain] }
+      : { dependencyChain: transitionDiff.patches.map((patch) => patch.path) }
+    ),
+    unitId,
+  };
 
-  try {
-    atomicWriteJson(statePath, nextPayload);
-    const reloaded = readStatePlane(root);
-    if (!reloaded) {
-      throw new Error("State persistence validation failed: state file missing after write");
-    }
+  const transition: StateTransition = {
+    id: transitionId,
+    logicalTime: transitionNumber,
+    unitId,
+    fromHash: previousHash,
+    toHash: nextState.stateHash,
+    action: options?.action ?? "persist-state",
+    timestamp,
+    diff: transitionDiff,
+    metadata,
+  };
 
-    const postValidation = validateState(reloaded);
-    if (!postValidation.valid) {
-      throw new Error(`State persistence validation failed: ${postValidation.issues.map((issue) => issue.code).join(", ")}`);
-    }
+  const shouldSaveSnapshot = !options?.skipSnapshot
+    && (transitionCountBeforeWrite === 0 || transitionNumber % SNAPSHOT_INTERVAL === 0);
+  const snapshot = shouldSaveSnapshot ? buildStateSnapshot(nextState, transitionNumber) : undefined;
 
-    const previousHash = previousState?.stateHash ?? "GENESIS";
-    const transitionNumber = transitionCountBeforeWrite + 1;
-    const timestamp = deterministicTimestampFromCounter(transitionNumber);
-    const transitionId = deterministicId("transition", {
+  const stateAudit: StateAudit = {
+    id: deterministicId("state-audit", {
+      transitionId,
       fromHash: previousHash,
-      toHash: reloaded.stateHash,
-      action: options?.action ?? "persist-state",
-      logicalTime: transitionNumber,
-    }, 12);
-    const transitionDiff = computeStateDiff(previousState, reloaded);
-    const unitId = normalizeUnitId(options?.metadata?.unitId);
-    const metadata: StateMetadata = {
-      command: options?.metadata?.command ?? options?.action ?? "persist-state",
-      policyDecision: options?.metadata?.policyDecision ?? "allow",
-      auditId: options?.metadata?.auditId ?? `state-transition-${transitionId}`,
-      ...(options?.metadata?.ruleTriggers && options.metadata.ruleTriggers.length > 0
-        ? { ruleTriggers: sortedUnique(options.metadata.ruleTriggers) }
-        : {}),
-      ...(options?.metadata?.dependencyChain && options.metadata.dependencyChain.length > 0
-        ? { dependencyChain: [...options.metadata.dependencyChain] }
-        : { dependencyChain: transitionDiff.patches.map((patch) => patch.path) }
-      ),
-      unitId,
-    };
-    const transition: StateTransition = {
-      id: transitionId,
-      logicalTime: transitionNumber,
-      unitId,
-      fromHash: previousHash,
-      toHash: reloaded.stateHash,
-      action: options?.action ?? "persist-state",
-      timestamp,
-      diff: transitionDiff,
-      metadata,
-    };
-    recordStateTransition(root, transition);
+      toHash: nextState.stateHash,
+    }, 12),
+    previousHash,
+    newHash: nextState.stateHash,
+    diff: {
+      patchCount: transitionDiff.patchCount,
+      patchedPaths: transitionDiff.patches.map((patch) => patch.path),
+    },
+  };
 
-    if (!options?.skipSnapshot) {
-      const shouldSaveSnapshot = transitionCountBeforeWrite === 0 || transitionNumber % SNAPSHOT_INTERVAL === 0;
-      if (shouldSaveSnapshot) {
-        saveSnapshot(root, reloaded, transitionNumber);
-      }
-    }
+  const journal: StatePersistJournal = {
+    schemaVersion: 1,
+    transition,
+    ...(snapshot ? { snapshot } : {}),
+    audit: stateAudit,
+    previousRaw,
+    nextPayload,
+  };
 
-    const stateAudit: StateAudit = {
-      previousHash,
-      newHash: reloaded.stateHash,
-      diff: {
-        patchCount: transitionDiff.patchCount,
-        patchedPaths: transitionDiff.patches.map((patch) => patch.path),
-      },
-    };
-    recordStateAudit(root, stateAudit);
+  persistStatePersistJournal(root, journal);
+  applyStatePersistJournal(root, journal);
 
-    return statePath;
-  } catch (error) {
-    if (previousRaw !== null) {
-      atomicWriteJson(statePath, previousRaw.endsWith("\n") ? previousRaw : `${previousRaw}\n`);
-    }
-
-    throw error;
+  const reloaded = readStatePlane(root);
+  if (!reloaded) {
+    throw new Error("State persistence validation failed: state file missing after write");
   }
+
+  const postValidation = validateState(reloaded);
+  if (!postValidation.valid) {
+    throw new Error(`State persistence validation failed: ${postValidation.issues.map((issue) => issue.code).join(", ")}`);
+  }
+
+  return statePath;
 }
 
 export function hasApprovalForDiff(root: string, diffHash: string): boolean {

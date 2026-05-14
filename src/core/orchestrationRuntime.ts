@@ -887,7 +887,7 @@ function readMaterializationManifestHash(root: string, manifestId: string): stri
 }
 
 function currentWorkspaceSnapshotHash(root: string): string {
-  return CanonicalWorkspaceHasher.capture(root).snapshotHash;
+  return CanonicalWorkspaceHasher.captureHash(root).snapshotHash;
 }
 
 function topologicalOrderFromEdges(nodes: string[], edges: Array<{ from: string; to: string }>): { order: string[]; cyclic: boolean } {

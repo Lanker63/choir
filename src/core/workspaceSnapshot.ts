@@ -4,6 +4,7 @@ import path from "path";
 import { deterministicHash, deterministicId, stableStringify } from "./deterministicCore.js";
 
 const SNAPSHOT_SCHEMA_VERSION = "1";
+const HASH_CACHE_FILE_NAME = "hash-cache.json";
 const DEFAULT_IGNORED_PREFIXES = [
   ".git",
   "node_modules",
@@ -41,6 +42,15 @@ export type WorkspaceSnapshot = {
   snapshotHash: string;
 };
 
+export type WorkspaceSnapshotCaptureOptions = {
+  ignoredPrefixes?: string[];
+  includeFileContent?: boolean;
+  useHashCache?: boolean;
+  enforceCaseInsensitivePortability?: boolean;
+};
+
+export type WorkspaceSnapshotProjectionUpdate = string | { contentBase64: string } | undefined;
+
 export type WorkspaceSnapshotManifest = {
   schemaVersion: "1";
   manifestId: string;
@@ -48,6 +58,18 @@ export type WorkspaceSnapshotManifest = {
   workspaceSnapshotHash: string;
   entryCount: number;
   entries: WorkspaceSnapshotEntry[];
+};
+
+type WorkspaceHashCacheEntry = {
+  size: number;
+  mtimeMs: number;
+  mode: number;
+  hash: string;
+};
+
+type WorkspaceHashCache = {
+  schemaVersion: 1;
+  entries: Record<string, WorkspaceHashCacheEntry>;
 };
 
 function compareLex(left: string, right: string): number {
@@ -126,8 +148,97 @@ function hashBuffer(buffer: Buffer): string {
   return createHash("sha256").update(buffer).digest("hex");
 }
 
+function hashFileContent(absolutePath: string): string {
+  const fd = fs.openSync(absolutePath, "r");
+  try {
+    const hash = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(1024 * 1024);
+    while (true) {
+      const bytesRead = fs.readSync(fd, chunk, 0, chunk.length, null);
+      if (bytesRead <= 0) {
+        break;
+      }
+
+      hash.update(chunk.subarray(0, bytesRead));
+    }
+
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function snapshotArtifactsDir(root: string): string {
   return path.join(root, ".choir", "artifacts", "workspace-snapshots");
+}
+
+function hashCachePath(root: string): string {
+  return path.join(snapshotArtifactsDir(root), HASH_CACHE_FILE_NAME);
+}
+
+function atomicWriteUtf8(filePath: string, payload: string): void {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const tmpPath = `${filePath}.tmp-${createHash("sha256").update(payload).digest("hex").slice(0, 12)}`;
+  fs.writeFileSync(tmpPath, payload, "utf-8");
+  fs.renameSync(tmpPath, filePath);
+}
+
+function readHashCache(root: string): WorkspaceHashCache {
+  const filePath = hashCachePath(root);
+  if (!fs.existsSync(filePath)) {
+    return {
+      schemaVersion: 1,
+      entries: {},
+    };
+  }
+
+  try {
+    const raw = fs.readFileSync(filePath, "utf-8").trim();
+    if (raw.length === 0) {
+      return {
+        schemaVersion: 1,
+        entries: {},
+      };
+    }
+
+    const parsed = JSON.parse(raw) as Partial<WorkspaceHashCache>;
+    if (parsed.schemaVersion !== 1 || typeof parsed.entries !== "object" || parsed.entries === null) {
+      return {
+        schemaVersion: 1,
+        entries: {},
+      };
+    }
+
+    const entries = Object.fromEntries(
+      Object.entries(parsed.entries)
+        .filter(([, value]) => {
+          const entry = value as Partial<WorkspaceHashCacheEntry>;
+          return typeof entry.size === "number"
+            && typeof entry.mtimeMs === "number"
+            && typeof entry.mode === "number"
+            && typeof entry.hash === "string";
+        })
+        .map(([key, value]) => [normalizeRelativePath(key), value as WorkspaceHashCacheEntry] as const)
+    );
+
+    return {
+      schemaVersion: 1,
+      entries,
+    };
+  } catch {
+    return {
+      schemaVersion: 1,
+      entries: {},
+    };
+  }
+}
+
+function writeHashCache(root: string, entries: Record<string, WorkspaceHashCacheEntry>): void {
+  const payload = `${stableStringify({
+    schemaVersion: 1,
+    entries,
+  } satisfies WorkspaceHashCache)}\n`;
+  atomicWriteUtf8(hashCachePath(root), payload);
 }
 
 function assertFileEntry(entry: WorkspaceSnapshotEntry): WorkspaceSnapshotEntry & {
@@ -174,10 +285,16 @@ export function hashWorkspaceSnapshotEntries(entries: WorkspaceSnapshotEntry[]):
   return deterministicHash(payload);
 }
 
-export function captureWorkspaceSnapshot(root: string, options?: { ignoredPrefixes?: string[] }): WorkspaceSnapshot {
+export function captureWorkspaceSnapshot(root: string, options?: WorkspaceSnapshotCaptureOptions): WorkspaceSnapshot {
   const rootPath = path.resolve(root);
   const ignoredPrefixes = (options?.ignoredPrefixes ?? DEFAULT_IGNORED_PREFIXES)
     .map((entry) => normalizeRelativePath(entry));
+  const includeFileContent = options?.includeFileContent !== false;
+  const useHashCache = options?.useHashCache !== false;
+  const enforceCaseInsensitivePortability = options?.enforceCaseInsensitivePortability !== false;
+  const previousHashCache = useHashCache ? readHashCache(rootPath).entries : {};
+  const nextHashCache: Record<string, WorkspaceHashCacheEntry> = {};
+  const portabilityPathMap = new Map<string, string>();
   const entries: WorkspaceSnapshotEntry[] = [];
 
   const walk = (directoryPath: string): void => {
@@ -188,6 +305,19 @@ export function captureWorkspaceSnapshot(root: string, options?: { ignoredPrefix
     for (const name of dirEntries) {
       const absolutePath = path.join(directoryPath, name);
       const relativePath = toWorkspaceRelativePath(rootPath, absolutePath);
+
+      if (enforceCaseInsensitivePortability) {
+        const portabilityKey = relativePath.toLowerCase();
+        const existingPath = portabilityPathMap.get(portabilityKey);
+        if (existingPath && existingPath !== relativePath) {
+          throw new Error(
+            `Case-insensitive path collision detected: ${existingPath} vs ${relativePath}`
+          );
+        }
+
+        portabilityPathMap.set(portabilityKey, relativePath);
+      }
+
       if (isIgnoredPath(relativePath, ignoredPrefixes)) {
         continue;
       }
@@ -221,19 +351,53 @@ export function captureWorkspaceSnapshot(root: string, options?: { ignoredPrefix
         throw new Error(`Unsupported workspace entry type at ${relativePath}`);
       }
 
-      const content = fs.readFileSync(absolutePath);
+      const cacheCandidate = previousHashCache[relativePath];
+      const mtimeMs = Math.floor(stat.mtimeMs);
+      const cachedHashUsable = Boolean(
+        cacheCandidate
+          && cacheCandidate.size === stat.size
+          && cacheCandidate.mtimeMs === mtimeMs
+          && cacheCandidate.mode === mode
+      );
+
+      let contentHash = cachedHashUsable
+        ? (cacheCandidate as WorkspaceHashCacheEntry).hash
+        : hashFileContent(absolutePath);
+
+      let contentBase64: string | undefined;
+      if (includeFileContent) {
+        const content = fs.readFileSync(absolutePath);
+        contentHash = hashBuffer(content);
+        contentBase64 = content.toString("base64");
+      }
+
+      nextHashCache[relativePath] = {
+        size: stat.size,
+        mtimeMs,
+        mode,
+        hash: contentHash,
+      };
+
       entries.push({
         path: relativePath,
         type: "file",
         mode,
-        size: content.byteLength,
-        contentBase64: content.toString("base64"),
-        contentHash: hashBuffer(content),
+        size: stat.size,
+        ...(contentBase64 ? { contentBase64 } : {}),
+        contentHash,
       });
     }
   };
 
   walk(rootPath);
+
+  if (useHashCache) {
+    try {
+      writeHashCache(rootPath, nextHashCache);
+    } catch {
+      // Hash cache persistence is best-effort and never affects integrity checks.
+    }
+  }
 
   const canonicalEntries = sortedEntries(entries);
   return {
@@ -273,7 +437,7 @@ export function persistWorkspaceSnapshotManifest(root: string, manifest: Workspa
   fs.mkdirSync(directory, { recursive: true });
 
   const manifestPath = path.join(directory, `${manifest.manifestId}.json`);
-  fs.writeFileSync(manifestPath, `${stableStringify(manifest)}\n`, "utf-8");
+  atomicWriteUtf8(manifestPath, `${stableStringify(manifest)}\n`);
 
   return {
     manifestPath,
@@ -317,24 +481,58 @@ export function readWorkspaceSnapshotManifest(root: string, manifestId: string):
   }
 }
 
-export function workspaceSnapshotFilesMap(snapshot: WorkspaceSnapshotManifest | WorkspaceSnapshot): Record<string, string> {
+export function workspaceSnapshotFileContentMap(
+  snapshot: WorkspaceSnapshotManifest | WorkspaceSnapshot,
+  options?: { encoding?: "utf8" | "base64"; includePaths?: string[] }
+): Record<string, string> {
   const files: Record<string, string> = {};
+  const includePaths = options?.includePaths
+    ? new Set(options.includePaths.map((entry) => normalizeRelativePath(entry)))
+    : null;
 
   for (const entry of snapshot.entries) {
     if (entry.type !== "file") {
       continue;
     }
 
+    if (includePaths && !includePaths.has(entry.path)) {
+      continue;
+    }
+
     const fileEntry = assertFileEntry(entry);
-    files[fileEntry.path] = Buffer.from(fileEntry.contentBase64, "base64").toString("utf-8");
+    if (options?.encoding === "base64") {
+      files[fileEntry.path] = fileEntry.contentBase64;
+      continue;
+    }
+
+    const bytes = Buffer.from(fileEntry.contentBase64, "base64");
+    const decoded = bytes.toString("utf-8");
+    const roundTrip = Buffer.from(decoded, "utf-8");
+    if (!bytes.equals(roundTrip)) {
+      throw new Error(`Binary content cannot be decoded as utf-8 for file: ${fileEntry.path}`);
+    }
+
+    files[fileEntry.path] = decoded;
   }
 
   return files;
 }
 
+export function workspaceSnapshotFilesMap(snapshot: WorkspaceSnapshotManifest | WorkspaceSnapshot): Record<string, string> {
+  return workspaceSnapshotFileContentMap(snapshot, { encoding: "utf8" });
+}
+
+function toUpdateBuffer(update: Exclude<WorkspaceSnapshotProjectionUpdate, undefined>): Buffer {
+  if (typeof update === "string") {
+    return Buffer.from(update, "utf-8");
+  }
+
+  return Buffer.from(update.contentBase64, "base64");
+}
+
 export function projectWorkspaceSnapshot(
   base: WorkspaceSnapshotManifest,
-  updates: Record<string, string | undefined>
+  updates: Record<string, WorkspaceSnapshotProjectionUpdate>
 ): WorkspaceSnapshotManifest {
   const entryMap = new Map<string, WorkspaceSnapshotEntry>(
     sortedEntries(base.entries).map((entry) => [entry.path, { ...entry }])
@@ -363,7 +561,7 @@ export function projectWorkspaceSnapshot(
 
     const existing = entryMap.get(relativePath);
     const mode = existing?.type === "file" ? existing.mode : 0o644;
-    const buffer = Buffer.from(content, "utf-8");
+    const buffer = toUpdateBuffer(content);
     entryMap.set(relativePath, {
       path: relativePath,
       type: "file",
@@ -376,6 +574,17 @@ export function projectWorkspaceSnapshot(
     for (const directoryPath of parentDirectories(relativePath)) {
       addDirectoryIfMissing(directoryPath);
     }
+  }
+
+  const portabilityPathMap = new Map<string, string>();
+  for (const entry of entryMap.values()) {
+    const portabilityKey = entry.path.toLowerCase();
+    const existingPath = portabilityPathMap.get(portabilityKey);
+    if (existingPath && existingPath !== entry.path) {
+      throw new Error(`Case-insensitive path collision detected: ${existingPath} vs ${entry.path}`);
+    }
+
+    portabilityPathMap.set(portabilityKey, entry.path);
   }
 
   const entries = sortedEntries([...entryMap.values()]);
@@ -400,7 +609,7 @@ export function restoreWorkspaceFromSnapshot(root: string, manifest: WorkspaceSn
   removedEntries: number;
 } {
   const rootPath = path.resolve(root);
-  const existing = captureWorkspaceSnapshot(rootPath);
+  const existing = captureWorkspaceSnapshot(rootPath, { includeFileContent: false });
   const targetEntries = sortedEntries(manifest.entries);
   const targetPathSet = new Set(targetEntries.map((entry) => entry.path));
 
@@ -475,7 +684,7 @@ export function restoreWorkspaceFromSnapshot(root: string, manifest: WorkspaceSn
     }
   }
 
-  const verified = captureWorkspaceSnapshot(rootPath);
+  const verified = captureWorkspaceSnapshot(rootPath, { includeFileContent: false });
   if (verified.snapshotHash !== manifest.workspaceSnapshotHash) {
     throw new Error(
       `Workspace snapshot restore mismatch expected=${manifest.workspaceSnapshotHash} actual=${verified.snapshotHash}`
@@ -488,11 +697,67 @@ export function restoreWorkspaceFromSnapshot(root: string, manifest: WorkspaceSn
   };
 }
 
+export function compactWorkspaceSnapshotArtifacts(root: string, options?: { retainManifests?: number }): {
+  retained: number;
+  removed: number;
+} {
+  const retainManifests = Math.max(1, options?.retainManifests ?? 256);
+  const directory = snapshotArtifactsDir(root);
+  if (!fs.existsSync(directory)) {
+    return {
+      retained: 0,
+      removed: 0,
+    };
+  }
+
+  const manifestFiles = fs.readdirSync(directory)
+    .filter((name) => name.endsWith(".json") && name !== HASH_CACHE_FILE_NAME)
+    .map((name) => {
+      const filePath = path.join(directory, name);
+      const stat = fs.statSync(filePath);
+      return {
+        name,
+        filePath,
+        mtimeMs: stat.mtimeMs,
+      };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs || left.name.localeCompare(right.name));
+
+  const toRemove = manifestFiles.slice(retainManifests);
+  for (const file of toRemove) {
+    try {
+      fs.rmSync(file.filePath, { force: true });
+    } catch {
+      // Compaction is best-effort and never weakens runtime correctness.
+    }
+  }
+
+  return {
+    retained: manifestFiles.length - toRemove.length,
+    removed: toRemove.length,
+  };
+}
+
 export class CanonicalWorkspaceHasher {
   static readonly SCHEMA_VERSION = SNAPSHOT_SCHEMA_VERSION;
 
-  static capture(root: string, options?: { ignoredPrefixes?: string[] }): WorkspaceSnapshot {
+  static capture(root: string, options?: WorkspaceSnapshotCaptureOptions): WorkspaceSnapshot {
     return captureWorkspaceSnapshot(root, options);
+  }
+
+  static captureHash(root: string, options?: Omit<WorkspaceSnapshotCaptureOptions, "includeFileContent">): {
+    snapshotHash: string;
+    entryCount: number;
+  } {
+    const snapshot = captureWorkspaceSnapshot(root, {
+      ...options,
+      includeFileContent: false,
+    });
+
+    return {
+      snapshotHash: snapshot.snapshotHash,
+      entryCount: snapshot.entryCount,
+    };
   }
 
   static hashEntries(entries: WorkspaceSnapshotEntry[]): string {
@@ -514,8 +779,15 @@ export class CanonicalWorkspaceHasher {
     return readWorkspaceSnapshotManifest(root, manifestId);
   }
 
-  static project(base: WorkspaceSnapshotManifest, updates: Record<string, string | undefined>): WorkspaceSnapshotManifest {
+  static project(
+    base: WorkspaceSnapshotManifest,
+    updates: Record<string, WorkspaceSnapshotProjectionUpdate>
+  ): WorkspaceSnapshotManifest {
     return projectWorkspaceSnapshot(base, updates);
+  }
+
+  static compactArtifacts(root: string, options?: { retainManifests?: number }): { retained: number; removed: number } {
+    return compactWorkspaceSnapshotArtifacts(root, options);
   }
 
   static restore(root: string, manifest: WorkspaceSnapshotManifest): { restoredHash: string; removedEntries: number } {

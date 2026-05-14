@@ -8,8 +8,17 @@ import {
   runOrchestrationPipeline,
   type PipelineMode,
 } from "../../../core/orchestrationRuntime.js";
-import { replayMaterializationFromLineage } from "../../../core/materializationEngine.js";
-import { CanonicalWorkspaceHasher } from "../../../core/workspaceSnapshot.js";
+import {
+  compactMaterializationLineage,
+  recoverMaterializationLineage,
+  replayMaterializationFromLineage,
+} from "../../../core/materializationEngine.js";
+import {
+  CanonicalWorkspaceHasher,
+  hashWorkspaceSnapshotEntries,
+  type WorkspaceSnapshotEntry,
+} from "../../../core/workspaceSnapshot.js";
+import { createEmptyStatePlane, readStatePlane } from "../../../core/state.js";
 
 export type RuntimeVerificationCheck = {
   name: string;
@@ -107,6 +116,64 @@ async function withTemporaryEnv(
       }
     }
   }
+}
+
+function writeInterruptedMaterializationJournal(input: {
+  root: string;
+  journalId: string;
+  preWorkspaceSnapshotId: string;
+  preWorkspaceSnapshotHash: string;
+  planId: string;
+  strategyId: string;
+  mutationHash: string;
+  status: "prepared" | "applying" | "verifying";
+}): void {
+  const journalDir = path.join(input.root, ".choir", "artifacts", "materialization", "journal");
+  fs.mkdirSync(journalDir, { recursive: true });
+  const now = new Date().toISOString();
+  const payload = {
+    schemaVersion: 1,
+    journalId: input.journalId,
+    planId: input.planId,
+    strategyId: input.strategyId,
+    mutationHash: input.mutationHash,
+    preWorkspaceSnapshotId: input.preWorkspaceSnapshotId,
+    preWorkspaceSnapshotHash: input.preWorkspaceSnapshotHash,
+    requestedFiles: [],
+    preState: readStatePlane(input.root) ?? createEmptyStatePlane(),
+    status: input.status,
+    createdAt: now,
+    updatedAt: now,
+    errors: [],
+  };
+
+  fs.writeFileSync(path.join(journalDir, `${input.journalId}.json`), `${JSON.stringify(payload, null, 2)}\n`, "utf-8");
+}
+
+function buildSyntheticEntries(count: number): WorkspaceSnapshotEntry[] {
+  const entries: WorkspaceSnapshotEntry[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const filePath = `src/synthetic/${String(Math.floor(index / 1000)).padStart(4, "0")}/file-${String(index).padStart(7, "0")}.txt`;
+    entries.push({
+      path: filePath,
+      type: "file",
+      mode: 0o644,
+      size: 64,
+      contentHash: `${index.toString(16).padStart(64, "0")}`.slice(-64),
+    });
+  }
+
+  return entries;
+}
+
+function profileSyntheticHashing(count: number): { durationMs: number; hash: string } {
+  const entries = buildSyntheticEntries(count);
+  const start = Date.now();
+  const hash = hashWorkspaceSnapshotEntries(entries);
+  return {
+    durationMs: Date.now() - start,
+    hash,
+  };
 }
 
 export async function runRuntimeVerification(): Promise<RuntimeVerificationReport> {
@@ -708,6 +775,257 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       });
     } finally {
       fs.rmSync(rollbackFidelityRoot, { recursive: true, force: true });
+    }
+
+    {
+      const tenK = profileSyntheticHashing(10_000);
+      const hundredK = profileSyntheticHashing(100_000);
+      const tenKRepeat = profileSyntheticHashing(10_000);
+      let millionHashDuration = -1;
+      let millionHash = "skipped";
+      if (process.env.CHOIR_RUNTIME_SCALE_FULL === "1") {
+        const million = profileSyntheticHashing(1_000_000);
+        millionHashDuration = million.durationMs;
+        millionHash = million.hash;
+      }
+
+      checks.push({
+        name: "scale-snapshot-hashing-profiles-10k-100k-and-optional-1m",
+        passed: tenK.hash === tenKRepeat.hash
+          && tenK.hash.length > 0
+          && hundredK.hash.length > 0
+          && hundredK.durationMs >= 0
+          && (millionHash === "skipped" || millionHash.length > 0),
+        detail: `10k=${tenK.durationMs}ms, 100k=${hundredK.durationMs}ms, 1m=${millionHashDuration}ms`,
+      });
+    }
+
+    const killDuringApplyRoot = makeTempRoot();
+    try {
+      const preSnapshot = CanonicalWorkspaceHasher.capture(killDuringApplyRoot);
+      const preManifest = CanonicalWorkspaceHasher.toManifest(preSnapshot, { role: "pre" });
+      CanonicalWorkspaceHasher.persistManifest(killDuringApplyRoot, preManifest);
+      fs.writeFileSync(path.join(killDuringApplyRoot, "interrupted-apply.txt"), "mutated\n", "utf-8");
+
+      writeInterruptedMaterializationJournal({
+        root: killDuringApplyRoot,
+        journalId: "kill-during-apply",
+        preWorkspaceSnapshotId: preManifest.manifestId,
+        preWorkspaceSnapshotHash: preManifest.workspaceSnapshotHash,
+        planId: "kill-apply-plan",
+        strategyId: "kill-apply-strategy",
+        mutationHash: "kill-apply-hash",
+        status: "applying",
+      });
+
+      const recovered = await recoverMaterializationLineage(killDuringApplyRoot);
+      const postHash = CanonicalWorkspaceHasher.capture(killDuringApplyRoot).snapshotHash;
+
+      checks.push({
+        name: "kill-during-apply-recovers-to-pre-snapshot",
+        passed: recovered.failures.length === 0
+          && recovered.recovered >= 1
+          && postHash === preManifest.workspaceSnapshotHash,
+        detail: `recovered=${recovered.recovered}, failures=${recovered.failures.length}`,
+      });
+    } finally {
+      fs.rmSync(killDuringApplyRoot, { recursive: true, force: true });
+    }
+
+    const killDuringRollbackRoot = makeTempRoot();
+    try {
+      const preSnapshot = CanonicalWorkspaceHasher.capture(killDuringRollbackRoot);
+      const preManifest = CanonicalWorkspaceHasher.toManifest(preSnapshot, { role: "pre" });
+      CanonicalWorkspaceHasher.persistManifest(killDuringRollbackRoot, preManifest);
+      fs.writeFileSync(path.join(killDuringRollbackRoot, "interrupted-rollback.txt"), "mutated\n", "utf-8");
+
+      writeInterruptedMaterializationJournal({
+        root: killDuringRollbackRoot,
+        journalId: "kill-during-rollback",
+        preWorkspaceSnapshotId: preManifest.manifestId,
+        preWorkspaceSnapshotHash: preManifest.workspaceSnapshotHash,
+        planId: "kill-rollback-plan",
+        strategyId: "kill-rollback-strategy",
+        mutationHash: "kill-rollback-hash",
+        status: "verifying",
+      });
+
+      const recovered = await recoverMaterializationLineage(killDuringRollbackRoot);
+      const postHash = CanonicalWorkspaceHasher.capture(killDuringRollbackRoot).snapshotHash;
+
+      checks.push({
+        name: "kill-during-rollback-eventually-recovers",
+        passed: recovered.failures.length === 0
+          && recovered.recovered >= 1
+          && postHash === preManifest.workspaceSnapshotHash,
+        detail: `recovered=${recovered.recovered}, failures=${recovered.failures.length}`,
+      });
+    } finally {
+      fs.rmSync(killDuringRollbackRoot, { recursive: true, force: true });
+    }
+
+    const staleLockRoot = makeTempRoot();
+    try {
+      const lockDir = path.join(staleLockRoot, ".choir", "locks");
+      fs.mkdirSync(lockDir, { recursive: true });
+      fs.writeFileSync(path.join(lockDir, "workspace-mutation.lock"), `${JSON.stringify({
+        schemaVersion: 1,
+        owner: "stale-owner",
+        ownerToken: "stale-token",
+        pid: 1,
+        host: "localhost",
+        acquiredAtMs: Date.now() - 100_000,
+        heartbeatAtMs: Date.now() - 100_000,
+        leaseMs: 1,
+        expiresAtMs: Date.now() - 50_000,
+      }, null, 2)}\n`, "utf-8");
+
+      const executed = await runMode("execute", staleLockRoot);
+      checks.push({
+        name: "stale-lock-lease-is-recovered-before-execute",
+        passed: executed.trace.status === "success" && Boolean(executed.execute?.manifestId),
+        detail: `trace=${executed.trace.id}, status=${executed.trace.status}`,
+      });
+    } finally {
+      fs.rmSync(staleLockRoot, { recursive: true, force: true });
+    }
+
+    const corruptSnapshotRoot = makeTempRoot();
+    try {
+      const executed = await runMode("execute", corruptSnapshotRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+      const manifestPath = path.join(corruptSnapshotRoot, ".choir", "artifacts", "materialization", `${manifestId}.json`);
+      const materializationManifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      const preSnapshotId = String(materializationManifest.preWorkspaceSnapshotId ?? "");
+      fs.writeFileSync(
+        path.join(corruptSnapshotRoot, ".choir", "artifacts", "workspace-snapshots", `${preSnapshotId}.json`),
+        "{ invalid-json\n",
+        "utf-8"
+      );
+
+      const replayed = await replayMaterializationFromLineage({
+        root: corruptSnapshotRoot,
+        manifestId,
+        restore: false,
+      });
+
+      checks.push({
+        name: "corrupt-snapshot-artifact-fails-closed",
+        passed: !replayed.success && replayed.errors.some((entry) => /MANIFEST_TAMPER/.test(entry)),
+        detail: replayed.errors.join(" | ") || "unexpected success",
+      });
+    } finally {
+      fs.rmSync(corruptSnapshotRoot, { recursive: true, force: true });
+    }
+
+    const binaryReplayRoot = makeTempRoot();
+    try {
+      const binaryPath = path.join(binaryReplayRoot, "artifact.bin");
+      const originalBinary = Buffer.from(Array.from({ length: 4096 }, (_, index) => (index * 31) % 256));
+      fs.writeFileSync(binaryPath, originalBinary);
+
+      const executed = await runMode("execute", binaryReplayRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+
+      const tamperedBinary = Buffer.from(originalBinary);
+      tamperedBinary[0] = (tamperedBinary[0] + 1) % 255;
+      fs.writeFileSync(binaryPath, tamperedBinary);
+
+      const replayed = await replayMaterializationFromLineage({
+        root: binaryReplayRoot,
+        manifestId,
+        restore: true,
+      });
+
+      const restoredBinary = fs.readFileSync(binaryPath);
+      checks.push({
+        name: "binary-artifact-replay-restores-byte-equivalence",
+        passed: replayed.success && Buffer.compare(restoredBinary, originalBinary) === 0,
+        detail: `restoredBytes=${restoredBinary.byteLength}, replaySuccess=${replayed.success}`,
+      });
+    } finally {
+      fs.rmSync(binaryReplayRoot, { recursive: true, force: true });
+    }
+
+    const largeReplayRoot = makeTempRoot();
+    try {
+      const largeDir = path.join(largeReplayRoot, "large-workspace");
+      fs.mkdirSync(largeDir, { recursive: true });
+      for (let index = 0; index < 3000; index += 1) {
+        const filePath = path.join(largeDir, `file-${String(index).padStart(5, "0")}.txt`);
+        fs.writeFileSync(filePath, `entry=${index}\n${"x".repeat(64)}\n`, "utf-8");
+      }
+
+      const executed = await runMode("execute", largeReplayRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+      const start = Date.now();
+      const replayed = await replayMaterializationFromLineage({
+        root: largeReplayRoot,
+        manifestId,
+        restore: false,
+      });
+      const replayMs = Date.now() - start;
+
+      checks.push({
+        name: "large-workspace-replay-reconstruction-remains-deterministic",
+        passed: replayed.success && replayed.workspaceHash === executed.execute?.workspaceHash,
+        detail: `entries=${CanonicalWorkspaceHasher.captureHash(largeReplayRoot).entryCount}, replayMs=${replayMs}`,
+      });
+    } finally {
+      fs.rmSync(largeReplayRoot, { recursive: true, force: true });
+    }
+
+    const portabilityRoot = makeTempRoot();
+    try {
+      const baseManifest = CanonicalWorkspaceHasher.toManifest(CanonicalWorkspaceHasher.capture(portabilityRoot), { role: "pre" });
+      const composed = "café.ts";
+      const decomposed = "cafe\u0301.ts";
+      const projectedA = CanonicalWorkspaceHasher.project(baseManifest, {
+        [`unicode\\${composed}`]: "export const portable = 1;\n",
+      });
+      const projectedB = CanonicalWorkspaceHasher.project(baseManifest, {
+        [`unicode/${decomposed}`]: "export const portable = 1;\n",
+      });
+
+      checks.push({
+        name: "cross-platform-hash-normalization-path-separators-and-unicode",
+        passed: projectedA.workspaceSnapshotHash === projectedB.workspaceSnapshotHash,
+        detail: `hashA=${projectedA.workspaceSnapshotHash}, hashB=${projectedB.workspaceSnapshotHash}`,
+      });
+    } finally {
+      fs.rmSync(portabilityRoot, { recursive: true, force: true });
+    }
+
+    const compactionRoot = makeTempRoot();
+    try {
+      const materializationDir = path.join(compactionRoot, ".choir", "artifacts", "materialization");
+      const journalDir = path.join(materializationDir, "journal");
+      fs.mkdirSync(materializationDir, { recursive: true });
+      fs.mkdirSync(journalDir, { recursive: true });
+
+      for (let index = 0; index < 6; index += 1) {
+        const manifestId = `fake-manifest-${String(index).padStart(2, "0")}`;
+        fs.writeFileSync(path.join(materializationDir, `${manifestId}.json`), `${JSON.stringify({ manifestId })}\n`, "utf-8");
+      }
+
+      for (let index = 0; index < 4; index += 1) {
+        const journalId = `fake-journal-${String(index).padStart(2, "0")}`;
+        fs.writeFileSync(path.join(journalDir, `${journalId}.json`), `${JSON.stringify({ journalId })}\n`, "utf-8");
+      }
+
+      const compacted = await compactMaterializationLineage(compactionRoot, {
+        retainManifests: 2,
+        retainJournals: 1,
+        retainWorkspaceSnapshots: 2,
+      });
+
+      checks.push({
+        name: "lineage-compaction-prunes-materialization-and-journals",
+        passed: compacted.removedManifests >= 4 && compacted.removedJournals >= 3,
+        detail: `removedManifests=${compacted.removedManifests}, removedJournals=${compacted.removedJournals}`,
+      });
+    } finally {
+      fs.rmSync(compactionRoot, { recursive: true, force: true });
     }
   } finally {
     for (const root of Object.values(modeRoots)) {
