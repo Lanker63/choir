@@ -229,13 +229,30 @@ Topic setup for deterministic lineage:
 
    - Confirm the dependents list is returned and matches known structure.
 
-9. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
+9. In the Dependency Graph panel, select a node and click **Open Node**.
 
-   - Confirm the trace opens and host-to-webview events are shown.
+   - Confirm the selected node manifest file opens in the editor.
+   - Confirm Timeline is opened (if not already open) and navigates to the same unit context.
+   - Close both the manifest editor tab and Timeline, click **Open Node** again, and confirm they reopen for the same node.
+   - Clear Focus Node (or switch to a state with no valid focus) and confirm **Open Node**, **Dependencies**, and **Dependents** are visibly disabled.
+   - Re-select a valid node and confirm those controls re-enable.
 
-10. Open the Command Palette and run **Choir: Show DSL Editor Trace**.
+10. In the Dependency Graph panel, click **Refresh**.
 
-    - Confirm the trace opens without rendering or runtime errors.
+   - Confirm the status line briefly shows `Refreshing graph projection...`.
+   - Confirm the status line updates to include `refreshed=<time>`.
+   - Confirm Trace updates with `generatedAt=<isoTime>` (new value on each refresh).
+   - Confirm pipeline-driven projections refresh (graph/timeline/diagnostics) rather than a no-op repaint.
+
+11. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
+
+   - Confirm Output opens to channel **Choir Webview Sync Trace**.
+   - Confirm host-to-webview events are listed.
+
+12. Open the Command Palette and run **Choir: Show DSL Editor Trace**.
+
+   - Confirm Output opens to channel **Choir DSL Editor Trace**.
+   - Confirm counters are shown (`completionsTriggered`, `diagnosticsCount`, `parseErrors`).
 
 ---
 

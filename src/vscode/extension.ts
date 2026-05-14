@@ -41,6 +41,8 @@ export function activate(context: vscode.ExtensionContext) {
     const eventBus = new ChoirEventBus();
     const traceStore = new MessageTraceStore();
     const webviewRegistry = new WebviewRegistry();
+    const webviewSyncTraceOutput = vscode.window.createOutputChannel("Choir Webview Sync Trace");
+    addSubscription(context, webviewSyncTraceOutput);
     const productService = new ChoirProductService(context);
 
     const emitStateUpdated = () => {
@@ -69,7 +71,7 @@ export function activate(context: vscode.ExtensionContext) {
     
     try {
         const provider = new RuleEditorProvider(context, productService, eventBus, traceStore, webviewRegistry);
-        const graphProvider = new GraphViewProvider(context, eventBus, traceStore, webviewRegistry);
+        const graphProvider = new GraphViewProvider(context, eventBus, traceStore, webviewRegistry, triggerPipeline);
         const timelineProvider = new TimelineViewProvider(context, productService, eventBus, traceStore, webviewRegistry);
         const diagnosticsProvider = new PipelineDiagnosticsViewProvider(context, eventBus, traceStore, webviewRegistry);
 
@@ -200,12 +202,20 @@ export function activate(context: vscode.ExtensionContext) {
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.showWebviewSyncTrace", () => {
-            const lines = traceStore.list()
+            const entries = traceStore.list();
+            const lines = entries
                 .map((entry) => `[${new Date(entry.timestamp).toISOString()}] ${entry.direction} (${entry.viewId}) ${entry.type}`)
                 .join("\n");
 
-            void vscode.window.showInformationMessage(lines.length > 0 ? "Choir webview sync trace copied to output." : "No webview sync trace yet.");
-            console.log(lines.length > 0 ? lines : "No webview sync trace yet.");
+            webviewSyncTraceOutput.clear();
+            webviewSyncTraceOutput.appendLine("Choir Webview Sync Trace");
+            webviewSyncTraceOutput.appendLine(`entries=${entries.length}`);
+            webviewSyncTraceOutput.appendLine("");
+            webviewSyncTraceOutput.appendLine(lines.length > 0 ? lines : "No webview sync trace yet.");
+            webviewSyncTraceOutput.show(true);
+            void vscode.window.showInformationMessage(lines.length > 0
+                ? "Choir webview sync trace opened in Output."
+                : "No webview sync trace yet. Output channel opened.");
         }));
         // provider instance created; panel-based editor will use it
     } catch (error) {

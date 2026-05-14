@@ -357,6 +357,12 @@ Workspace detection contract:
    - primary open commands: Choir: Open Control Center, Choir: Open Dependency Graph, Choir: Open Timeline
    - main Choir activity bar container keeps Rules as the persistent view
    - persistent Rules view title icons open Control Center, Dependency Graph, and Timeline panels
+   - dependency graph interactions:
+     - Open Node must open the selected unit manifest and also navigate timeline to that unit, opening Timeline if needed
+      - Open Node interaction must not silently no-op; node resolution should fallback to current Focus Node and show explicit status when selection is missing
+      - Node-scoped controls (Open Node/Dependencies/Dependents) must be visibly disabled when no valid node is selected/focused
+     - Refresh must rerun pipeline projection refresh (state/plan/graph/timeline/diagnostics) rather than only repainting the current graph snapshot
+       - Refresh must provide visible confirmation in the graph surface (status refreshed time + trace generatedAt metadata)
 
 ## Webview Sync Contract
 
@@ -364,6 +370,8 @@ Workspace detection contract:
 - Webviews are stateless projections (control, graph, timeline)
 - Messaging uses typed host<->webview protocol
 - Synchronization uses push-based event bus broadcasts
+- `Choir: Show Webview Sync Trace` must open Output channel `Choir Webview Sync Trace` and print current host<->webview trace entries
+- `Choir: Show DSL Editor Trace` must open Output channel `Choir DSL Editor Trace` and print current editor trace counters
 - Polling-based state synchronization is forbidden
 - View lifecycle must support deterministic rehydrate on reopen
 - All inbound webview messages must be validated before execution

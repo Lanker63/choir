@@ -85,6 +85,14 @@ Additional commands:
   - Choir: Open Dependency Graph
   - Choir: Open Timeline
   - Choir: Open Diagnostics
+  - Choir: Show Webview Sync Trace (opens Output channel `Choir Webview Sync Trace`)
+  - Choir: Show DSL Editor Trace (opens Output channel `Choir DSL Editor Trace`)
+  - Dependency Graph panel controls:
+    - Open Node opens the node package manifest and emits timeline navigation for that node
+    - Open Node resolves node context from selected node or current Focus Node; if neither exists it reports that a selection is required
+    - Node-scoped controls (Open Node, Dependencies, Dependents) are disabled when no valid node selection/focus exists
+    - Refresh reruns the workspace pipeline and refreshes graph/timeline/diagnostics projections
+    - Refresh updates graph status text with a `refreshed=<time>` stamp and trace metadata with `generatedAt=<isoTime>`
 - Governance:
   - choir policy status
   - choir audit log|query|report

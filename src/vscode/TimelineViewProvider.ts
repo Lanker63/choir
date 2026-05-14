@@ -110,6 +110,13 @@ export class TimelineViewProvider {
   }
 
   private async handleEvent(event: ChoirEvent): Promise<void> {
+    if (event.type === "NAVIGATE" && event.intent.type === "showTimeline") {
+      this.openPanel(vscode.ViewColumn.Two);
+      await this.broadcast({ type: "NAVIGATE", intent: event.intent });
+      await this.pushUpdate();
+      return;
+    }
+
     if (this.webviews.size === 0) {
       return;
     }
@@ -119,13 +126,6 @@ export class TimelineViewProvider {
       || event.type === "TIMELINE_UPDATED"
       || event.type === "PLAN_UPDATED"
     ) {
-      await this.pushUpdate();
-      return;
-    }
-
-    if (event.type === "NAVIGATE" && event.intent.type === "showTimeline") {
-      this.openPanel(vscode.ViewColumn.Two);
-      await this.broadcast({ type: "NAVIGATE", intent: event.intent });
       await this.pushUpdate();
     }
   }

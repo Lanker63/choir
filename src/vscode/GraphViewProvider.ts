@@ -39,7 +39,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     private readonly context: vscode.ExtensionContext,
     private readonly eventBus: ChoirEventBus,
     private readonly traceStore: MessageTraceStore,
-    private readonly registry: WebviewRegistry
+    private readonly registry: WebviewRegistry,
+    private readonly refreshWorkspace?: () => Promise<void>
   ) {
     this.eventSubscription = this.eventBus.subscribe(async (event) => {
       await this.handleEvent(event);
@@ -153,6 +154,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       } else if (event.intent.type === "showDependencies") {
         this.mode = "dependency";
         this.focusNodeId = event.intent.unitId;
+      } else if (event.intent.type === "showDependents") {
+        this.mode = "dependents";
+        this.focusNodeId = event.intent.unitId;
       }
 
       await this.postSnapshot();
@@ -160,8 +164,17 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
   }
 
   private async handleMessage(message: GraphInboundMessage): Promise<void> {
-    if (message.type === "ready" || message.type === "refresh" || message.type === "request-state") {
+    if (message.type === "ready" || message.type === "request-state") {
       await this.postSnapshot();
+      return;
+    }
+
+    if (message.type === "refresh") {
+      if (this.refreshWorkspace) {
+        await this.refreshWorkspace();
+      } else {
+        await this.postSnapshot();
+      }
       return;
     }
 
@@ -175,10 +188,15 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         : undefined;
       await this.postSnapshot();
       if (this.focusNodeId) {
+        const intentType = this.mode === "dependency"
+          ? "showDependencies"
+          : this.mode === "dependents"
+            ? "showDependents"
+            : "focusUnit";
         this.eventBus.emit({
           type: "NAVIGATE",
           intent: {
-            type: this.mode === "dependency" ? "showDependencies" : "focusUnit",
+            type: intentType,
             unitId: this.focusNodeId,
           },
         });
@@ -295,7 +313,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       --ink: #123325;
       --muted: #4b6b60;
       --line: #bfd8cd;
-      --sidebar-width: 320px;
+      --sidebar-width: 180px;
       --splitter-width: 10px;
     }
     * { box-sizing: border-box; }
@@ -307,10 +325,10 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     }
     .layout {
       height: 100vh;
-      display: grid;
-      grid-template-columns: minmax(240px, var(--sidebar-width)) var(--splitter-width) minmax(0, 1fr);
+      display: flex;
+      align-items: stretch;
+      padding: 8px;
       gap: 0;
-      padding: 12px;
     }
     .panel {
       background: var(--panel);
@@ -319,13 +337,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       box-shadow: 0 12px 28px rgba(22, 66, 51, 0.08);
     }
     .sidebar {
-      display: grid;
-      grid-template-rows: auto auto auto 1fr;
+      width: var(--sidebar-width);
+      min-width: 160px;
+      display: flex;
+      flex-direction: column;
       overflow: hidden;
+      flex: 0 0 auto;
     }
     .section {
-      padding: 12px;
+      padding: 8px;
       border-bottom: 1px solid #edf3ef;
+    }
+    .section:last-child {
+      border-bottom: 0;
+      flex: 1 1 auto;
+      min-height: 0;
     }
     .section h2 {
       margin: 0 0 8px;
@@ -335,32 +361,48 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       color: var(--muted);
     }
     .field {
-      display: grid;
-      gap: 4px;
-      margin-bottom: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-bottom: 6px;
+      min-width: 0;
     }
-    label { font-size: 12px; color: var(--muted); }
+    label { font-size: 11px; color: var(--muted); }
     select, input, button { font: inherit; }
     select, input {
       width: 100%;
-      padding: 8px;
+      height: 30px;
+      padding: 2px 6px;
       border: 1px solid #c9ddd4;
-      border-radius: 8px;
+      border-radius: 6px;
       background: #fff;
       color: var(--ink);
+      font-size: 12px;
+      line-height: 1.2;
+      min-width: 0;
     }
     .button-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
+      display: flex;
+      flex-wrap: wrap;
       gap: 6px;
+      min-width: 0;
     }
     button {
       border: 1px solid #bad1c8;
       border-radius: 8px;
-      padding: 8px;
+      padding: 4px 8px;
       background: linear-gradient(180deg, #f8fcfa, #eef7f2);
       color: var(--ink);
       cursor: pointer;
+      white-space: nowrap;
+      width: auto;
+      min-width: 0;
+      flex: 0 0 auto;
+    }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: 0.52;
+      filter: saturate(0.7);
     }
     button.primary {
       background: linear-gradient(180deg, #2f9d7b, #1f7f61);
@@ -371,16 +413,42 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       font-size: 12px;
       color: var(--muted);
     }
+    #statusLine {
+      padding-top: 4px;
+    }
     .inspector {
       overflow: auto;
       font-size: 12px;
       line-height: 1.4;
       white-space: pre-wrap;
+      scrollbar-width: thin;
+      scrollbar-color: #6f9d8d #e6f0eb;
+    }
+    .inspector::-webkit-scrollbar,
+    .sidebar::-webkit-scrollbar {
+      width: 10px;
+      height: 10px;
+    }
+    .inspector::-webkit-scrollbar-track,
+    .sidebar::-webkit-scrollbar-track {
+      background: #e6f0eb;
+      border-radius: 999px;
+    }
+    .inspector::-webkit-scrollbar-thumb,
+    .sidebar::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, #7eaa9a, #5f8f80);
+      border-radius: 999px;
+      border: 2px solid #e6f0eb;
+    }
+    .inspector::-webkit-scrollbar-thumb:hover,
+    .sidebar::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, #6f9d8d, #4f7b6d);
     }
     .canvas {
       position: relative;
       min-width: 0;
       overflow: hidden;
+      flex: 1 1 auto;
     }
     .splitter {
       position: relative;
@@ -390,6 +458,9 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       background: linear-gradient(180deg, rgba(191, 216, 205, 0.45), rgba(191, 216, 205, 0.2));
       outline: none;
       margin: 0 6px;
+      width: var(--splitter-width);
+      min-width: var(--splitter-width);
+      flex: 0 0 var(--splitter-width);
     }
     .splitter::before {
       content: "";
@@ -527,7 +598,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     const graphSvg = document.getElementById("graphSvg");
     const miniMap = document.getElementById("miniMap");
 
-    const SIDEBAR_MIN = 240;
+    const SIDEBAR_MIN = 160;
+    const SIDEBAR_DEFAULT = 180;
     const RIGHT_MIN = 320;
     const SPLITTER_WIDTH = 10;
 
@@ -940,6 +1012,7 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
         .on("click", function(_event, d) {
           state.selectedNodeId = d.id;
           focusSelect.value = d.id;
+          updateActionButtons();
           renderInspector();
           renderGraph();
         })
@@ -1066,14 +1139,21 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       }
 
       modeSelect.value = snapshot.mode;
+      const refreshedAt = new Date(snapshot.generatedAt);
+      const refreshedLabel = Number.isNaN(refreshedAt.getTime())
+        ? snapshot.generatedAt
+        : refreshedAt.toLocaleTimeString();
       statusLine.textContent = "nodes=" + snapshot.graph.nodes.length
         + ", edges=" + snapshot.graph.edges.length
         + ", changed=" + (snapshot.changedNodeIds ?? []).length
-        + ", violations=" + (snapshot.violationNodeIds ?? []).length;
+        + ", violations=" + (snapshot.violationNodeIds ?? []).length
+        + ", refreshed=" + refreshedLabel;
 
       traceLine.textContent = "stateHash=" + snapshot.trace.sourceStateHash
-        + ", rendered=" + snapshot.trace.nodesRendered + "/" + snapshot.trace.edgesRendered;
+        + ", rendered=" + snapshot.trace.nodesRendered + "/" + snapshot.trace.edgesRendered
+        + ", generatedAt=" + snapshot.generatedAt;
 
+      updateActionButtons();
       renderInspector();
       renderGraph();
     }
@@ -1087,12 +1167,49 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       });
     }
 
+    function isVisibleNodeId(nodeId) {
+      if (!state.snapshot || typeof nodeId !== "string" || nodeId.trim().length === 0) {
+        return false;
+      }
+
+      return state.snapshot.graph.nodes.some(function(node) { return node.id === nodeId; });
+    }
+
+    function resolveActionableNodeId() {
+      const selectedNodeId = typeof state.selectedNodeId === "string" ? state.selectedNodeId.trim() : "";
+      if (selectedNodeId && isVisibleNodeId(selectedNodeId)) {
+        return selectedNodeId;
+      }
+
+      const focusedNodeId = focusSelect.value.trim();
+      if (focusedNodeId && isVisibleNodeId(focusedNodeId)) {
+        return focusedNodeId;
+      }
+
+      const snapshotFocusNodeId = state.snapshot && typeof state.snapshot.focusNodeId === "string"
+        ? state.snapshot.focusNodeId.trim()
+        : "";
+      if (snapshotFocusNodeId && isVisibleNodeId(snapshotFocusNodeId)) {
+        return snapshotFocusNodeId;
+      }
+
+      return "";
+    }
+
+    function updateActionButtons() {
+      const hasNode = resolveActionableNodeId().length > 0;
+      openNodeBtn.disabled = !hasNode;
+      dependenciesBtn.disabled = !hasNode;
+      dependentsBtn.disabled = !hasNode;
+    }
+
     modeSelect.addEventListener("change", function() {
       sendMode(modeSelect.value);
     });
 
     focusSelect.addEventListener("change", function() {
       state.selectedNodeId = focusSelect.value || undefined;
+      updateActionButtons();
       sendMode(modeSelect.value);
     });
 
@@ -1102,31 +1219,54 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
     });
 
     refreshBtn.addEventListener("click", function() {
+      statusLine.textContent = "Refreshing graph projection...";
       vscode.postMessage({ type: "refresh" });
     });
 
     openNodeBtn.addEventListener("click", function() {
-      if (!state.selectedNodeId) {
+      const nodeId = resolveActionableNodeId();
+
+      if (!nodeId) {
+        statusLine.textContent = "Open Node requires a selected/focused node.";
+        updateActionButtons();
         return;
       }
 
-      vscode.postMessage({ type: "open-node", id: state.selectedNodeId });
+      state.selectedNodeId = nodeId;
+      if (focusSelect.value !== nodeId) {
+        focusSelect.value = nodeId;
+      }
+
+      statusLine.textContent = "Opening node + timeline...";
+      vscode.postMessage({ type: "open-node", id: nodeId });
     });
 
     dependenciesBtn.addEventListener("click", function() {
-      if (!state.selectedNodeId) {
+      const nodeId = resolveActionableNodeId();
+      if (!nodeId) {
+        updateActionButtons();
         return;
       }
 
+      state.selectedNodeId = nodeId;
+      if (focusSelect.value !== nodeId) {
+        focusSelect.value = nodeId;
+      }
       modeSelect.value = "dependency";
       sendMode("dependency");
     });
 
     dependentsBtn.addEventListener("click", function() {
-      if (!state.selectedNodeId) {
+      const nodeId = resolveActionableNodeId();
+      if (!nodeId) {
+        updateActionButtons();
         return;
       }
 
+      state.selectedNodeId = nodeId;
+      if (focusSelect.value !== nodeId) {
+        focusSelect.value = nodeId;
+      }
       modeSelect.value = "dependents";
       sendMode("dependents");
     });
@@ -1177,8 +1317,8 @@ export class GraphViewProvider implements vscode.WebviewViewProvider {
       applySidebarWidth(currentSidebarWidth(), false);
     });
 
-    const savedState = vscode.getState() ?? {};
-    applySidebarWidth(parsePixelValue(savedState.sidebarWidth, 320), false);
+    applySidebarWidth(SIDEBAR_DEFAULT, true);
+    updateActionButtons();
 
     window.addEventListener("message", function(event) {
       const message = event.data;

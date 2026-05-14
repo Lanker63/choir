@@ -132,15 +132,25 @@ function registerValidation(context: vscode.ExtensionContext): void {
 }
 
 function registerTraceCommand(context: vscode.ExtensionContext): void {
+  const output = vscode.window.createOutputChannel("Choir DSL Editor Trace");
+  context.subscriptions.push(output);
+
   context.subscriptions.push(
     vscode.commands.registerCommand("choir.showDslEditorTrace", () => {
+      const snapshot = getEditorTrace();
       const message = [
-        `completionsTriggered=${trace.completionsTriggered}`,
-        `diagnosticsCount=${trace.diagnosticsCount}`,
-        `parseErrors=${trace.parseErrors}`,
+        `completionsTriggered=${snapshot.completionsTriggered}`,
+        `diagnosticsCount=${snapshot.diagnosticsCount}`,
+        `parseErrors=${snapshot.parseErrors}`,
       ].join(" | ");
 
-      void vscode.window.showInformationMessage(`Choir DSL editor trace: ${message}`);
+      output.clear();
+      output.appendLine("Choir DSL Editor Trace");
+      output.appendLine(new Date().toISOString());
+      output.appendLine("");
+      output.appendLine(message);
+      output.show(true);
+      void vscode.window.showInformationMessage("Choir DSL editor trace opened in Output.");
     })
   );
 }
