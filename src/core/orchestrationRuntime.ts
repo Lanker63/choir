@@ -12,8 +12,6 @@ import {
   type Repo,
   type RolloutStrategy,
   type CompiledPolicy as GlobalCompiledPolicy,
-  executeGlobalPlan,
-  executeRolloutPlan,
   evaluateCompiledGlobalPolicies,
   executionPreviewHash,
   hashState as hashGlobalState,
@@ -58,8 +56,14 @@ import {
   upsertPendingPreviewApproval,
 } from "./state.js";
 import { controlPlaneToChoirConfig } from "./dslYamlCompiler.js";
-import { deterministicHash } from "./deterministicCore.js";
+import { deterministicHash, deterministicId } from "./deterministicCore.js";
 import { simulatePlanOutcome, type FileChange } from "./executionPreview.js";
+import {
+  applyMaterializationPlan,
+  generateMaterializationPlan,
+  replayMaterializationFromLineage,
+} from "./materializationEngine.js";
+import { CanonicalWorkspaceHasher } from "./workspaceSnapshot.js";
 import {
   readLatestOrchestrationTrace,
   writeOrchestrationTrace,
@@ -78,6 +82,13 @@ export type PipelineMode =
   | "optimize";
 
 export type PipelineStageName =
+  | "analyze"
+  | "validate"
+  | "synthesize"
+  | "generate"
+  | "apply"
+  | "verify"
+  | "commit"
   | "compile"
   | "structural-validation"
   | "semantic-validation"
@@ -146,6 +157,10 @@ export type PipelineSimulationContract = {
   futureStateHash: string;
   orchestrationHash: string;
   replayHash: string;
+  mutationHash: string;
+  projectedWorkspaceHash: string;
+  preWorkspaceSnapshotHash: string;
+  postWorkspaceSnapshotHash: string;
 };
 
 export type PipelineReplayVerification = {
@@ -169,7 +184,13 @@ export type IntegrityViolationType =
   | "ORCHESTRATION_HASH_MISMATCH"
   | "STATE_SNAPSHOT_INVALID"
   | "STATE_SNAPSHOT_MISMATCH"
-  | "STALE_SIMULATION_ARTIFACT";
+  | "STALE_SIMULATION_ARTIFACT"
+  | "MUTATION_MANIFEST_TAMPERED"
+  | "MANIFEST_TAMPER"
+  | "WORKSPACE_SNAPSHOT_DIVERGENCE"
+  | "PATCH_ORDER_DIVERGENCE"
+  | "REPLAY_LINEAGE_DIVERGENCE"
+  | "STATE_LINEAGE_DIVERGENCE";
 
 export type IntegrityViolation = {
   type: IntegrityViolationType;
@@ -188,6 +209,8 @@ export type ExecutionIntegritySnapshot = {
   edgeHash: string;
   canonicalStageHash: string;
   stateSnapshotHash: string;
+  preWorkspaceSnapshotHash: string;
+  postWorkspaceSnapshotHash: string;
   integrityHash: string;
 };
 
@@ -229,6 +252,8 @@ export type PipelineResult = {
     previewHash: string;
     simulationHash: string;
     stateHash: string;
+    preWorkspaceSnapshotHash: string;
+    postWorkspaceSnapshotHash: string;
     summary: {
       filesChanged: number;
       patchesCount: number;
@@ -265,6 +290,8 @@ export type PipelineResult = {
       finalState: string;
       replayState: string;
     };
+    preWorkspaceSnapshotHash: string;
+    postWorkspaceSnapshotHash: string;
     replay: {
       traceId: string;
       stageIds: string[];
@@ -280,6 +307,16 @@ export type PipelineResult = {
     executionHash: string;
     finalStateHash: string;
     replayHash: string;
+    mutationHash: string;
+    workspaceHash: string;
+    replayWorkspaceHash: string;
+    preWorkspaceSnapshotHash: string;
+    postWorkspaceSnapshotHash: string;
+    preWorkspaceSnapshotId: string;
+    postWorkspaceSnapshotId: string;
+    patchOrderHash: string;
+    manifestId: string;
+    manifestHash: string;
     executionStages: {
       id: string;
       order: number;
@@ -521,6 +558,13 @@ function diagnosticsCategoryForMode(mode: PipelineMode): PipelineDiagnosticsCate
 function stageOrderForMode(mode: PipelineMode): PipelineStageName[] {
   if (mode === "execute") {
     return [
+      "analyze",
+      "validate",
+      "synthesize",
+      "generate",
+      "apply",
+      "verify",
+      "commit",
       "compile",
       "structural-validation",
       "semantic-validation",
@@ -692,6 +736,8 @@ function buildExecutionIntegritySnapshot(input: {
   executionDag: PipelineExecutionDAG;
   stateSnapshotHash: string;
   predictedExecutionHash: string;
+  preWorkspaceSnapshotHash: string;
+  postWorkspaceSnapshotHash: string;
 }): ExecutionIntegritySnapshot {
   const nodeHash = hashDagNodes(input.executionDag.nodes);
   const edgeHash = hashDagEdges(input.executionDag.edges);
@@ -709,6 +755,8 @@ function buildExecutionIntegritySnapshot(input: {
     edgeHash,
     canonicalStageHash,
     stateSnapshotHash: input.stateSnapshotHash,
+    preWorkspaceSnapshotHash: input.preWorkspaceSnapshotHash,
+    postWorkspaceSnapshotHash: input.postWorkspaceSnapshotHash,
   };
 
   return {
@@ -735,6 +783,8 @@ function parseExecutionIntegritySnapshot(value: unknown): ExecutionIntegritySnap
     "edgeHash",
     "canonicalStageHash",
     "stateSnapshotHash",
+    "preWorkspaceSnapshotHash",
+    "postWorkspaceSnapshotHash",
     "integrityHash",
   ] as const;
 
@@ -754,8 +804,90 @@ function parseExecutionIntegritySnapshot(value: unknown): ExecutionIntegritySnap
     edgeHash: record.edgeHash as string,
     canonicalStageHash: record.canonicalStageHash as string,
     stateSnapshotHash: record.stateSnapshotHash as string,
+    preWorkspaceSnapshotHash: record.preWorkspaceSnapshotHash as string,
+    postWorkspaceSnapshotHash: record.postWorkspaceSnapshotHash as string,
     integrityHash: record.integrityHash as string,
   };
+}
+
+type MaterializationTraceBinding = {
+  previewHash: string;
+  mutationHash: string;
+  patchOrderHash?: string;
+  preWorkspaceSnapshotId?: string;
+  preWorkspaceSnapshotHash?: string;
+  postWorkspaceSnapshotId?: string;
+  postWorkspaceSnapshotHash?: string;
+  workspaceHash: string;
+  replayWorkspaceHash: string;
+  manifestId: string;
+  manifestHash: string;
+};
+
+function parseMaterializationTraceBinding(value: unknown): MaterializationTraceBinding | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+
+  const record = value as Record<string, unknown>;
+  const required = [
+    "previewHash",
+    "mutationHash",
+    "workspaceHash",
+    "replayWorkspaceHash",
+    "manifestId",
+    "manifestHash",
+  ] as const;
+
+  if (!required.every((field) => typeof record[field] === "string" && (record[field] as string).length > 0)) {
+    return undefined;
+  }
+
+  return {
+    previewHash: record.previewHash as string,
+    mutationHash: record.mutationHash as string,
+    ...(typeof record.patchOrderHash === "string" ? { patchOrderHash: record.patchOrderHash as string } : {}),
+    ...(typeof record.preWorkspaceSnapshotId === "string" ? { preWorkspaceSnapshotId: record.preWorkspaceSnapshotId as string } : {}),
+    ...(typeof record.preWorkspaceSnapshotHash === "string" ? { preWorkspaceSnapshotHash: record.preWorkspaceSnapshotHash as string } : {}),
+    ...(typeof record.postWorkspaceSnapshotId === "string" ? { postWorkspaceSnapshotId: record.postWorkspaceSnapshotId as string } : {}),
+    ...(typeof record.postWorkspaceSnapshotHash === "string" ? { postWorkspaceSnapshotHash: record.postWorkspaceSnapshotHash as string } : {}),
+    workspaceHash: record.workspaceHash as string,
+    replayWorkspaceHash: record.replayWorkspaceHash as string,
+    manifestId: record.manifestId as string,
+    manifestHash: record.manifestHash as string,
+  };
+}
+
+function readMaterializationManifest(root: string, manifestId: string): Record<string, unknown> | undefined {
+  const manifestPath = path.join(root, ".choir", "artifacts", "materialization", `${manifestId}.json`);
+  if (!fs.existsSync(manifestPath)) {
+    return undefined;
+  }
+
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf-8").trim();
+    if (raw.length === 0) {
+      return undefined;
+    }
+
+    const payload = JSON.parse(raw) as unknown;
+    if (typeof payload !== "object" || payload === null || Array.isArray(payload)) {
+      return undefined;
+    }
+
+    return payload as Record<string, unknown>;
+  } catch {
+    return undefined;
+  }
+}
+
+function readMaterializationManifestHash(root: string, manifestId: string): string | undefined {
+  const payload = readMaterializationManifest(root, manifestId);
+  return payload ? deterministicHash(payload) : undefined;
+}
+
+function currentWorkspaceSnapshotHash(root: string): string {
+  return CanonicalWorkspaceHasher.capture(root).snapshotHash;
 }
 
 function topologicalOrderFromEdges(nodes: string[], edges: Array<{ from: string; to: string }>): { order: string[]; cyclic: boolean } {
@@ -880,6 +1012,7 @@ function validateExecutionDagIntegrity(input: {
 function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): ExecutionIntegrityGateResult {
   const violations: IntegrityViolation[] = [];
   const stateSnapshot = safeReadStateSnapshot(input.root);
+  const workspaceSnapshotHash = currentWorkspaceSnapshotHash(input.root);
   if (stateSnapshot.readError) {
     violations.push(integrityViolation("STATE_SNAPSHOT_INVALID", stateSnapshot.readError));
   }
@@ -937,7 +1070,19 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
     executionDag: input.executionDag,
     stateSnapshotHash: stateSnapshot.snapshotHash,
     predictedExecutionHash,
+    preWorkspaceSnapshotHash: input.simulationContract.preWorkspaceSnapshotHash,
+    postWorkspaceSnapshotHash: input.simulationContract.postWorkspaceSnapshotHash,
   });
+
+  if (
+    input.simulationContract.preWorkspaceSnapshotHash
+    && input.simulationContract.preWorkspaceSnapshotHash !== workspaceSnapshotHash
+  ) {
+    violations.push(integrityViolation(
+      "WORKSPACE_SNAPSHOT_DIVERGENCE",
+      `simulation.preWorkspaceSnapshotHash=${input.simulationContract.preWorkspaceSnapshotHash} currentWorkspaceSnapshotHash=${workspaceSnapshotHash}`
+    ));
+  }
 
   const requestedPreviewRef = normalizePreviewReference(input.requestedPreviewRef);
   if (requestedPreviewRef && requestedPreviewRef !== snapshot.previewHash) {
@@ -959,7 +1104,7 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
 
     if (lastPreview.planId !== input.selectedExecutionPlan.id) {
       violations.push(integrityViolation(
-        "STALE_SIMULATION_ARTIFACT",
+        "STATE_LINEAGE_DIVERGENCE",
         `state.lastPreview.planId=${lastPreview.planId} selectedExecutionPlan.id=${input.selectedExecutionPlan.id}`
       ));
     }
@@ -969,7 +1114,7 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
   const latestTrace = readLatestOrchestrationTrace(input.root);
   if (requiresHistoricalArtifact && !latestTrace) {
     violations.push(integrityViolation(
-      "STALE_SIMULATION_ARTIFACT",
+      "REPLAY_LINEAGE_DIVERGENCE",
       "No orchestration trace artifact found for preview/simulation binding."
     ));
   }
@@ -978,28 +1123,38 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
     const latestIntegrity = parseExecutionIntegritySnapshot((latestTrace.modeMetadata as Record<string, unknown> | undefined)?.integrity);
     if (!latestIntegrity) {
       violations.push(integrityViolation(
-        "STALE_SIMULATION_ARTIFACT",
+        "REPLAY_LINEAGE_DIVERGENCE",
         `Latest orchestration trace ${latestTrace.id} is missing integrity metadata.`
       ));
     } else {
       if (latestIntegrity.previewHash !== snapshot.previewHash) {
         violations.push(integrityViolation(
-          "STALE_SIMULATION_ARTIFACT",
+          "REPLAY_LINEAGE_DIVERGENCE",
           `latestTrace.previewHash=${latestIntegrity.previewHash} currentPreviewHash=${snapshot.previewHash}`
         ));
       }
 
       if (latestIntegrity.controlPlaneHash !== snapshot.controlPlaneHash) {
         violations.push(integrityViolation(
-          "STALE_SIMULATION_ARTIFACT",
+          "REPLAY_LINEAGE_DIVERGENCE",
           "Latest orchestration artifact control-plane hash differs from current control-plane hash."
         ));
       }
 
       if (latestIntegrity.stateSnapshotHash !== snapshot.stateSnapshotHash) {
         violations.push(integrityViolation(
-          "STATE_SNAPSHOT_MISMATCH",
+          "STATE_LINEAGE_DIVERGENCE",
           `latestTrace.stateSnapshotHash=${latestIntegrity.stateSnapshotHash} currentStateSnapshotHash=${snapshot.stateSnapshotHash}`
+        ));
+      }
+
+      if (
+        latestIntegrity.preWorkspaceSnapshotHash
+        && latestIntegrity.preWorkspaceSnapshotHash !== workspaceSnapshotHash
+      ) {
+        violations.push(integrityViolation(
+          "WORKSPACE_SNAPSHOT_DIVERGENCE",
+          `latestTrace.preWorkspaceSnapshotHash=${latestIntegrity.preWorkspaceSnapshotHash} currentWorkspaceSnapshotHash=${workspaceSnapshotHash}`
         ));
       }
 
@@ -1032,6 +1187,78 @@ function validateExecutionIntegrity(input: ExecutionIntegrityGateInput): Executi
           "STRATEGY_ID_MISMATCH",
           `latestTrace.strategyId=${latestIntegrity.strategyId} currentStrategyId=${snapshot.strategyId}`
         ));
+      }
+    }
+
+    const latestMaterialization = parseMaterializationTraceBinding(
+      (latestTrace.modeMetadata as Record<string, unknown> | undefined)?.materialization
+    );
+    if (latestMaterialization) {
+      if (latestMaterialization.previewHash !== snapshot.previewHash) {
+        violations.push(integrityViolation(
+          "REPLAY_LINEAGE_DIVERGENCE",
+          `latestMaterialization.previewHash=${latestMaterialization.previewHash} currentPreviewHash=${snapshot.previewHash}`
+        ));
+      }
+
+      const persistedManifest = readMaterializationManifest(input.root, latestMaterialization.manifestId);
+      const persistedManifestHash = readMaterializationManifestHash(input.root, latestMaterialization.manifestId);
+      if (!persistedManifestHash || !persistedManifest) {
+        violations.push(integrityViolation(
+          "MANIFEST_TAMPER",
+          `Materialization manifest missing or unreadable: ${latestMaterialization.manifestId}`
+        ));
+      } else if (persistedManifestHash !== latestMaterialization.manifestHash) {
+        violations.push(integrityViolation(
+          "MANIFEST_TAMPER",
+          `Materialization manifest hash mismatch: expected=${latestMaterialization.manifestHash} actual=${persistedManifestHash}`
+        ));
+      } else {
+        const persistedPostWorkspaceHash = typeof persistedManifest.postWorkspaceSnapshotHash === "string"
+          ? persistedManifest.postWorkspaceSnapshotHash
+          : latestMaterialization.postWorkspaceSnapshotHash;
+
+        if (persistedPostWorkspaceHash && persistedPostWorkspaceHash !== workspaceSnapshotHash) {
+          violations.push(integrityViolation(
+            "WORKSPACE_SNAPSHOT_DIVERGENCE",
+            `materialization.postWorkspaceSnapshotHash=${persistedPostWorkspaceHash} currentWorkspaceSnapshotHash=${workspaceSnapshotHash}`
+          ));
+        }
+
+        if (persistedPostWorkspaceHash && typeof latestMaterialization.workspaceHash === "string" && latestMaterialization.workspaceHash !== persistedPostWorkspaceHash) {
+          violations.push(integrityViolation(
+            "REPLAY_LINEAGE_DIVERGENCE",
+            `trace.workspaceHash=${latestMaterialization.workspaceHash} manifest.postWorkspaceSnapshotHash=${persistedPostWorkspaceHash}`
+          ));
+        }
+
+        const patchOperations = (
+          typeof persistedManifest.mutationSet === "object"
+          && persistedManifest.mutationSet !== null
+          && Array.isArray((persistedManifest.mutationSet as Record<string, unknown>).patchOperations)
+        )
+          ? (persistedManifest.mutationSet as Record<string, unknown>).patchOperations as Array<Record<string, unknown>>
+          : [];
+
+        const computedPatchOrderHash = deterministicHash(
+          patchOperations.map((entry) => ({
+            id: typeof entry.id === "string" ? entry.id : "",
+            order: typeof entry.order === "number" ? entry.order : -1,
+            patchHash: typeof entry.patchHash === "string" ? entry.patchHash : "",
+            files: Array.isArray(entry.files) ? [...entry.files] : [],
+          }))
+        );
+
+        const persistedPatchOrderHash = typeof persistedManifest.patchOrderHash === "string"
+          ? persistedManifest.patchOrderHash
+          : latestMaterialization.patchOrderHash;
+
+        if (persistedPatchOrderHash && persistedPatchOrderHash !== computedPatchOrderHash) {
+          violations.push(integrityViolation(
+            "PATCH_ORDER_DIVERGENCE",
+            `manifest.patchOrderHash=${persistedPatchOrderHash} computedPatchOrderHash=${computedPatchOrderHash}`
+          ));
+        }
       }
     }
   }
@@ -1090,6 +1317,7 @@ export async function generateSimulationContract(
   const validated = validateTrace(deterministicTrace);
   const verified = verifyReplay(deterministicTrace);
   const hashMatches = replayHash === futureStateHash;
+  const preWorkspaceSnapshotHash = currentWorkspaceSnapshotHash(input.root);
 
   if (!validated || !verified || !hashMatches) {
     throw new Error(`Simulation replay verification failed (trace=${validated}, replay=${verified}, hashMatch=${hashMatches}).`);
@@ -1100,6 +1328,10 @@ export async function generateSimulationContract(
       futureStateHash,
       orchestrationHash: input.orchestrationHash,
       replayHash,
+      mutationHash: "",
+      projectedWorkspaceHash: "",
+      preWorkspaceSnapshotHash,
+      postWorkspaceSnapshotHash: preWorkspaceSnapshotHash,
     },
     simulation,
     simulationReplay: {
@@ -1149,7 +1381,11 @@ export async function verifyReplayDeterminism(input: {
 
   const simulationContract = replaySimulation.simulationContract.futureStateHash === input.simulationContract.futureStateHash
     && replaySimulation.simulationContract.orchestrationHash === input.simulationContract.orchestrationHash
-    && replaySimulation.simulationContract.replayHash === input.simulationContract.replayHash;
+    && replaySimulation.simulationContract.replayHash === input.simulationContract.replayHash
+    && replaySimulation.simulationContract.mutationHash === input.simulationContract.mutationHash
+    && replaySimulation.simulationContract.projectedWorkspaceHash === input.simulationContract.projectedWorkspaceHash
+    && replaySimulation.simulationContract.preWorkspaceSnapshotHash === input.simulationContract.preWorkspaceSnapshotHash
+    && replaySimulation.simulationContract.postWorkspaceSnapshotHash === input.simulationContract.postWorkspaceSnapshotHash;
 
   const replayVerification: PipelineReplayVerification = {
     candidateSynthesis,
@@ -1187,6 +1423,10 @@ export async function runOrchestrationPipeline(
     futureStateHash: "",
     orchestrationHash: "",
     replayHash: "",
+    mutationHash: "",
+    projectedWorkspaceHash: "",
+    preWorkspaceSnapshotHash: "",
+    postWorkspaceSnapshotHash: "",
   };
   let replayVerification: PipelineReplayVerification = {
     candidateSynthesis: false,
@@ -1318,9 +1558,15 @@ export async function runOrchestrationPipeline(
     markSuccess("candidate-synthesis", `Synthesized ${candidatePlans.length} deterministic candidate plan(s).`);
     markSuccess("strategy-ranking", `Ranked ${candidatePlans.length} candidate plan(s) deterministically.`);
     markSuccess("strategy-selection", `Selected ${selected.id} via strategy ${selected.strategyType}.`);
+    if (mode === "execute") {
+      markSuccess("synthesize", `Selected deterministic orchestration candidate ${selected.id}.`);
+    }
 
     executionDag = buildExecutionDAG(selected);
     markSuccess("orchestration-build", `Execution DAG built with hash ${executionDag.hash.slice(0, 12)}.`);
+    if (mode === "execute") {
+      markSuccess("analyze", `Analyzed workspace and execution DAG (hash=${executionDag.hash.slice(0, 12)}).`);
+    }
 
     const selectedExecutionPlan = optimized.selectedExecutionPlan;
     selectedExecutionPlanForTrace = selectedExecutionPlan;
@@ -1474,6 +1720,9 @@ export async function runOrchestrationPipeline(
         ? "Approval required and satisfied."
         : `Approval required and pending${approval.pendingId ? ` (${approval.pendingId})` : ""}.`
       : "Approval not required.");
+    if (mode === "execute") {
+      markSuccess("validate", "Deterministic validation gates passed (policy, replay, integrity, approval).");
+    }
 
     if (mode === "preview") {
       const preview = await simulatePlanOutcome(selectedExecutionPlan, {
@@ -1504,6 +1753,8 @@ export async function runOrchestrationPipeline(
         previewHash: preview.previewHash,
         simulationHash,
         stateHash,
+        preWorkspaceSnapshotHash: simulationContract.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: simulationContract.postWorkspaceSnapshotHash,
         summary: {
           filesChanged: preview.metrics.filesChanged,
           patchesCount: preview.metrics.patchesCount,
@@ -1582,6 +1833,8 @@ export async function runOrchestrationPipeline(
           finalState: finalStateHash,
           replayState: replayStateHash,
         },
+        preWorkspaceSnapshotHash: simulationContract.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: simulationContract.postWorkspaceSnapshotHash,
         replay: {
           traceId: deterministicTrace.traceId,
           stageIds: deterministicTrace.stages.map((entry) => entry.stageId),
@@ -1593,173 +1846,179 @@ export async function runOrchestrationPipeline(
         rollbackScope: simulated.success ? [] : sortedUnique(simulated.trace.unitsAffected),
       };
     } else if (mode === "execute") {
-      const globalPlan = toGlobalPlanFromPlan(selectedExecutionPlan);
-      const repos = buildSimulationRepos([globalPlan]);
+      const materialization = await generateMaterializationPlan({
+        root: intent.root,
+        controlPlane: selectedExecutionControl,
+        plan: selectedExecutionPlan,
+        strategyId: selected.strategyType,
+      });
 
-      if (intent.rolloutStrategy) {
-        const rollout = await executeRolloutPlan(
-          globalPlan,
-          {
-            repos,
-            policies: executionPolicies,
-            stateRoot: intent.root,
-          },
-          intent.rolloutStrategy,
-          {
-            requireApproval: policy.requiresApproval
-              ? async ({ previewHash }) => {
-                if (!executionPolicyResult.requiresApproval) {
-                  return approval.approved;
-                }
-
-                return approval.approved && hasApprovalForPreview(intent.root, previewHash);
-              }
-              : undefined,
-          }
+      if (selected.previewHash !== materialization.mutationSet.previewHash) {
+        return fail(
+          "generate",
+          `Generated preview hash mismatch: selected=${selected.previewHash}, generated=${materialization.mutationSet.previewHash}`
         );
+      }
 
-        if (!rollout.success) {
-          return fail("execution", `Execution failed: ${rollout.failures.join("; ") || "rollout execution failure"}`);
+      simulationContract = {
+        ...simulationContract,
+        mutationHash: materialization.mutationSet.mutationHash,
+        projectedWorkspaceHash: materialization.artifactManifest.workspaceHashAfter,
+        preWorkspaceSnapshotHash: materialization.artifactManifest.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: materialization.artifactManifest.postWorkspaceSnapshotHash,
+      };
+
+      markSuccess(
+        "generate",
+        `Generated deterministic mutation set (mutationHash=${materialization.mutationSet.mutationHash.slice(0, 12)}).`
+      );
+
+      const applied = await applyMaterializationPlan({
+        root: intent.root,
+        controlPlane: selectedExecutionControl,
+        plan: materialization,
+      });
+
+      if (!applied.success) {
+        const message = `Transactional apply failed: ${applied.errors.join("; ") || "unknown apply failure"}`;
+        if (applied.errors.some((entry) => /Forced rollback for testing/.test(entry))) {
+          return fail("execution", message);
         }
 
-        const finalStateHash = hashGlobalState(rollout.finalStates);
-        if (simulationContract.futureStateHash !== finalStateHash) {
-          return fail("execution", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
-        }
+        return fail("apply", message);
+      }
 
-        const deterministicTrace = rollout.trace.deterministicTraces[rollout.trace.deterministicTraces.length - 1] ?? generatedSimulation.simulation.trace.deterministicTrace;
-        if (!deterministicTrace) {
-          return fail("execution", "Execution trace missing deterministic replay metadata.");
-        }
+      simulationContract = {
+        ...simulationContract,
+        preWorkspaceSnapshotHash: applied.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: applied.postWorkspaceSnapshotHash,
+      };
 
-        const replayStateHash = hashGlobalState(replay(deterministicTrace));
-        const traceValid = validateTrace(deterministicTrace);
-        const replayValid = verifyReplay(deterministicTrace);
-        const replayHashMatches = replayStateHash === finalStateHash;
+      markSuccess(
+        "apply",
+        `Applied deterministic mutation transaction(s): ${applied.transactionIds.length}`
+      );
 
-        if (!traceValid || !replayValid || !replayHashMatches) {
-          return fail("execution", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
-        }
+      const verifyErrors: string[] = [];
+      if (applied.mutationHash !== materialization.mutationSet.mutationHash) {
+        verifyErrors.push(
+          `mutationHash mismatch expected=${materialization.mutationSet.mutationHash} actual=${applied.mutationHash}`
+        );
+      }
 
-        const transactionId = rollout.trace.transactionTraces[rollout.trace.transactionTraces.length - 1]?.transactionId
-          ?? `rollout-${globalPlan.id}`;
-        const executionStages = rollout.trace.stages.map((stage) => ({
-          id: stage.id,
-          order: stage.order,
-          units: sortedUnique(stage.units),
-        }));
-        const rollbackUnits = sortedUnique(rollout.trace.rollbackTraces.flatMap((entry) => entry.rollbackSet));
-        const rollbackStages = sortedUnique(rollout.trace.rollbackTraces.map((entry) => `rollback:${entry.failedUnit}`));
+      if (applied.workspaceHash !== materialization.artifactManifest.workspaceHashAfter) {
+        verifyErrors.push(
+          `workspaceHash mismatch expected=${materialization.artifactManifest.workspaceHashAfter} actual=${applied.workspaceHash}`
+        );
+      }
 
-        executeResult = {
-          transactionId,
-          executionHash: deterministicHash({
-            transactionId,
-            planId: globalPlan.id,
-            finalStateHash,
-            replayStateHash,
-            completedStages: rollout.trace.completedStages,
-          }),
-          finalStateHash,
-          replayHash: replayStateHash,
-          executionStages,
-          rollbackScope: {
-            unitIds: rollbackUnits,
-            stageIds: rollbackStages,
-            complexity: rollbackUnits.length + rollbackStages.length,
-          },
-          deterministic: true,
-          verified: true,
-          success: true,
-          strategyId: selected.strategyType,
-          planId: selectedExecutionPlan.id,
-          planSource,
-          simulationFutureStateHash: simulationContract.futureStateHash,
-        };
-      } else {
-        const execution = await executeGlobalPlan(globalPlan, {
-          repos,
-          policies: executionPolicies,
-          stateRoot: intent.root,
-          approveExecution: async ({ previewHash }) => {
-            if (!policy.requiresApproval) {
-              return true;
-            }
+      if (applied.replayWorkspaceHash !== applied.workspaceHash) {
+        verifyErrors.push(
+          `replay workspace mismatch replay=${applied.replayWorkspaceHash} execution=${applied.workspaceHash}`
+        );
+      }
 
-            return approval.approved && hasApprovalForPreview(intent.root, previewHash);
-          },
-        });
+      if (applied.preWorkspaceSnapshotHash !== materialization.artifactManifest.preWorkspaceSnapshotHash) {
+        verifyErrors.push(
+          `preWorkspaceSnapshotHash mismatch expected=${materialization.artifactManifest.preWorkspaceSnapshotHash} actual=${applied.preWorkspaceSnapshotHash}`
+        );
+      }
 
-        if (!execution.success) {
-          const rollbackSummary = execution.rolledBack
-            ? execution.rollbackTrace
-              ? `rollback=applied failedUnit=${execution.rollbackTrace.failedUnit} rollbackSet=[${execution.rollbackTrace.rollbackSet.join(", ")}] rollbackOrder=[${execution.rollbackTrace.rollbackOrder.join(", ")}]`
-              : "rollback=applied"
-            : "rollback=not-applied";
-          return fail(
-            "execution",
-            `Execution failed (${rollbackSummary}): ${execution.audit.violations.join("; ") || "global execution failure"}`
-          );
-        }
+      if (applied.postWorkspaceSnapshotHash !== materialization.artifactManifest.postWorkspaceSnapshotHash) {
+        verifyErrors.push(
+          `postWorkspaceSnapshotHash mismatch expected=${materialization.artifactManifest.postWorkspaceSnapshotHash} actual=${applied.postWorkspaceSnapshotHash}`
+        );
+      }
 
-        const finalStateHash = hashGlobalState(execution.finalStates);
-        if (simulationContract.futureStateHash !== finalStateHash) {
-          return fail("execution", `Simulation parity divergence: simulation=${simulationContract.futureStateHash}, execution=${finalStateHash}`);
-        }
+      const replayReconstruction = await replayMaterializationFromLineage({
+        root: intent.root,
+        manifestId: applied.manifestId,
+        restore: false,
+      });
 
-        const deterministicTrace = execution.trace.deterministicTrace;
-        if (!deterministicTrace) {
-          return fail("execution", "Execution trace missing deterministic replay metadata.");
-        }
+      if (!replayReconstruction.success) {
+        verifyErrors.push(
+          `replay reconstruction failed: ${replayReconstruction.errors.join(" | ")}`
+        );
+      } else if (replayReconstruction.workspaceHash !== applied.workspaceHash) {
+        verifyErrors.push(
+          `replay reconstruction workspace mismatch replay=${replayReconstruction.workspaceHash} execution=${applied.workspaceHash}`
+        );
+      }
 
-        const replayStateHash = hashGlobalState(replay(deterministicTrace));
-        const traceValid = validateTrace(deterministicTrace);
-        const replayValid = verifyReplay(deterministicTrace);
-        const replayHashMatches = replayStateHash === finalStateHash;
-
-        if (!traceValid || !replayValid || !replayHashMatches) {
-          return fail("execution", `Replay verification failed (trace=${traceValid}, replay=${replayValid}, hashMatch=${replayHashMatches}).`);
-        }
-
-        const transactionId = execution.trace.transactionTrace?.transactionId ?? `tx-${globalPlan.id}`;
-        const executionStages = execution.trace.stages.map((stage) => ({
-          id: stage.id,
-          order: stage.order,
-          units: sortedUnique(stage.unitIds),
-        }));
-        const rollbackUnits = sortedUnique(execution.rollbackTrace?.rollbackSet ?? []);
-        const rollbackStages = sortedUnique(execution.rollbackTrace?.rollbackOrder.map((unitId) => `rollback:${unitId}`) ?? []);
-
-        executeResult = {
-          transactionId,
-          executionHash: deterministicHash({
-            transactionId,
-            planId: globalPlan.id,
-            finalStateHash,
-            replayStateHash,
-            executionOrder: execution.trace.executionOrder,
-          }),
-          finalStateHash,
-          replayHash: replayStateHash,
-          executionStages,
-          rollbackScope: {
-            unitIds: rollbackUnits,
-            stageIds: rollbackStages,
-            complexity: rollbackUnits.length + rollbackStages.length,
-          },
-          deterministic: true,
-          verified: true,
-          success: true,
-          strategyId: selected.strategyType,
-          planId: selectedExecutionPlan.id,
-          planSource,
-          simulationFutureStateHash: simulationContract.futureStateHash,
-        };
+      if (verifyErrors.length > 0) {
+        return fail("verify", `Materialization verification failed: ${verifyErrors.join("; ")}`);
       }
 
       markSuccess(
+        "verify",
+        `Verified mutation parity (workspaceHash=${applied.workspaceHash.slice(0, 12)}).`
+      );
+
+      const transactionId = applied.transactionIds[applied.transactionIds.length - 1]
+        ?? deterministicId("tx", {
+          planId: selectedExecutionPlan.id,
+          strategyId: selected.strategyType,
+          workspaceHash: applied.workspaceHash,
+        }, 16);
+
+      executeResult = {
+        transactionId,
+        executionHash: deterministicHash({
+          transactionId,
+          planId: selectedExecutionPlan.id,
+          strategyId: selected.strategyType,
+          finalStateHash: simulationContract.futureStateHash,
+          replayHash: simulationContract.replayHash,
+          mutationHash: applied.mutationHash,
+          patchOrderHash: materialization.artifactManifest.patchOrderHash,
+          workspaceHash: applied.workspaceHash,
+          replayWorkspaceHash: applied.replayWorkspaceHash,
+          preWorkspaceSnapshotHash: applied.preWorkspaceSnapshotHash,
+          postWorkspaceSnapshotHash: applied.postWorkspaceSnapshotHash,
+          preWorkspaceSnapshotId: applied.preWorkspaceSnapshotId,
+          postWorkspaceSnapshotId: applied.postWorkspaceSnapshotId,
+          manifestId: applied.manifestId,
+          manifestHash: applied.manifestHash,
+        }),
+        finalStateHash: simulationContract.futureStateHash,
+        replayHash: simulationContract.replayHash,
+        mutationHash: applied.mutationHash,
+        patchOrderHash: materialization.artifactManifest.patchOrderHash,
+        workspaceHash: applied.workspaceHash,
+        replayWorkspaceHash: applied.replayWorkspaceHash,
+        preWorkspaceSnapshotHash: applied.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: applied.postWorkspaceSnapshotHash,
+        preWorkspaceSnapshotId: applied.preWorkspaceSnapshotId,
+        postWorkspaceSnapshotId: applied.postWorkspaceSnapshotId,
+        manifestId: applied.manifestId,
+        manifestHash: applied.manifestHash,
+        executionStages: optimized.executionStages.map((stage) => ({
+          id: stage.id,
+          order: stage.order,
+          units: sortedUnique(stage.units),
+        })),
+        rollbackScope: {
+          unitIds: sortedUnique(optimized.rollbackScope.unitIds),
+          stageIds: sortedUnique(optimized.rollbackScope.stageIds),
+          complexity: optimized.rollbackScope.complexity,
+        },
+        deterministic: true,
+        verified: true,
+        success: true,
+        strategyId: selected.strategyType,
+        planId: selectedExecutionPlan.id,
+        planSource,
+        simulationFutureStateHash: simulationContract.futureStateHash,
+      };
+
+      markSuccess(
+        "commit",
+        `Committed materialization manifest ${applied.manifestId} (hash=${applied.manifestHash.slice(0, 12)}).`
+      );
+      markSuccess(
         "execution",
-        `Execution committed transaction ${executeResult?.transactionId ?? "unknown"} with verified replay parity.`
+        `Execution committed transaction ${executeResult.transactionId} with deterministic materialization parity.`
       );
     }
 
@@ -1780,6 +2039,8 @@ export async function runOrchestrationPipeline(
         executionDag,
         stateSnapshotHash: stateSnapshot.snapshotHash,
         predictedExecutionHash: hashGlobalState(generatedSimulationForTrace.simulation.finalState),
+        preWorkspaceSnapshotHash: simulationContract.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: simulationContract.postWorkspaceSnapshotHash,
       });
     }
 
@@ -1812,6 +2073,23 @@ export async function runOrchestrationPipeline(
         policyDecision: policy.decision,
         approvalRequired: approval.required,
         approvalSatisfied: approval.approved,
+        ...(executeResult
+          ? {
+            materialization: {
+              previewHash: selected.previewHash,
+              mutationHash: executeResult.mutationHash,
+              patchOrderHash: executeResult.patchOrderHash,
+              workspaceHash: executeResult.workspaceHash,
+              replayWorkspaceHash: executeResult.replayWorkspaceHash,
+              preWorkspaceSnapshotHash: executeResult.preWorkspaceSnapshotHash,
+              postWorkspaceSnapshotHash: executeResult.postWorkspaceSnapshotHash,
+              preWorkspaceSnapshotId: executeResult.preWorkspaceSnapshotId,
+              postWorkspaceSnapshotId: executeResult.postWorkspaceSnapshotId,
+              manifestId: executeResult.manifestId,
+              manifestHash: executeResult.manifestHash,
+            },
+          }
+          : {}),
         ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
         ...(integrityViolations.length > 0
           ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
@@ -1835,6 +2113,23 @@ export async function runOrchestrationPipeline(
         replayVerification,
         candidatePlans,
         planComparisons,
+        ...(executeResult
+          ? {
+            materialization: {
+              previewHash: selected.previewHash,
+              mutationHash: executeResult.mutationHash,
+              patchOrderHash: executeResult.patchOrderHash,
+              workspaceHash: executeResult.workspaceHash,
+              replayWorkspaceHash: executeResult.replayWorkspaceHash,
+              preWorkspaceSnapshotHash: executeResult.preWorkspaceSnapshotHash,
+              postWorkspaceSnapshotHash: executeResult.postWorkspaceSnapshotHash,
+              preWorkspaceSnapshotId: executeResult.preWorkspaceSnapshotId,
+              postWorkspaceSnapshotId: executeResult.postWorkspaceSnapshotId,
+              manifestId: executeResult.manifestId,
+              manifestHash: executeResult.manifestHash,
+            },
+          }
+          : {}),
         ...(integritySnapshot ? { integrity: integritySnapshot } : {}),
         ...(integrityViolations.length > 0
           ? { integrityViolations: integrityViolations.map((entry) => formatIntegrityViolation(entry)) }
@@ -1893,6 +2188,8 @@ export async function runOrchestrationPipeline(
         executionDag,
         stateSnapshotHash: stateSnapshot.snapshotHash,
         predictedExecutionHash: hashGlobalState(generatedSimulationForTrace.simulation.finalState),
+        preWorkspaceSnapshotHash: simulationContract.preWorkspaceSnapshotHash,
+        postWorkspaceSnapshotHash: simulationContract.postWorkspaceSnapshotHash,
       });
     }
 

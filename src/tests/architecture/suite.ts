@@ -5874,7 +5874,7 @@ const pass6: TestPass = {
           }
 
           assert.strictEqual(failedStage, "integrity");
-          assert.ok(/STATE_SNAPSHOT_INVALID|STATE_SNAPSHOT_MISMATCH|PREVIEW_HASH_MISMATCH/.test(errorMessage));
+          assert.ok(/STATE_SNAPSHOT_INVALID|STATE_LINEAGE_DIVERGENCE|PREVIEW_HASH_MISMATCH/.test(errorMessage));
           assert.strictEqual(stageResults.some((stage) => stage.stage === "execution" && stage.status === "success"), false);
         });
       },
@@ -5966,7 +5966,7 @@ const pass6: TestPass = {
           }
 
           assert.strictEqual(failedStage, "integrity");
-          assert.ok(/STALE_SIMULATION_ARTIFACT|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(errorMessage));
+          assert.ok(/REPLAY_LINEAGE_DIVERGENCE|STATE_LINEAGE_DIVERGENCE|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(errorMessage));
         });
       },
     },

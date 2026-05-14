@@ -8,6 +8,8 @@ import {
   runOrchestrationPipeline,
   type PipelineMode,
 } from "../../../core/orchestrationRuntime.js";
+import { replayMaterializationFromLineage } from "../../../core/materializationEngine.js";
+import { CanonicalWorkspaceHasher } from "../../../core/workspaceSnapshot.js";
 
 export type RuntimeVerificationCheck = {
   name: string;
@@ -77,6 +79,36 @@ async function runPreviewWithState(root: string): Promise<Awaited<ReturnType<typ
   });
 }
 
+async function withTemporaryEnv(
+  updates: Partial<Record<string, string | undefined>>,
+  run: () => Promise<void>
+): Promise<void> {
+  const keys = Object.keys(updates);
+  const original: Record<string, string | undefined> = {};
+  for (const key of keys) {
+    original[key] = process.env[key];
+    const value = updates[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    await run();
+  } finally {
+    for (const key of keys) {
+      const value = original[key];
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 export async function runRuntimeVerification(): Promise<RuntimeVerificationReport> {
   const checks: RuntimeVerificationCheck[] = [];
 
@@ -109,6 +141,13 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       name: "execute-uses-unified-runtime",
       passed: execute.trace.mode === "execute" && execute.trace.status === "success" && Boolean(execute.execute),
       detail: `trace=${execute.trace.id}, mode=${execute.trace.mode}, selected=${execute.selectedPlanId}`,
+    });
+
+    checks.push({
+      name: "execute-stage-flow-materialization",
+      passed: ["analyze", "validate", "synthesize", "generate", "apply", "verify", "commit"]
+        .every((stage) => execute.stageResults.some((entry) => entry.stage === stage && entry.status === "success")),
+      detail: `stages=${execute.stageResults.map((entry) => `${entry.stage}:${entry.status}`).join(",")}`,
     });
 
     checks.push({
@@ -145,6 +184,49 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       fs.rmSync(deterministicRoot, { recursive: true, force: true });
     }
 
+    const generationRootA = makeTempRoot();
+    const generationRootB = makeTempRoot();
+    try {
+      const firstExecute = await runMode("execute", generationRootA);
+      const secondExecute = await runMode("execute", generationRootB);
+
+      const firstPayload = firstExecute.execute as unknown as Record<string, unknown> | undefined;
+      const secondPayload = secondExecute.execute as unknown as Record<string, unknown> | undefined;
+      const sameMutationHash = typeof firstPayload?.mutationHash === "string"
+        && firstPayload.mutationHash === secondPayload?.mutationHash;
+      const sameWorkspaceHash = typeof firstPayload?.workspaceHash === "string"
+        && firstPayload.workspaceHash === secondPayload?.workspaceHash;
+
+      checks.push({
+        name: "deterministic-generation-mutation-plan",
+        passed: sameMutationHash && sameWorkspaceHash,
+        detail: `firstMutation=${String(firstPayload?.mutationHash ?? "")}, secondMutation=${String(secondPayload?.mutationHash ?? "")}`,
+      });
+    } finally {
+      fs.rmSync(generationRootA, { recursive: true, force: true });
+      fs.rmSync(generationRootB, { recursive: true, force: true });
+    }
+
+    const applyDeterminismRoot = makeTempRoot();
+    try {
+      const firstExecute = await runMode("execute", applyDeterminismRoot);
+      const secondExecute = await runMode("execute", applyDeterminismRoot);
+
+      const firstPayload = firstExecute.execute as unknown as Record<string, unknown> | undefined;
+      const secondPayload = secondExecute.execute as unknown as Record<string, unknown> | undefined;
+
+      checks.push({
+        name: "deterministic-apply-workspace-state",
+        passed: typeof firstPayload?.workspaceHash === "string"
+          && firstPayload.workspaceHash === secondPayload?.workspaceHash
+          && firstPayload.workspaceHash === firstPayload.replayWorkspaceHash
+          && secondPayload?.workspaceHash === secondPayload?.replayWorkspaceHash,
+        detail: `firstWorkspace=${String(firstPayload?.workspaceHash ?? "")}, secondWorkspace=${String(secondPayload?.workspaceHash ?? "")}`,
+      });
+    } finally {
+      fs.rmSync(applyDeterminismRoot, { recursive: true, force: true });
+    }
+
     checks.push({
       name: "simulation-execution-parity",
       passed: (() => {
@@ -159,6 +241,48 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       detail: execute.execute
         ? `simulation=${execute.execute.simulationFutureStateHash.slice(0, 12)}, execution=${execute.execute.finalStateHash.slice(0, 12)}`
         : "execution payload missing",
+    });
+
+    checks.push({
+      name: "execute-payload-is-mutation-aware",
+      passed: (() => {
+        const payload = execute.execute as unknown as Record<string, unknown> | undefined;
+        if (!payload) {
+          return false;
+        }
+
+        return typeof payload.mutationHash === "string"
+          && (payload.mutationHash as string).length > 0
+          && typeof payload.workspaceHash === "string"
+          && (payload.workspaceHash as string).length > 0
+          && typeof payload.replayWorkspaceHash === "string"
+          && (payload.replayWorkspaceHash as string).length > 0;
+      })(),
+      detail: execute.execute
+        ? `keys=${Object.keys(execute.execute as unknown as Record<string, unknown>).sort((a, b) => a.localeCompare(b)).join(",")}`
+        : "execution payload missing",
+    });
+
+    checks.push({
+      name: "workspace-replay-equivalence",
+      passed: (() => {
+        const payload = execute.execute as unknown as Record<string, unknown> | undefined;
+        if (!payload) {
+          return false;
+        }
+
+        return typeof payload.workspaceHash === "string"
+          && typeof payload.replayWorkspaceHash === "string"
+          && payload.workspaceHash === payload.replayWorkspaceHash;
+      })(),
+      detail: (() => {
+        const payload = execute.execute as unknown as Record<string, unknown> | undefined;
+        if (!payload) {
+          return "execution payload missing";
+        }
+
+        return `workspace=${String(payload.workspaceHash ?? "")}, replay=${String(payload.replayWorkspaceHash ?? "")}`;
+      })(),
     });
 
     const stateTamperRoot = makeTempRoot();
@@ -179,7 +303,7 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       } catch (error) {
         if (error instanceof OrchestrationPipelineError) {
           blocked = error.failedStage === "integrity"
-            && /STATE_SNAPSHOT_INVALID|STATE_SNAPSHOT_MISMATCH|PREVIEW_HASH_MISMATCH/.test(error.message);
+            && /STATE_SNAPSHOT_INVALID|STATE_LINEAGE_DIVERGENCE|PREVIEW_HASH_MISMATCH/.test(error.message);
           preTransaction = !error.stageResults.some((stage) => stage.stage === "execution" && stage.status === "success");
         }
       }
@@ -260,7 +384,7 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       } catch (error) {
         if (error instanceof OrchestrationPipelineError) {
           blocked = error.failedStage === "integrity"
-            && /STALE_SIMULATION_ARTIFACT|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(error.message);
+            && /REPLAY_LINEAGE_DIVERGENCE|STATE_LINEAGE_DIVERGENCE|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(error.message);
           preTransaction = !error.stageResults.some((stage) => stage.stage === "execution" && stage.status === "success");
         }
       }
@@ -274,6 +398,47 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       });
     } finally {
       fs.rmSync(staleSimulationRoot, { recursive: true, force: true });
+    }
+
+    const manifestTamperRoot = makeTempRoot();
+    try {
+      await runPreviewWithState(manifestTamperRoot);
+      await runMode("execute", manifestTamperRoot);
+
+      const latestTracePath = path.join(manifestTamperRoot, ".choir", "traces", "orchestration", "latest.json");
+      const latestTrace = JSON.parse(fs.readFileSync(latestTracePath, "utf-8")) as Record<string, unknown>;
+      const modeMetadata = (typeof latestTrace.modeMetadata === "object" && latestTrace.modeMetadata !== null)
+        ? latestTrace.modeMetadata as Record<string, unknown>
+        : {};
+      const materialization = (typeof modeMetadata.materialization === "object" && modeMetadata.materialization !== null)
+        ? modeMetadata.materialization as Record<string, unknown>
+        : {};
+      materialization.manifestHash = "tampered-manifest-hash";
+      modeMetadata.materialization = materialization;
+      latestTrace.modeMetadata = modeMetadata;
+      fs.writeFileSync(latestTracePath, `${JSON.stringify(latestTrace, null, 2)}\n`, "utf-8");
+
+      let blocked = false;
+      let preTransaction = false;
+      try {
+        await runMode("execute", manifestTamperRoot);
+      } catch (error) {
+        if (error instanceof OrchestrationPipelineError) {
+          blocked = error.failedStage === "integrity"
+            && /MANIFEST_TAMPER|MUTATION_MANIFEST_TAMPERED/.test(error.message);
+          preTransaction = !error.stageResults.some((stage) => stage.stage === "apply" && stage.status === "success");
+        }
+      }
+
+      checks.push({
+        name: "integrity-gate-detects-mutation-manifest-tamper",
+        passed: blocked && preTransaction,
+        detail: blocked
+          ? "mutation manifest tamper blocked execution before transactional apply"
+          : "mutation manifest tamper was not blocked by integrity gate",
+      });
+    } finally {
+      fs.rmSync(manifestTamperRoot, { recursive: true, force: true });
     }
 
     const strategyTamperRoot = makeTempRoot();
@@ -311,6 +476,238 @@ export async function runRuntimeVerification(): Promise<RuntimeVerificationRepor
       });
     } finally {
       fs.rmSync(strategyTamperRoot, { recursive: true, force: true });
+    }
+
+    const replayRestoreRoot = makeTempRoot();
+    try {
+      const executed = await runMode("execute", replayRestoreRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+
+      for (const entry of fs.readdirSync(replayRestoreRoot).sort((left, right) => left.localeCompare(right))) {
+        if (entry === ".choir") {
+          continue;
+        }
+
+        fs.rmSync(path.join(replayRestoreRoot, entry), { recursive: true, force: true });
+      }
+
+      const replayed = await replayMaterializationFromLineage({
+        root: replayRestoreRoot,
+        manifestId,
+        restore: true,
+      });
+      const restoredHash = CanonicalWorkspaceHasher.capture(replayRestoreRoot).snapshotHash;
+
+      checks.push({
+        name: "replay-reconstruction-restores-workspace-after-delete",
+        passed: replayed.success
+          && typeof executed.execute?.workspaceHash === "string"
+          && replayed.workspaceHash === executed.execute.workspaceHash
+          && restoredHash === executed.execute.workspaceHash,
+        detail: `restored=${restoredHash}, execute=${String(executed.execute?.workspaceHash ?? "")}`,
+      });
+    } finally {
+      fs.rmSync(replayRestoreRoot, { recursive: true, force: true });
+    }
+
+    const workspaceDivergenceRoot = makeTempRoot();
+    try {
+      await runPreviewWithState(workspaceDivergenceRoot);
+      fs.writeFileSync(path.join(workspaceDivergenceRoot, "non_targeted_divergence.txt"), "tampered\n", "utf-8");
+
+      let blocked = false;
+      try {
+        await runMode("execute", workspaceDivergenceRoot);
+      } catch (error) {
+        if (error instanceof OrchestrationPipelineError) {
+          blocked = error.failedStage === "integrity"
+            && /WORKSPACE_SNAPSHOT_DIVERGENCE|REPLAY_LINEAGE_DIVERGENCE/.test(error.message);
+        }
+      }
+
+      checks.push({
+        name: "integrity-gate-detects-full-workspace-divergence",
+        passed: blocked,
+        detail: blocked
+          ? "non-targeted workspace mutation triggered integrity abort"
+          : "non-targeted workspace mutation was not blocked",
+      });
+    } finally {
+      fs.rmSync(workspaceDivergenceRoot, { recursive: true, force: true });
+    }
+
+    const patchOrderTamperRoot = makeTempRoot();
+    try {
+      const executed = await runMode("execute", patchOrderTamperRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+      const manifestPath = path.join(patchOrderTamperRoot, ".choir", "artifacts", "materialization", `${manifestId}.json`);
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as Record<string, unknown>;
+      const mutationSet = (typeof manifest.mutationSet === "object" && manifest.mutationSet !== null)
+        ? manifest.mutationSet as Record<string, unknown>
+        : {};
+      let patchOperations: Array<Record<string, unknown>> = Array.isArray(mutationSet.patchOperations)
+        ? mutationSet.patchOperations.slice().reverse().map((entry, index) => ({
+          ...(entry as Record<string, unknown>),
+          order: Number(index + 1000),
+        }))
+        : [];
+
+      if (patchOperations.length === 0) {
+        patchOperations = [{
+          id: "tampered-patch-op",
+          transactionId: "tampered-tx",
+          batchId: "tampered-batch",
+          order: 1000,
+          files: ["tampered.ts"],
+          patchHash: "tampered-patch-hash",
+          patch: {
+            type: "create-file",
+            file: "tampered.ts",
+            content: "export const tampered = true;\n",
+          },
+        }];
+      }
+      mutationSet.patchOperations = patchOperations;
+      manifest.mutationSet = mutationSet;
+      fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf-8");
+
+      const replayed = await replayMaterializationFromLineage({
+        root: patchOrderTamperRoot,
+        manifestId,
+        restore: false,
+      });
+
+      checks.push({
+        name: "replay-detects-patch-order-tamper",
+        passed: !replayed.success && replayed.errors.some((entry) => /PATCH_ORDER_DIVERGENCE/.test(entry)),
+        detail: replayed.errors.join(" | ") || "unexpected success",
+      });
+    } finally {
+      fs.rmSync(patchOrderTamperRoot, { recursive: true, force: true });
+    }
+
+    const concurrentRoot = makeTempRoot();
+    try {
+      const allHashes: string[] = [];
+      const failureMessages: string[] = [];
+
+      for (let round = 0; round < 3; round += 1) {
+        const outcomes = await Promise.all(
+          Array.from({ length: 4 }, async () => {
+            try {
+              const result = await runMode("execute", concurrentRoot);
+              return { ok: true as const, hash: result.execute?.workspaceHash ?? "" };
+            } catch (error) {
+              return {
+                ok: false as const,
+                message: error instanceof Error ? error.message : String(error),
+              };
+            }
+          })
+        );
+
+        failureMessages.push(
+          ...outcomes
+            .filter((entry): entry is { ok: false; message: string } => !entry.ok)
+            .map((entry) => entry.message)
+        );
+        for (const outcome of outcomes) {
+          if (outcome.ok && outcome.hash) {
+            allHashes.push(outcome.hash);
+          }
+        }
+      }
+
+      const uniqueHashes = new Set(allHashes);
+      const deterministicFailuresOnly = failureMessages.every((message) =>
+        /IntegrityViolation|WORKSPACE_SNAPSHOT_DIVERGENCE|REPLAY_LINEAGE_DIVERGENCE|Transactional apply failed/.test(message)
+      );
+      checks.push({
+        name: "concurrent-execute-fuzzing-is-deterministic",
+        passed: allHashes.length > 0
+          && uniqueHashes.size === 1
+          && deterministicFailuresOnly,
+        detail: `runs=${allHashes.length}, failures=${failureMessages.length}, uniqueHashes=${uniqueHashes.size}`,
+      });
+    } finally {
+      fs.rmSync(concurrentRoot, { recursive: true, force: true });
+    }
+
+    const edgeCaseRoot = makeTempRoot();
+    try {
+      const unicodeDir = path.join(edgeCaseRoot, "unicøde-dir");
+      const unicodeFile = path.join(unicodeDir, "ßeta.ts");
+      const symlinkPath = path.join(edgeCaseRoot, "link-unicode.ts");
+      fs.mkdirSync(unicodeDir, { recursive: true });
+      fs.writeFileSync(unicodeFile, "export const edgeCase = 'ok';\n", "utf-8");
+      fs.symlinkSync(path.relative(edgeCaseRoot, unicodeFile), symlinkPath);
+
+      const executed = await runMode("execute", edgeCaseRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+      const replayed = await replayMaterializationFromLineage({
+        root: edgeCaseRoot,
+        manifestId,
+        restore: false,
+      });
+
+      checks.push({
+        name: "symlink-unicode-directory-edge-cases-are-deterministic",
+        passed: replayed.success
+          && replayed.workspaceHash === executed.execute?.workspaceHash
+          && executed.execute?.workspaceHash === executed.execute?.replayWorkspaceHash,
+        detail: `execute=${String(executed.execute?.workspaceHash ?? "")}, replay=${replayed.workspaceHash}`,
+      });
+    } finally {
+      fs.rmSync(edgeCaseRoot, { recursive: true, force: true });
+    }
+
+    const replayFidelityRoot = makeTempRoot();
+    try {
+      const executed = await runMode("execute", replayFidelityRoot);
+      const manifestId = executed.execute?.manifestId ?? "";
+      const replayed = await replayMaterializationFromLineage({
+        root: replayFidelityRoot,
+        manifestId,
+        restore: false,
+      });
+
+      checks.push({
+        name: "replay-reconstruction-fidelity-hash-equals-execute",
+        passed: replayed.success && replayed.workspaceHash === executed.execute?.workspaceHash,
+        detail: `execute=${String(executed.execute?.workspaceHash ?? "")}, replay=${replayed.workspaceHash}`,
+      });
+    } finally {
+      fs.rmSync(replayFidelityRoot, { recursive: true, force: true });
+    }
+
+    const rollbackFidelityRoot = makeTempRoot();
+    try {
+      const preHash = CanonicalWorkspaceHasher.capture(rollbackFidelityRoot).snapshotHash;
+      let failedStage = "";
+      let errorMessage = "";
+
+      await withTemporaryEnv({ CHOIR_TEST_ROLLBACK: "1" }, async () => {
+        try {
+          await runMode("execute", rollbackFidelityRoot);
+        } catch (error) {
+          if (error instanceof OrchestrationPipelineError) {
+            failedStage = error.failedStage;
+            errorMessage = error.message;
+          }
+        }
+      });
+
+      const postHash = CanonicalWorkspaceHasher.capture(rollbackFidelityRoot).snapshotHash;
+
+      checks.push({
+        name: "rollback-recovery-restores-workspace-byte-for-byte",
+        passed: failedStage === "execution"
+          && /rollback=applied/.test(errorMessage)
+          && preHash === postHash,
+        detail: `failedStage=${failedStage || "none"}, pre=${preHash}, post=${postHash}`,
+      });
+    } finally {
+      fs.rmSync(rollbackFidelityRoot, { recursive: true, force: true });
     }
   } finally {
     for (const root of Object.values(modeRoots)) {

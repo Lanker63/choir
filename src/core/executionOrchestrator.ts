@@ -29,6 +29,11 @@ export type ExecutionOrchestrationResult = {
   executionHash: string;
   finalStateHash: string;
   replayHash: string;
+  mutationHash: string;
+  workspaceHash: string;
+  replayWorkspaceHash: string;
+  manifestId: string;
+  manifestHash: string;
   executionStages: {
     id: string;
     order: number;
@@ -83,6 +88,26 @@ export class ExecutionOrchestrationError extends Error {
 }
 
 function mapStage(stage: PipelineStageName): ExecutionOrchestrationStageName {
+  if (stage === "analyze") {
+    return "workspace-analysis";
+  }
+
+  if (stage === "validate") {
+    return "integrity-gate";
+  }
+
+  if (stage === "synthesize" || stage === "generate") {
+    return "candidate-synthesis";
+  }
+
+  if (stage === "apply" || stage === "commit") {
+    return "execution";
+  }
+
+  if (stage === "verify") {
+    return "replay-verification";
+  }
+
   if (stage === "compile" || stage === "structural-validation" || stage === "semantic-validation" || stage === "cross-node-validation") {
     return "compile";
   }
@@ -154,6 +179,11 @@ export async function runExecutionOrchestrator(
       executionHash: unified.execute.executionHash,
       finalStateHash: unified.execute.finalStateHash,
       replayHash: unified.execute.replayHash,
+      mutationHash: unified.execute.mutationHash,
+      workspaceHash: unified.execute.workspaceHash,
+      replayWorkspaceHash: unified.execute.replayWorkspaceHash,
+      manifestId: unified.execute.manifestId,
+      manifestHash: unified.execute.manifestHash,
       executionStages: unified.execute.executionStages,
       rollbackScope: unified.execute.rollbackScope,
       deterministic: unified.execute.deterministic,

@@ -12,6 +12,10 @@ export type OrchestrationSimulationContract = {
   futureStateHash: string;
   orchestrationHash: string;
   replayHash: string;
+  mutationHash?: string;
+  projectedWorkspaceHash?: string;
+  preWorkspaceSnapshotHash?: string;
+  postWorkspaceSnapshotHash?: string;
 };
 
 export type OrchestrationReplaySummary = {

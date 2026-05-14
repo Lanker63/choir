@@ -147,6 +147,12 @@ Additional commands:
 
 ## Execution and Safety
 
+- Canonical execute runtime stages:
+
+```text
+analyze -> validate -> synthesize -> generate -> apply -> verify -> commit
+```
+
 - Deterministic planning and strategy selection
 - Strategy selection simulates all candidates before selection (no heuristic-only path)
 - Ranking order is deterministic: violations -> risk -> changes -> executionCost (lexical id tie-break)
@@ -155,7 +161,16 @@ Additional commands:
 - Rollout supports deterministic canary/phased/batched expansion with threshold gates and failure isolation rollback
 - Preview is simulation-derived and hash-bound to execution
 - Execute enforces a deterministic integrity gate before any transaction starts (preview hash, simulation parity, DAG signature, replay contract, and state snapshot integrity)
-- Transactional execution: simulate -> validate -> commit/rollback
+- Transactional execution apply backend is scheduler-backed and filesystem materializing by default
+- Generate is read-only and emits deterministic mutation contracts (patch operations, workspace mutation grouping, mutation hash)
+- Verify is mutation-aware and fail-closed (mutation hash parity, full-workspace snapshot parity, replay workspace equivalence)
+- Commit persists deterministic mutation artifacts under .choir/artifacts/materialization/ and authoritative workspace snapshots under .choir/artifacts/workspace-snapshots/
+- Authoritative workspace hashing is canonical and deterministic across full workspace scope (files, directories, symlinks, unicode paths, permissions metadata, create/delete/rename effects)
+- Preview, simulation, execute, and replay lineage include preWorkspaceSnapshotHash and postWorkspaceSnapshotHash bindings
+- Replay reconstruction is operational: execution lineage + mutation manifests + deterministic patch replay can reconstruct full workspace state
+- Integrity diagnostics are forensic and category-specific: MANIFEST_TAMPER, WORKSPACE_SNAPSHOT_DIVERGENCE, PATCH_ORDER_DIVERGENCE, REPLAY_LINEAGE_DIVERGENCE, STATE_LINEAGE_DIVERGENCE
+- Workspace mutation/replay paths use a cross-process lock coordinator to enforce deterministic isolation under concurrent execution
+- Rollback restores control-plane state and workspace filesystem snapshot on apply/verify failure
 - Global orchestration validates full cross-repo graph and policy before execution
 - Global failure handling is isolation-first: rollback affects failed units and already-executed dependents only
 - Full rollback is fail-safe fallback only when isolated rollback cannot restore consistency
@@ -188,6 +203,18 @@ Org-wide simulation notes:
 - `choir rollback`, `choir rollback <unit>`, and `choir rollback --stage <id>` compute deterministic rollback scope/order and record rollback timeline transitions.
 - Simulation is an execution gate: failed simulation blocks execution.
 - Execution enforces simulation equivalence and fails closed on divergence.
+- Runtime parity requirement is strict:
+
+```text
+preview == simulation == execute == replay
+```
+
+- Parity is enforced across control-plane state, mutation lineage, and authoritative workspace snapshot hashes.
+- Execute/replay parity invariant for filesystem state:
+
+```text
+execution.workspaceSnapshotHash == replay.workspaceSnapshotHash
+```
 - Pre-transaction integrity failures abort execution without opening a transaction; post-transaction runtime failures trigger rollback.
 - Execution failure output now includes rollback evidence metadata (`rollback=applied|not-applied`, and when available: `failedUnit`, `rollbackSet`, `rollbackOrder`) so rollback behavior is visible in CLI diagnostics.
 - Temporary rollback test hook: setting `CHOIR_TEST_ROLLBACK=1` forces a runtime error only during execution (never simulation) and only after at least one mutation executes, so rollback paths can be exercised deterministically in tests.
@@ -228,6 +255,7 @@ Artifacts:
 - .choir/artifacts/ci/<run-key>/execution.json (if execute runs)
 - .choir/artifacts/ci/<run-key>/audit.log
 - .choir/artifacts/ci/<run-key>/trace.json
+- .choir/artifacts/materialization/<manifest-id>.json
 
 ## Audit and Reports
 

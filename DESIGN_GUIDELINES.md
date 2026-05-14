@@ -134,7 +134,7 @@ Hard constraints:
 Execution primitive:
 
 ```text
-prepare -> simulate -> validate -> commit|rollback
+analyze -> validate -> synthesize -> generate -> apply -> verify -> commit
 ```
 
 Hard constraints:
@@ -143,7 +143,16 @@ Hard constraints:
 - deterministic integrity gate is mandatory before execution transaction start
 - approval policy is governance-only and must not control deterministic integrity enforcement
 - simulation mode never commits
-- rollback restores pre-execution state on failure
+- generate stage is read-only and must emit canonical deterministic mutation contracts
+- apply stage uses scheduler-backed transactional filesystem mutation as canonical backend
+- verify stage is mutation-aware and fail-closed (mutation hash parity, workspace hash parity, replay workspace equivalence)
+- commit persists mutation manifests and lineage artifacts
+- workspace hash in runtime contracts is authoritative full-workspace snapshot hash (not mutation-scope hash)
+- preWorkspaceSnapshotHash and postWorkspaceSnapshotHash are required lineage fields for preview, simulation, execute, and replay contracts
+- replay must be operationally reconstructive: lineage + mutation manifest patch order + deterministic patch replay must reproduce postWorkspaceSnapshotHash
+- integrity diagnostics must be categorized (MANIFEST_TAMPER, WORKSPACE_SNAPSHOT_DIVERGENCE, PATCH_ORDER_DIVERGENCE, REPLAY_LINEAGE_DIVERGENCE, STATE_LINEAGE_DIVERGENCE)
+- concurrent execute/replay mutation paths must use cross-process workspace lock coordination
+- rollback restores pre-execution control-plane state and workspace filesystem state on failure
 - temporary test-only failure hook: `CHOIR_TEST_ROLLBACK=1` may force a runtime error only in execution mode (never simulation) and only after at least one mutation executes, to validate rollback handling deterministically
 - execution-stage failure diagnostics must surface rollback evidence (`rollback=applied|not-applied`, and when available: failed unit and rollback scope/order) so rollback outcomes are explicit in operator-facing output
 
@@ -201,8 +210,9 @@ execution(mode=simulation) == execution(mode=execution)
 - Execution policy gates (org -> repo -> environment) must be enforced before transaction execution.
 - Preview-bound execution (`execute --preview <id-or-hash>`) must validate binding against approved preview hashes before execution.
 - Execution and simulation must share the same orchestration and mutation path; execution cannot use alternate commit logic.
-- Transaction lifecycle remains strict: prepare -> simulate -> validate -> commit|rollback.
+- Transaction lifecycle remains strict and mutation-aware: analyze -> validate -> synthesize -> generate -> apply -> verify -> commit.
 - Post-execution replay verification must match committed final state hash; mismatch fails closed.
+- Post-execution replay verification must also match committed full-workspace snapshot hash and mutation lineage.
 - Pre-transaction integrity failures abort execution without opening a transaction.
 - Post-transaction runtime failures must rollback and preserve no partial writes.
 
@@ -346,18 +356,20 @@ Workspace detection contract:
 1. Control plane authority is strict; derived state is never user-authored.
 2. All mutation decisions pass through policy and enforcer logic.
 3. Preview hash, simulation contract, orchestration DAG signature, replay hash, and state snapshot integrity must match at execution time or execution is rejected before transaction start.
-4. Incremental and full recomputation results must be equivalent; mismatch triggers deterministic full fallback.
-5. State writes are atomic and rollback-safe.
-6. Replay and distributed sync must be integrity-checked and deterministic.
-7. Global execution is blocked until full graph and policy validation succeeds.
-8. Global failures use isolation-first rollback; rollback-all is permitted only as deterministic fail-safe fallback.
-9. Audit evidence is immutable, append-only, and hash-chained.
-10. Macro/abstraction flows must not bypass DSL, policy, execution, or audit layers.
+4. Mutation manifests and workspace hash lineage must validate at execution time; tamper or drift is rejected before transactional apply.
+5. Incremental and full recomputation results must be equivalent; mismatch triggers deterministic full fallback.
+6. State and workspace writes are atomic and rollback-safe.
+7. Replay and distributed sync must be integrity-checked and deterministic.
+8. Global execution is blocked until full graph and policy validation succeeds.
+9. Global failures use isolation-first rollback; rollback-all is permitted only as deterministic fail-safe fallback.
+10. Audit evidence is immutable, append-only, and hash-chained.
+11. Macro/abstraction flows must not bypass DSL, policy, execution, or audit layers.
 
 ## Canonical Artifacts
 
 - .choir/choir.config.yaml
 - .choir/state.json
+- .choir/artifacts/materialization/<manifest-id>.json
 - .choir/state.snapshots.jsonl
 - .choir/state.transitions.jsonl
 - .choir/state.audit.jsonl

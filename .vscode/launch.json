@@ -9,7 +9,7 @@
       "args": ["--no-warnings", "--extensionDevelopmentPath=${workspaceFolder}"],
       "env": {
         "CHOIR_ENVIRONMENT": "staging",
-        "CHOIR_TEST_ROLLBACK": "1"
+        "CHOIR_TEST_ROLLBACK": "0"
       }
     },
     {
