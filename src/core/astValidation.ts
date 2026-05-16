@@ -395,17 +395,54 @@ function validateActionStructure(action: ActionNode, index: number, issues: Vali
         issues.push(issue("refactor-new-name-missing", "error", "Refactor newName is required", `${path}.newName`));
       }
 
+      if (action.declarationSelector !== undefined && typeof action.declarationSelector !== "string") {
+        issues.push(issue("refactor-declaration-selector-invalid", "error", "Refactor declarationSelector must be a string when present", `${path}.declarationSelector`));
+      }
+
       return;
     }
 
-    case "refactor-move":
+    case "refactor-move": {
+      if (!action.symbol || typeof action.symbol !== "string") {
+        issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
+      }
+
+      const hasTargetUnit = typeof action.targetUnit === "string";
+      const hasTargetFile = typeof action.targetFile === "string";
+
+      if (hasTargetUnit === hasTargetFile) {
+        issues.push(issue("refactor-target-invalid", "error", "Refactor move requires exactly one target: targetUnit or targetFile", path));
+      }
+
+      if (action.targetUnit !== undefined && typeof action.targetUnit !== "string") {
+        issues.push(issue("refactor-target-missing", "error", "Refactor targetUnit must be a string when present", `${path}.targetUnit`));
+      }
+
+      if (action.targetFile !== undefined && typeof action.targetFile !== "string") {
+        issues.push(issue("refactor-target-file-invalid", "error", "Refactor targetFile must be a string when present", `${path}.targetFile`));
+      }
+
+      return;
+    }
+
     case "refactor-extract": {
       if (!action.symbol || typeof action.symbol !== "string") {
         issues.push(issue("refactor-symbol-missing", "error", "Refactor symbol is required", `${path}.symbol`));
       }
 
-      if (!action.targetUnit || typeof action.targetUnit !== "string") {
-        issues.push(issue("refactor-target-missing", "error", "Refactor targetUnit is required", `${path}.targetUnit`));
+      const hasTargetUnit = typeof action.targetUnit === "string";
+      const hasTargetFile = typeof action.targetFile === "string";
+
+      if (hasTargetUnit === hasTargetFile) {
+        issues.push(issue("refactor-target-invalid", "error", "Refactor extract requires exactly one target: targetUnit or targetFile", path));
+      }
+
+      if (action.targetUnit !== undefined && typeof action.targetUnit !== "string") {
+        issues.push(issue("refactor-target-missing", "error", "Refactor targetUnit must be a string when present", `${path}.targetUnit`));
+      }
+
+      if (action.targetFile !== undefined && typeof action.targetFile !== "string") {
+        issues.push(issue("refactor-target-file-invalid", "error", "Refactor targetFile must be a string when present", `${path}.targetFile`));
       }
 
       return;

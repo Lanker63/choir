@@ -68,6 +68,13 @@ For identical inputs, output must be identical for:
 - preview diffs and preview hash
 - execution graph, batches, conflict outcomes
 - state hash, transitions, snapshots, replay outcomes
+
+Move refactor contracts:
+
+- moving a symbol must deterministically rewrite named workspace imports that reference the symbol through the previous source module to the new declaration module path
+- moving a symbol is a clean relocation; the source module must not retain automatic compatibility re-exports of the moved symbol
+- rewritten relative import specifiers must respect workspace compiler module-resolution mode (for Node16/NodeNext, include explicit runtime extensions like `.js`)
+- post-refactor validation snapshots must include newly created files from the planned change set so module-resolution consistency checks remain sound
 - distributed deltas, merges, conflicts, convergence status
 - global DAG, policy decisions, rollback outcomes
 - audit ordering and hashes
@@ -334,9 +341,17 @@ Workspace detection contract:
 - internal roles (architect, analyst, conductor, enforcer) are routing boundaries, not user-facing participants
 - refactor DSL surface:
    - choir refactor rename <symbol> <newName>
+          - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
+   - semantic rename must resolve the declaration identifier token (including exported declarations)
+     - name-only rename must fail closed when multiple declarations share the same symbol name, with deterministic candidate locations
+          - ambiguity failures are runtime command errors and must not be labeled as DSL grammar-invalid
    - choir refactor inline <symbol>
-   - choir refactor move <symbol> <targetUnit> (parsed/planned in PASS 1)
-   - choir refactor extract <symbol> <targetUnit> (parsed/planned in PASS 1)
+   - choir refactor move <symbol> <targetUnit>
+          - choir refactor move <symbol> --file "<workspace-relative-file>"
+       - MVP execution supports top-level function declaration moves as clean relocation (no automatic source compatibility re-export)
+    - choir refactor extract <symbol> <targetUnit>
+          - choir refactor extract <symbol> --file "<workspace-relative-file>"
+       - MVP execution supports extracting top-level exported non-default function declarations with deterministic source wrapper delegation to target implementation
 - plan optimization surface:
    - choir plan --optimize
    - choir plan --optimize for <goalRef>

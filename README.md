@@ -98,9 +98,19 @@ Additional commands:
   - choir audit log|query|report
 - Refactor (PASS 1):
   - choir refactor rename <symbol> <newName>
+        - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
+    - semantic rename resolves declaration identifiers (including exported declarations)
+      - rename fails closed when the symbol name maps to multiple declarations and lists deterministic candidate locations
+        - ambiguity is reported as a command failure (runtime validation), not a grammar parse error
   - choir refactor inline <symbol>
-  - choir refactor move <symbol> <targetUnit> (parsed/planned; execution path not yet enabled)
-  - choir refactor extract <symbol> <targetUnit> (parsed/planned; execution path not yet enabled)
+    - choir refactor move <symbol> <targetUnit>
+      - choir refactor move <symbol> --file "<workspace-relative-file>"
+      - MVP execution supports moving top-level exported function declarations between units with deterministic import rewrites to the target module path (clean move; no automatic source-file re-export)
+      - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
+  - choir refactor extract <symbol> <targetUnit>
+    - choir refactor extract <symbol> --file "<workspace-relative-file>"
+    - MVP execution supports extracting top-level exported non-default function declarations into the target unit while preserving source compatibility through a deterministic delegating wrapper
+    - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
 - Libraries:
   - choir import <lib>@<selector>
   - choir library list|install|update|lock

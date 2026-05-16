@@ -733,11 +733,33 @@ const pass2: TestPass = {
           newName: "executeQuery",
         });
 
+        const renameWithDeclaration = parseCommand("choir refactor rename runQuery executeQuery --declaration \"src/query.ts:10:5\"");
+        assert.deepStrictEqual(renameWithDeclaration.ast, {
+          type: "refactor-rename",
+          symbol: "runQuery",
+          newName: "executeQuery",
+          declarationSelector: "src/query.ts:10:5",
+        });
+
         const extract = parseCommand("choir refactor extract queryService packages.core");
         assert.deepStrictEqual(extract.ast, {
           type: "refactor-extract",
           symbol: "queryService",
           targetUnit: "packages.core",
+        });
+
+        const extractWithFile = parseCommand("choir refactor extract queryService --file \"src/other.ts\"");
+        assert.deepStrictEqual(extractWithFile.ast, {
+          type: "refactor-extract",
+          symbol: "queryService",
+          targetFile: "src/other.ts",
+        });
+
+        const moveWithFile = parseCommand("choir refactor move queryService --file \"src/other.ts\"");
+        assert.deepStrictEqual(moveWithFile.ast, {
+          type: "refactor-move",
+          symbol: "queryService",
+          targetFile: "src/other.ts",
         });
 
         const inline = parseCommand("choir refactor inline queryResult");
@@ -3365,6 +3387,693 @@ const pass2: TestPass = {
         assert.ok(coreRolledBack.includes("function addOne"));
       },
     },
+    {
+      id: "2.59.1",
+      name: "refactor rename supports exported function declarations",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-exported-function-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "index.ts"), [
+          "export function tester(value: number): number {",
+          "  return value + 1;",
+          "}",
+          "",
+          "export const result = tester(1);",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "rename" as const,
+          symbol: "tester",
+          newName: "tester2",
+        };
+
+        const preview = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: false,
+        });
+
+        assert.strictEqual(preview.simulation.validation.passed, true);
+        assert.strictEqual(preview.preview.changes.length, 1);
+
+        const executed = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+
+        const fileAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+        assert.ok(fileAfter.includes("function tester2"));
+        assert.ok(fileAfter.includes("result = tester2(1)"));
+      },
+    },
+    {
+      id: "2.59.2",
+      name: "refactor rename fails closed when symbol name is ambiguous",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-ambiguous-rename-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "alpha.ts"), [
+          "export function tester(value: number): number {",
+          "  return value + 1;",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, "src", "beta.ts"), [
+          "export function tester(value: number): number {",
+          "  return value + 2;",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "rename" as const,
+          symbol: "tester",
+          newName: "tester2",
+        };
+
+        await assert.rejects(
+          runRefactorIntent(intent, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: false,
+          }),
+          /Ambiguous rename symbol "tester".*alpha\.ts.*beta\.ts/s
+        );
+      },
+    },
+    {
+      id: "2.59.3",
+      name: "refactor rename supports declaration selector to resolve ambiguity",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "alpha.ts"), [
+          "export function tester(value: number): number {",
+          "  return value + 1;",
+          "}",
+          "",
+          "export const alphaResult = tester(1);",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, "src", "beta.ts"), [
+          "export function tester(value: number): number {",
+          "  return value + 2;",
+          "}",
+          "",
+          "export const betaResult = tester(2);",
+          "",
+        ].join("\n"), "utf-8");
+
+        const selectedIntent = {
+          type: "rename" as const,
+          symbol: "tester",
+          newName: "tester2",
+          declarationSelector: "src/alpha.ts",
+        };
+
+        const executed = await runRefactorIntent(selectedIntent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+
+        const alphaAfter = fs.readFileSync(path.join(root, "src", "alpha.ts"), "utf-8");
+        const betaAfter = fs.readFileSync(path.join(root, "src", "beta.ts"), "utf-8");
+        assert.ok(alphaAfter.includes("function tester2"));
+        assert.ok(alphaAfter.includes("alphaResult = tester2(1)"));
+        assert.ok(betaAfter.includes("function tester("));
+        assert.ok(betaAfter.includes("betaResult = tester(2)"));
+      },
+    },
+    {
+      id: "2.59.4",
+      name: "refactor rename file selector requires line and character when file has multiple matches",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-multi-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "single.ts"), [
+          "class Alpha {",
+          "  tester(): number {",
+          "    return 1;",
+          "  }",
+          "}",
+          "",
+          "class Beta {",
+          "  tester(): number {",
+          "    return 2;",
+          "  }",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        const selectedIntent = {
+          type: "rename" as const,
+          symbol: "tester",
+          newName: "tester2",
+          declarationSelector: "src/single.ts",
+        };
+
+        await assert.rejects(
+          runRefactorIntent(selectedIntent, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: false,
+          }),
+          /Declaration selector "src\/single\.ts" matches 2 declarations.*Use --declaration "<file:line:character>"/s
+        );
+      },
+    },
+    {
+      id: "2.59.5",
+      name: "refactor inline supports top-level variable declarations referenced across functions",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-inline-variable-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "index.ts"), [
+          "const taxRate = 0.07;",
+          "",
+          "export function fucker() {",
+          "  console.log(\"Hello, World!\");",
+          "  const test = 8 + taxRate;",
+          "}",
+          "",
+          "export function tester2() {",
+          "  console.log(\"This is a test function.\");",
+          "  const test2 = 8 - taxRate;",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "inline" as const,
+          symbol: "taxRate",
+        };
+
+        const executed = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+
+        const fileAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+        assert.ok(!fileAfter.includes("const taxRate = 0.07;"));
+        assert.ok(fileAfter.includes("const test = 8 + 0.07;"));
+        assert.ok(fileAfter.includes("const test2 = 8 - 0.07;"));
+      },
+    },
+    {
+      id: "2.59.6",
+      name: "refactor move executes for top-level exported function declarations",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-function-"));
+
+        fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
+        fs.mkdirSync(path.join(root, "packages", "shared", "src"), { recursive: true });
+        fs.mkdirSync(path.join(root, "packages", "app", "src"), { recursive: true });
+
+        fs.writeFileSync(path.join(root, "packages", "core", "src", "math.ts"), [
+          "export function addOne(value: number): number {",
+          "  return value + 1;",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, "packages", "app", "src", "main.ts"), [
+          "import { addOne } from \"../../core/src/math\";",
+          "",
+          "export const result = addOne(1);",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "move" as const,
+          symbol: "addOne",
+          from: "*",
+          to: "packages.shared",
+        };
+
+        const executed = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+
+        const coreAfter = fs.readFileSync(path.join(root, "packages", "core", "src", "math.ts"), "utf-8");
+        const sharedAfter = fs.readFileSync(path.join(root, "packages", "shared", "src", "index.ts"), "utf-8");
+        const appAfter = fs.readFileSync(path.join(root, "packages", "app", "src", "main.ts"), "utf-8");
+
+        assert.ok(!coreAfter.includes("addOne"));
+        assert.ok(sharedAfter.includes("export function addOne(value: number): number"));
+        assert.ok(!appAfter.includes("import { addOne } from \"../../core/src/math\";"));
+        assert.ok(appAfter.includes("import { addOne } from \"../../shared/src/index.js\";"));
+      },
+    },
+    {
+      id: "2.59.7",
+      name: "refactor move supports file-target selector within workspace root",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-file-target-"));
+
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "index.ts"), [
+          "export function tester2() {",
+          "  console.log(\"This is a test function.\");",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        fs.writeFileSync(path.join(root, "src", "other.ts"), [
+          "import { tester2 } from \"./index.js\";",
+          "",
+          "export function fucker3() {",
+          "  tester2();",
+          "  console.log(\"Hello, Other World!\");",
+          "}",
+          "",
+        ].join("\n"), "utf-8");
+
+        const intent = {
+          type: "move" as const,
+          symbol: "tester2",
+          from: "*",
+          targetFile: "src/other.ts",
+        };
+
+        const executed = await runRefactorIntent(intent, {
+          root,
+          controlPlane: makeControlPlane(),
+          execute: true,
+        });
+
+        assert.strictEqual(executed.execution?.committed, true);
+
+        const indexAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+        const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+
+        assert.ok(!indexAfter.includes("tester2"));
+        assert.ok(otherAfter.includes("export function tester2()"));
+        assert.ok(!otherAfter.includes("import { tester2 } from \"./index.js\";"));
+      },
+    },
+      {
+        id: "2.59.8",
+        name: "refactor move ignores dist declaration files when resolving symbol source",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-ignore-dist-dts-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+          fs.mkdirSync(path.join(root, "dist"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2() {",
+            "  console.log(\"This is a test function.\");",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "other.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export function fucker3() {",
+            "  tester2();",
+            "  console.log(\"Hello, Other World!\");",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "dist", "index.d.ts"), [
+            "export declare function tester2(): void;",
+            "",
+          ].join("\n"), "utf-8");
+
+          const intent = {
+            type: "move" as const,
+            symbol: "tester2",
+            from: "*",
+            targetFile: "src/other.ts",
+          };
+
+          const executed = await runRefactorIntent(intent, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const indexAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+          const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+          const distAfter = fs.readFileSync(path.join(root, "dist", "index.d.ts"), "utf-8");
+
+          assert.ok(!indexAfter.includes("tester2"));
+          assert.ok(otherAfter.includes("export function tester2()"));
+          assert.ok(!otherAfter.includes("import { tester2 } from \"./index.js\";"));
+          assert.strictEqual(distAfter.trim(), "export declare function tester2(): void;");
+        },
+      },
+      {
+        id: "2.59.9",
+        name: "refactor move rewrites imports that reference moved symbol through previous source file",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-rewrite-external-imports-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2() {",
+            "  console.log(\"This is a test function.\");",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "consumer.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export function useTester2() {",
+            "  tester2();",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          const intent = {
+            type: "move" as const,
+            symbol: "tester2",
+            from: "*",
+            targetFile: "src/others.ts",
+          };
+
+          const executed = await runRefactorIntent(intent, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const indexAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+          const othersAfter = fs.readFileSync(path.join(root, "src", "others.ts"), "utf-8");
+          const consumerAfter = fs.readFileSync(path.join(root, "src", "consumer.ts"), "utf-8");
+
+          assert.ok(!indexAfter.includes("tester2"));
+          assert.ok(othersAfter.includes("export function tester2()"));
+          assert.ok(!consumerAfter.includes("import { tester2 } from \"./index.js\";"));
+          assert.ok(consumerAfter.includes("import { tester2 } from \"./others.js\";"));
+        },
+      },
+      {
+        id: "2.59.10",
+        name: "refactor move uses explicit .js extensions for rewritten relative imports under NodeNext",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-import-ext-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({
+            compilerOptions: {
+              module: "NodeNext",
+              moduleResolution: "NodeNext",
+              target: "ES2020",
+            },
+          }, null, 2), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2() {",
+            "  return 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "other.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export function useTester2() {",
+            "  return tester2();",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          const executed = await runRefactorIntent({
+            type: "move" as const,
+            symbol: "tester2",
+            from: "*",
+            targetFile: "src/temp.ts",
+          }, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+          assert.ok(!otherAfter.includes("import { tester2 } from \"./index.js\";"));
+          assert.ok(otherAfter.includes("import { tester2 } from \"./temp.js\";"));
+        },
+      },
+      {
+        id: "2.59.11",
+        name: "refactor move resolves NodeNext moduleResolution from extended tsconfig with JSONC",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-extends-jsonc-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "tsconfig.base.json"), JSON.stringify({
+            compilerOptions: {
+              moduleResolution: "NodeNext",
+              module: "NodeNext",
+              target: "ES2020",
+            },
+          }, null, 2), "utf-8");
+
+          fs.writeFileSync(path.join(root, "tsconfig.json"), [
+            "{",
+            "  // inherited node-next settings should be respected",
+            "  \"extends\": \"./tsconfig.base.json\",",
+            "  \"compilerOptions\": {}",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2() {",
+            "  return 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "other.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export function useTester2() {",
+            "  return tester2();",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          const executed = await runRefactorIntent({
+            type: "move" as const,
+            symbol: "tester2",
+            from: "*",
+            targetFile: "src/temp.ts",
+          }, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+          assert.ok(otherAfter.includes("import { tester2 } from \"./temp.js\";"));
+          assert.ok(!otherAfter.includes("import { tester2 } from \"./temp\";"));
+        },
+      },
+      {
+        id: "2.59.12",
+        name: "refactor move uses .js extensions when tsconfig sets NodeNext module without moduleResolution",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-nodenext-module-only-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "tsconfig.json"), JSON.stringify({
+            compilerOptions: {
+              module: "NodeNext",
+              target: "ES2020",
+            },
+          }, null, 2), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2() {",
+            "  return 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "other.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export function useTester2() {",
+            "  return tester2();",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          const executed = await runRefactorIntent({
+            type: "move" as const,
+            symbol: "tester2",
+            from: "*",
+            targetFile: "src/temp.ts",
+          }, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+          assert.ok(otherAfter.includes("import { tester2 } from \"./temp.js\";"));
+          assert.ok(!otherAfter.includes("import { tester2 } from \"./temp\";"));
+        },
+      },
+      {
+        id: "2.59.13",
+        name: "refactor extract executes for top-level exported function declarations",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-function-"));
+
+          fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
+          fs.mkdirSync(path.join(root, "packages", "shared", "src"), { recursive: true });
+          fs.mkdirSync(path.join(root, "packages", "app", "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "packages", "core", "src", "math.ts"), [
+            "export function addOne(value: number): number {",
+            "  return value + 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "packages", "app", "src", "main.ts"), [
+            "import { addOne } from \"../../core/src/math\";",
+            "",
+            "export const result = addOne(1);",
+            "",
+          ].join("\n"), "utf-8");
+
+          const executed = await runRefactorIntent({
+            type: "extract" as const,
+            symbol: "addOne",
+            targetUnit: "packages.shared",
+          }, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const coreAfter = fs.readFileSync(path.join(root, "packages", "core", "src", "math.ts"), "utf-8");
+          const sharedAfter = fs.readFileSync(path.join(root, "packages", "shared", "src", "index.ts"), "utf-8");
+          const appAfter = fs.readFileSync(path.join(root, "packages", "app", "src", "main.ts"), "utf-8");
+
+          assert.ok(coreAfter.includes("import { addOne as __choirExtract_addOne } from \"../../shared/src/index.js\";"));
+          assert.ok(coreAfter.includes("return __choirExtract_addOne(value);"));
+          assert.ok(sharedAfter.includes("export function addOne(value: number): number"));
+          assert.ok(appAfter.includes("import { addOne } from \"../../core/src/math\";"));
+        },
+      },
+      {
+        id: "2.59.14",
+        name: "refactor extract fails closed for non-exported function declarations",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-fail-closed-non-exported-"));
+
+          fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "packages", "core", "src", "math.ts"), [
+            "function addOne(value: number): number {",
+            "  return value + 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          await assert.rejects(
+            () => runRefactorIntent({
+              type: "extract" as const,
+              symbol: "addOne",
+              targetUnit: "packages.shared",
+            }, {
+              root,
+              controlPlane: makeControlPlane(),
+              execute: true,
+            }),
+            /Extract refactor currently supports exported non-default top-level function declarations only/
+          );
+        },
+      },
+      {
+        id: "2.59.15",
+        name: "refactor extract supports file-target selector within workspace root",
+        run: async () => {
+          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-file-target-"));
+
+          fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+          fs.writeFileSync(path.join(root, "src", "index.ts"), [
+            "export function tester2(value: number): number {",
+            "  return value + 1;",
+            "}",
+            "",
+          ].join("\n"), "utf-8");
+
+          fs.writeFileSync(path.join(root, "src", "consumer.ts"), [
+            "import { tester2 } from \"./index.js\";",
+            "",
+            "export const result = tester2(1);",
+            "",
+          ].join("\n"), "utf-8");
+
+          const executed = await runRefactorIntent({
+            type: "extract" as const,
+            symbol: "tester2",
+            targetFile: "src/other.ts",
+          }, {
+            root,
+            controlPlane: makeControlPlane(),
+            execute: true,
+          });
+
+          assert.strictEqual(executed.execution?.committed, true);
+
+          const indexAfter = fs.readFileSync(path.join(root, "src", "index.ts"), "utf-8");
+          const otherAfter = fs.readFileSync(path.join(root, "src", "other.ts"), "utf-8");
+          const consumerAfter = fs.readFileSync(path.join(root, "src", "consumer.ts"), "utf-8");
+
+          assert.ok(indexAfter.includes("import { tester2 as __choirExtract_tester2 } from \"./other.js\";"));
+          assert.ok(indexAfter.includes("return __choirExtract_tester2(value);"));
+          assert.ok(otherAfter.includes("export function tester2(value: number): number"));
+          assert.ok(consumerAfter.includes("import { tester2 } from \"./index.js\";"));
+        },
+      },
     {
       id: "2.60",
       name: "macro execution is blocked outside pipeline in ci mode",

@@ -35,8 +35,9 @@ export const CHOIR_DSL_GRAMMAR = `<command> ::= "choir" <action> ("then" <action
          | "plan" "--adaptive" ["for" <string>] ["--optimize"]
          | "plan" "approve" <identifier>
 
-<refactor> ::= "refactor" "rename" <identifier> <identifier>
+<refactor> ::= "refactor" "rename" <identifier> <identifier> ["--declaration" <string>]
              | "refactor" "move" <identifier> <identifier>
+             | "refactor" "move" <identifier> "--file" <string>
              | "refactor" "extract" <identifier> <identifier>
              | "refactor" "inline" <identifier>
 
@@ -171,6 +172,8 @@ export const CHOIR_EXECUTE_STEPS_FLAG = "--steps" as const;
 export const CHOIR_EXECUTE_PHASES_FLAG = "--phases" as const;
 export const CHOIR_EXECUTE_BATCH_SIZE_FLAG = "--batch-size" as const;
 export const CHOIR_ROLLBACK_STAGE_FLAG = "--stage" as const;
+export const CHOIR_REFACTOR_DECLARATION_FLAG = "--declaration" as const;
+export const CHOIR_REFACTOR_FILE_FLAG = "--file" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
@@ -192,6 +195,8 @@ const KEYWORDS = new Set<string>([
   CHOIR_EXECUTE_PHASES_FLAG,
   CHOIR_EXECUTE_BATCH_SIZE_FLAG,
   CHOIR_ROLLBACK_STAGE_FLAG,
+  CHOIR_REFACTOR_DECLARATION_FLAG,
+  CHOIR_REFACTOR_FILE_FLAG,
   CHOIR_EXPORT_FORMAT_KEYWORD,
   ...CHOIR_EXPORT_SECTION_KEYWORDS,
   CHOIR_SEQUENCE_KEYWORD,
@@ -235,18 +240,21 @@ export type RefactorRenameNode = {
   type: "refactor-rename";
   symbol: string;
   newName: string;
+  declarationSelector?: string;
 };
 
 export type RefactorMoveNode = {
   type: "refactor-move";
   symbol: string;
-  targetUnit: string;
+  targetUnit?: string;
+  targetFile?: string;
 };
 
 export type RefactorExtractNode = {
   type: "refactor-extract";
   symbol: string;
-  targetUnit: string;
+  targetUnit?: string;
+  targetFile?: string;
 };
 
 export type RefactorInlineNode = {
@@ -925,25 +933,66 @@ class Parser {
     const mode = this.expectIdentifierLike().toLowerCase();
 
     if (mode === "rename") {
+      const symbol = this.expectIdentifierLike();
+      const newName = this.expectIdentifierLike();
+      let declarationSelector: string | undefined;
+
+      if (this.consumeKeyword(CHOIR_REFACTOR_DECLARATION_FLAG)) {
+        declarationSelector = this.expectString();
+      }
+
+      if (this.consumeKeyword(CHOIR_REFACTOR_DECLARATION_FLAG)) {
+        throw new Error("Duplicate refactor declaration selector: --declaration <string>");
+      }
+
       return {
         type: "refactor-rename",
-        symbol: this.expectIdentifierLike(),
-        newName: this.expectIdentifierLike(),
+        symbol,
+        newName,
+        ...(declarationSelector !== undefined ? { declarationSelector } : {}),
       };
     }
 
     if (mode === "move") {
+      const symbol = this.expectIdentifierLike();
+      if (this.consumeKeyword(CHOIR_REFACTOR_FILE_FLAG)) {
+        const targetFile = this.expectString();
+        if (this.consumeKeyword(CHOIR_REFACTOR_FILE_FLAG)) {
+          throw new Error("Duplicate refactor move file selector: --file <string>");
+        }
+
+        return {
+          type: "refactor-move",
+          symbol,
+          targetFile,
+        };
+      }
+
       return {
         type: "refactor-move",
-        symbol: this.expectIdentifierLike(),
+        symbol,
         targetUnit: this.expectIdentifierLike(),
       };
     }
 
     if (mode === "extract") {
+      const symbol = this.expectIdentifierLike();
+      if (this.consumeKeyword(CHOIR_REFACTOR_FILE_FLAG)) {
+        const targetFile = this.expectString();
+        if (this.consumeKeyword(CHOIR_REFACTOR_FILE_FLAG)) {
+          throw new Error("Duplicate refactor extract file selector: --file <string>");
+        }
+
+        return {
+          type: "refactor-extract",
+          symbol,
+          targetFile,
+        };
+      }
+
       return {
         type: "refactor-extract",
-        symbol: this.expectIdentifierLike(),
+        symbol,
         targetUnit: this.expectIdentifierLike(),
       };
     }
@@ -955,7 +1004,7 @@ class Parser {
       };
     }
 
-    throw new Error("Expected refactor command: rename|move|extract|inline");
+    throw new Error("Expected refactor command: rename|move [--file]|extract [--file]|inline");
   }
 
   private parseSimulate(): SimulateNode {
@@ -1542,11 +1591,25 @@ function validateActionNode(node: ActionNode): boolean {
   }
 
   if (node.type === "refactor-rename") {
-    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && CHOIR_IDENTIFIER_PATTERN.test(node.newName);
+    const selectorValid = node.declarationSelector === undefined
+      || (typeof node.declarationSelector === "string" && node.declarationSelector.trim().length > 0);
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && CHOIR_IDENTIFIER_PATTERN.test(node.newName) && selectorValid;
   }
 
-  if (node.type === "refactor-move" || node.type === "refactor-extract") {
-    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && CHOIR_IDENTIFIER_PATTERN.test(node.targetUnit);
+  if (node.type === "refactor-move") {
+    const targetUnitValid = node.targetUnit === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.targetUnit);
+    const targetFileValid = node.targetFile === undefined
+      || (typeof node.targetFile === "string" && node.targetFile.trim().length > 0);
+    const hasExactlyOneTarget = (node.targetUnit === undefined) !== (node.targetFile === undefined);
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && targetUnitValid && targetFileValid && hasExactlyOneTarget;
+  }
+
+  if (node.type === "refactor-extract") {
+    const targetUnitValid = node.targetUnit === undefined || CHOIR_IDENTIFIER_PATTERN.test(node.targetUnit);
+    const targetFileValid = node.targetFile === undefined
+      || (typeof node.targetFile === "string" && node.targetFile.trim().length > 0);
+    const hasExactlyOneTarget = (node.targetUnit === undefined) !== (node.targetFile === undefined);
+    return CHOIR_IDENTIFIER_PATTERN.test(node.symbol) && targetUnitValid && targetFileValid && hasExactlyOneTarget;
   }
 
   if (node.type === "refactor-inline") {

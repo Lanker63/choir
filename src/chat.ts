@@ -308,8 +308,11 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- choir rollback <unitId>",
         "- choir rollback --stage <stageId>",
         "- choir refactor rename <symbol> <newName>",
+        "- choir refactor rename <symbol> <newName> --declaration \"src/file.ts:line:character\"",
         "- choir refactor move <symbol> <targetUnit>",
+        "- choir refactor move <symbol> --file \"src/file.ts\"",
         "- choir refactor extract <symbol> <targetUnit>",
+        "- choir refactor extract <symbol> --file \"src/file.ts\"",
         "- choir refactor inline <symbol>",
         "- choir export dsl",
         "- choir export dsl intent",
@@ -1779,19 +1782,32 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             type: "rename" as const,
                             symbol: parsed.ast.symbol,
                             newName: parsed.ast.newName,
+                            ...(parsed.ast.declarationSelector !== undefined
+                                ? { declarationSelector: parsed.ast.declarationSelector }
+                                : {}),
                         }
                         : parsed.ast.type === "refactor-move"
                             ? {
                                 type: "move" as const,
                                 symbol: parsed.ast.symbol,
                                 from: "*",
-                                to: parsed.ast.targetUnit,
+                                ...(parsed.ast.targetUnit !== undefined
+                                    ? { to: parsed.ast.targetUnit }
+                                    : {}),
+                                ...(parsed.ast.targetFile !== undefined
+                                    ? { targetFile: parsed.ast.targetFile }
+                                    : {}),
                             }
                             : parsed.ast.type === "refactor-extract"
                                 ? {
                                     type: "extract" as const,
                                     symbol: parsed.ast.symbol,
-                                    targetUnit: parsed.ast.targetUnit,
+                                    ...(parsed.ast.targetUnit !== undefined
+                                        ? { targetUnit: parsed.ast.targetUnit }
+                                        : {}),
+                                    ...(parsed.ast.targetFile !== undefined
+                                        ? { targetFile: parsed.ast.targetFile }
+                                        : {}),
                                 }
                                 : {
                                     type: "inline" as const,
@@ -2165,14 +2181,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 const message = error instanceof Error ? error.message : String(error);
                 stream.markdown([
-                    "Invalid Choir DSL command.",
+                    "Choir command failed.",
                     "",
                     `Error: ${message}`,
-                    "",
-                    "Grammar:",
-                    "```bnf",
-                    CHOIR_DSL_GRAMMAR,
-                    "```",
                 ].join("\n"));
             }
         }

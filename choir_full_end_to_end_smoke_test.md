@@ -284,19 +284,40 @@ Topic setup for deterministic lineage:
    - Confirm the refactor preview and execute path completes without corruption.
    - Confirm the renamed symbol appears correctly across all affected source files.
 
-2. Run `@choir refactor inline <symbol>` using a valid symbol.
+2. Run `@choir refactor rename <symbol> <newName>` where `<symbol>` exists as multiple declarations in different files.
 
+   - Confirm the command fails closed.
+   - Confirm the error includes deterministic candidate declaration locations so the user can disambiguate.
+   - Confirm it is reported as a command/runtime failure, not as `Invalid Choir DSL command`.
+
+3. Re-run rename using a selected declaration: `@choir refactor rename <symbol> <newName> --declaration "<file>"`.
+
+   - Confirm the selected declaration is renamed.
+   - Confirm other same-name declarations remain unchanged.
+   - If more than one matching declaration exists in the selected file, confirm the command asks for `"<file:line:character>"`.
+
+4. Run `@choir refactor inline <symbol>` using a valid symbol.
+
+   - Use a variable declaration with an initializer (for example `const taxRate = 0.07;`) as the inline target symbol.
    - Confirm inline completes safely with no stray source artifacts.
 
-3. Run `@choir refactor move <symbol> <targetUnit>`.
+5. Run `@choir refactor move <symbol> <targetUnit>`.
+   - Alternative path-target form: `@choir refactor move <symbol> --file "<workspace-relative-file>"`.
 
    - Confirm the command is accepted at the parse or plan level.
-   - Confirm execution fails closed with a clear message if the execution path is not yet enabled.
+   - Use a top-level exported function declaration as the move target symbol.
+   - Confirm execution succeeds for supported move cases.
+   - Confirm source compatibility is preserved (for example, source re-export still satisfies existing importers).
+   - Confirm unsupported move shapes fail closed with a clear message.
 
-4. Run `@choir refactor extract <symbol> <targetUnit>`.
+6. Run `@choir refactor extract <symbol> <targetUnit>`.
+   - Alternative path-target form: `@choir refactor extract <symbol> --file "<workspace-relative-file>"`.
 
    - Confirm the command is accepted at the parse or plan level.
-   - Confirm execution fails closed with a clear message if the execution path is not yet enabled.
+   - Use a top-level exported non-default function declaration as the extract target symbol.
+   - Confirm execution succeeds for supported extract cases.
+   - Confirm source compatibility is preserved through deterministic wrapper delegation to the target implementation.
+   - Confirm unsupported extract shapes fail closed with a clear message.
 
 ---
 

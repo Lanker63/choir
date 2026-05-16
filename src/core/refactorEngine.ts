@@ -17,9 +17,9 @@ export type Pattern = {
 };
 
 export type RefactorIntent =
-  | { type: "rename"; symbol: string; newName: string }
-  | { type: "extract"; symbol: string; targetUnit: string }
-  | { type: "move"; symbol: string; from: string; to: string }
+  | { type: "rename"; symbol: string; newName: string; declarationSelector?: string }
+  | { type: "extract"; symbol: string; targetUnit?: string; targetFile?: string }
+  | { type: "move"; symbol: string; from: string; to?: string; targetFile?: string }
   | { type: "inline"; symbol: string }
   | { type: "replace-pattern"; match: Pattern; replace: Pattern };
 
@@ -136,6 +136,19 @@ type RefactorApplyResult = {
   changedFiles: FileMap;
 };
 
+type ModuleSpecifierOptions = {
+  root: string;
+};
+
+const explicitEsmExtensionCache = new Map<string, boolean>();
+
+const NON_DECLARATION_SYMBOL_KINDS = new Set([
+  "ImportSpecifier",
+  "NamespaceImport",
+  "ImportClause",
+  "ExportSpecifier",
+]);
+
 function normalizePath(value: string): string {
   return value.split("\\").join("/");
 }
@@ -155,6 +168,30 @@ function toStableFilePath(root: string, value: string): string {
 
 function toAbsolute(root: string, value: string): string {
   return path.resolve(root, value);
+}
+
+function isRefactorEligibleFile(filePath: string): boolean {
+  const normalized = normalizePath(filePath);
+  const lower = normalized.toLowerCase();
+
+  if (!lower.endsWith(".ts")
+    && !lower.endsWith(".tsx")
+    && !lower.endsWith(".js")
+    && !lower.endsWith(".jsx")
+    && !lower.endsWith(".mts")
+    && !lower.endsWith(".cts")) {
+    return false;
+  }
+
+  if (lower.endsWith(".d.ts") || lower.endsWith(".d.mts") || lower.endsWith(".d.cts")) {
+    return false;
+  }
+
+  if (lower.includes("/dist/") || lower.includes("/build/") || lower.includes("/coverage/")) {
+    return false;
+  }
+
+  return true;
 }
 
 function toSourceLocation(root: string, filePath: string, start: number, end: number, source: ts.SourceFile): SourceLocation {
@@ -192,7 +229,9 @@ function createProject(snapshot: WorkspaceSnapshot): Project {
     },
   });
 
-  const sortedFiles = [...snapshot.files].sort((left, right) => left.path.localeCompare(right.path));
+  const sortedFiles = [...snapshot.files]
+    .filter((file) => isRefactorEligibleFile(file.path))
+    .sort((left, right) => left.path.localeCompare(right.path));
   for (const file of sortedFiles) {
     project.createSourceFile(file.path, file.content, { overwrite: true });
   }
@@ -238,20 +277,37 @@ function makeSymbolId(symbol: import("ts-morph").Symbol, root: string, sourceFil
   return `${filePath}:${declaration.getStart()}:${symbolName}`;
 }
 
+function getDeclarationAnchor(node: Node): Node {
+  const maybeNameNode = "getNameNode" in node
+    ? (node as { getNameNode?: () => Node | undefined }).getNameNode?.()
+    : undefined;
+  if (maybeNameNode) {
+    return maybeNameNode;
+  }
+
+  const identifier = node.asKind(SyntaxKind.Identifier) ?? node.getFirstDescendantByKind(SyntaxKind.Identifier);
+  if (identifier) {
+    return identifier;
+  }
+
+  return node;
+}
+
 function symbolNodeFromDeclaration(symbolId: string, declaration: Node, root: string): SymbolNode {
-  const sourceFile = declaration.getSourceFile();
+  const anchor = getDeclarationAnchor(declaration);
+  const sourceFile = anchor.getSourceFile();
   const compilerNode = sourceFile.compilerNode;
   const location = toSourceLocation(
     root,
     sourceFile.getFilePath(),
-    declaration.getStart(),
-    declaration.getEnd(),
+    anchor.getStart(),
+    anchor.getEnd(),
     compilerNode
   );
 
   return {
     id: symbolId,
-    name: declaration.getSymbol()?.getName() ?? declaration.getText(),
+    name: anchor.getSymbol()?.getName() ?? declaration.getSymbol()?.getName() ?? declaration.getText(),
     kind: declaration.getKindName(),
     declaration: location,
     unitId: deriveUnitId(root, sourceFile.getFilePath()),
@@ -327,10 +383,87 @@ function resolveIntentSymbolIds(intent: RefactorIntent, graph: SymbolGraph): str
     ? intent.match.value
     : intent.symbol;
 
-  return [...graph.symbols.values()]
-    .filter((symbol) => symbol.name === symbolName)
+  const symbolIds = [...graph.symbols.values()]
+    .filter((symbol) => {
+      if (symbol.name !== symbolName) {
+        return false;
+      }
+
+      if (intent.type === "replace-pattern") {
+        return true;
+      }
+
+      return !NON_DECLARATION_SYMBOL_KINDS.has(symbol.kind);
+    })
     .map((symbol) => symbol.id)
     .sort((left, right) => left.localeCompare(right));
+
+  if (intent.type !== "rename" || intent.declarationSelector === undefined) {
+    return symbolIds;
+  }
+
+  const selector = intent.declarationSelector.trim();
+  const selected = symbolIds.filter((symbolId) => {
+    const symbol = graph.symbols.get(symbolId);
+    if (!symbol) {
+      return false;
+    }
+
+    const line = symbol.declaration.start.line + 1;
+    const character = symbol.declaration.start.character + 1;
+    return `${symbol.declaration.file}:${line}:${character}` === selector;
+  });
+
+  if (selected.length > 0) {
+    return selected;
+  }
+
+  const normalizeSelectorFile = (value: string): string => {
+    const normalized = value.trim().split("\\").join("/");
+    return normalized.startsWith("./") ? normalized.slice(2) : normalized;
+  };
+
+  const selectorFile = normalizeSelectorFile(selector);
+  const selectedByFile = symbolIds.filter((symbolId) => {
+    const symbol = graph.symbols.get(symbolId);
+    if (!symbol) {
+      return false;
+    }
+
+    return normalizeSelectorFile(symbol.declaration.file) === selectorFile;
+  });
+
+  if (selectedByFile.length === 1) {
+    return selectedByFile;
+  }
+
+  if (selectedByFile.length > 1) {
+    const fileCandidates = formatRenameCandidates(selectedByFile, graph);
+    throw new Error(
+      `Declaration selector "${intent.declarationSelector}" matches ${selectedByFile.length} declarations (${fileCandidates}). Use --declaration "<file:line:character>" to disambiguate.`
+    );
+  }
+
+  const candidates = formatRenameCandidates(symbolIds, graph);
+  throw new Error(
+    `No declaration matches rename selector "${intent.declarationSelector}" for symbol "${intent.symbol}". Candidates: ${candidates}. Selector accepts either "<file>" (when unique) or "<file:line:character>".`
+  );
+}
+
+function formatRenameCandidates(symbolIds: string[], graph: SymbolGraph): string {
+  return symbolIds
+    .map((symbolId) => {
+      const symbol = graph.symbols.get(symbolId);
+      if (!symbol) {
+        return symbolId;
+      }
+
+      const line = symbol.declaration.start.line + 1;
+      const character = symbol.declaration.start.character + 1;
+      return `${symbol.declaration.file}:${line}:${character}`;
+    })
+    .sort((left, right) => left.localeCompare(right))
+    .join(", ");
 }
 
 function stableImpact(impact: ImpactSet): ImpactSet {
@@ -345,6 +478,13 @@ export function computeImpact(intent: RefactorIntent, graph: SymbolGraph): Impac
   const symbolIds = resolveIntentSymbolIds(intent, graph);
   if (symbolIds.length === 0) {
     throw new Error(`Unable to resolve symbol for refactor intent: ${intent.type}`);
+  }
+
+  if (intent.type === "rename" && symbolIds.length > 1) {
+    const candidates = formatRenameCandidates(symbolIds, graph);
+    throw new Error(
+      `Ambiguous rename symbol "${intent.symbol}": found ${symbolIds.length} declarations (${candidates}). Rename requires a unique symbol name or --declaration \"<file>\"/\"<file:line:character>\".`
+    );
   }
 
   const files = new Set<string>();
@@ -367,7 +507,15 @@ export function computeImpact(intent: RefactorIntent, graph: SymbolGraph): Impac
   }
 
   if (intent.type === "move" || intent.type === "extract") {
-    units.add(intent.type === "move" ? intent.to : intent.targetUnit);
+    if (intent.type === "move") {
+      if (intent.to) {
+        units.add(intent.to);
+      }
+    } else {
+      if (intent.targetUnit) {
+        units.add(intent.targetUnit);
+      }
+    }
   }
 
   return stableImpact({
@@ -383,12 +531,33 @@ function resolveRelativeImport(baseFile: string, specifier: string, existingFile
   }
 
   const root = path.resolve(path.dirname(baseFile), specifier);
+  const runtimeExtension = path.extname(root).toLowerCase();
+  const strippedRuntimeRoot = [".js", ".mjs", ".cjs"].includes(runtimeExtension)
+    ? root.slice(0, -runtimeExtension.length)
+    : null;
+
   const candidates = [
     root,
     `${root}.ts`,
     `${root}.tsx`,
+    `${root}.mts`,
+    `${root}.cts`,
     path.join(root, "index.ts"),
     path.join(root, "index.tsx"),
+    path.join(root, "index.mts"),
+    path.join(root, "index.cts"),
+    ...(strippedRuntimeRoot
+      ? [
+        `${strippedRuntimeRoot}.ts`,
+        `${strippedRuntimeRoot}.tsx`,
+        `${strippedRuntimeRoot}.mts`,
+        `${strippedRuntimeRoot}.cts`,
+        path.join(strippedRuntimeRoot, "index.ts"),
+        path.join(strippedRuntimeRoot, "index.tsx"),
+        path.join(strippedRuntimeRoot, "index.mts"),
+        path.join(strippedRuntimeRoot, "index.cts"),
+      ]
+      : []),
   ];
 
   for (const candidate of candidates) {
@@ -563,20 +732,555 @@ function getDeclarationNode(project: Project, symbolNode: SymbolNode, root: stri
   return declaration;
 }
 
-function renameDeclarationNode(node: Node, newName: string): void {
-  const declaration = node.asKind(SyntaxKind.Identifier) ?? node.getFirstDescendantByKind(SyntaxKind.Identifier);
-  const target = declaration ?? node;
+function resolveRenameableNode(node: Node): { rename(name: string): void } | null {
+  const tryResolve = (candidate: Node | undefined): { rename(name: string): void } | null => {
+    if (!candidate) {
+      return null;
+    }
 
-  if (!("rename" in target) || typeof (target as { rename?: unknown }).rename !== "function") {
+    if ("rename" in candidate && typeof (candidate as { rename?: unknown }).rename === "function") {
+      return candidate as { rename(name: string): void };
+    }
+
+    return null;
+  };
+
+  const identifier = node.asKind(SyntaxKind.Identifier);
+  const identifierRenameable = tryResolve(identifier);
+  if (identifierRenameable) {
+    return identifierRenameable;
+  }
+
+  const maybeNameNode = "getNameNode" in node
+    ? (node as { getNameNode?: () => Node | undefined }).getNameNode?.()
+    : undefined;
+  const nameNodeRenameable = tryResolve(maybeNameNode);
+  if (nameNodeRenameable) {
+    return nameNodeRenameable;
+  }
+
+  const descendantRenameable = tryResolve(node.getFirstDescendantByKind(SyntaxKind.Identifier));
+  if (descendantRenameable) {
+    return descendantRenameable;
+  }
+
+  for (const ancestor of node.getAncestors()) {
+    const ancestorRenameable = tryResolve(ancestor);
+    if (ancestorRenameable) {
+      return ancestorRenameable;
+    }
+
+    const ancestorNameNode = "getNameNode" in ancestor
+      ? (ancestor as { getNameNode?: () => Node | undefined }).getNameNode?.()
+      : undefined;
+    const ancestorNameNodeRenameable = tryResolve(ancestorNameNode);
+    if (ancestorNameNodeRenameable) {
+      return ancestorNameNodeRenameable;
+    }
+  }
+
+  return tryResolve(node);
+}
+
+function renameDeclarationNode(node: Node, newName: string): void {
+  const target = resolveRenameableNode(node);
+
+  if (!target) {
     throw new Error("Declaration node does not support semantic rename");
   }
 
-  (target as { rename(name: string): void }).rename(newName);
+  target.rename(newName);
+}
+
+function resolveInlineVariableDeclaration(node: Node): import("ts-morph").VariableDeclaration | null {
+  const direct = node.asKind(SyntaxKind.VariableDeclaration);
+  if (direct) {
+    return direct;
+  }
+
+  const fromIdentifier = node.asKind(SyntaxKind.Identifier)?.getFirstAncestorByKind(SyntaxKind.VariableDeclaration);
+  if (fromIdentifier) {
+    return fromIdentifier;
+  }
+
+  return node.getFirstAncestorByKind(SyntaxKind.VariableDeclaration)
+    ?? node.getFirstDescendantByKind(SyntaxKind.VariableDeclaration)
+    ?? null;
+}
+
+function normalizeUnitSelector(unit: string): string {
+  const trimmed = unit.trim();
+  if (trimmed.includes(":")) {
+    return trimmed;
+  }
+
+  const firstDot = trimmed.indexOf(".");
+  if (firstDot === -1) {
+    return trimmed;
+  }
+
+  return `${trimmed.slice(0, firstDot)}:${trimmed.slice(firstDot + 1)}`;
+}
+
+function requiresExplicitEsmExtensions(root: string): boolean {
+  const normalizedRoot = normalizePath(root);
+  const cached = explicitEsmExtensionCache.get(normalizedRoot);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  const tsconfigPath = ts.findConfigFile(root, ts.sys.fileExists, "tsconfig.json");
+  if (!tsconfigPath) {
+    explicitEsmExtensionCache.set(normalizedRoot, false);
+    return false;
+  }
+
+  const config = ts.readConfigFile(tsconfigPath, ts.sys.readFile);
+  if (config.error) {
+    explicitEsmExtensionCache.set(normalizedRoot, false);
+    return false;
+  }
+
+  const parsed = ts.parseJsonConfigFileContent(
+    config.config,
+    ts.sys,
+    path.dirname(tsconfigPath),
+    undefined,
+    tsconfigPath
+  );
+
+  const requiresExplicitByResolution = parsed.options.moduleResolution === ts.ModuleResolutionKind.Node16
+    || parsed.options.moduleResolution === ts.ModuleResolutionKind.NodeNext;
+  const requiresExplicitByModuleKind = parsed.options.module === ts.ModuleKind.Node16
+    || parsed.options.module === ts.ModuleKind.NodeNext;
+  const requiresExplicit = requiresExplicitByResolution || requiresExplicitByModuleKind;
+  explicitEsmExtensionCache.set(normalizedRoot, requiresExplicit);
+  return requiresExplicit;
+}
+
+function runtimeImportExtensionForFile(filePath: string): string {
+  const extension = path.extname(filePath).toLowerCase();
+  if ([".ts", ".tsx", ".mts", ".cts"].includes(extension)) {
+    return ".js";
+  }
+
+  if ([".js", ".jsx", ".mjs", ".cjs"].includes(extension)) {
+    return extension;
+  }
+
+  return ".js";
+}
+
+function normalizeModuleSpecifier(fromFilePath: string, toFilePath: string, options: ModuleSpecifierOptions): string {
+  let relative = normalizePath(path.relative(path.dirname(fromFilePath), toFilePath));
+
+  const needsExplicitExtension = requiresExplicitEsmExtensions(options.root);
+  const runtimeExtension = runtimeImportExtensionForFile(toFilePath);
+  const indexSuffixRegex = new RegExp(`\\/index(?:${runtimeExtension.replace('.', '\\.')})?$`, "i");
+
+  if (needsExplicitExtension) {
+    relative = relative.replace(/\.(tsx?|jsx?|mjs|cjs|mts|cts)$/i, runtimeExtension);
+  } else {
+    relative = relative.replace(/\.(tsx?|jsx?|mjs|cjs|mts|cts)$/i, "");
+  }
+
+  relative = relative.replace(indexSuffixRegex, needsExplicitExtension ? `/index${runtimeExtension}` : "");
+
+  if (!relative.startsWith(".")) {
+    relative = `./${relative}`;
+  }
+
+  return relative;
+}
+
+function canonicalizeModulePath(value: string): string {
+  return normalizePath(value)
+    .replace(/\.(tsx?|jsx?|mjs|cjs)$/i, "")
+    .replace(/\/index$/i, "");
+}
+
+function unitDefaultFilePath(root: string, unit: string): string {
+  const normalizedUnit = normalizeUnitSelector(unit);
+  if (normalizedUnit === "workspace:root") {
+    return path.join(root, "src", "index.ts");
+  }
+
+  const [scope, name] = normalizedUnit.split(":", 2);
+  if (!scope || !name || !["packages", "apps", "services", "libs"].includes(scope)) {
+    throw new Error(`Unsupported move target unit: ${unit}`);
+  }
+
+  return path.join(root, scope, name, "src", "index.ts");
+}
+
+function resolveMoveTargetFileByPath(
+  project: Project,
+  root: string,
+  sourceFilePath: string,
+  targetFile: string
+): import("ts-morph").SourceFile {
+  const absolutePath = toAbsolute(root, targetFile);
+  if (normalizePath(absolutePath) === normalizePath(sourceFilePath)) {
+    throw new Error("Move refactor requires target file distinct from source declaration file");
+  }
+
+  const existing = project.getSourceFile(absolutePath);
+  if (existing) {
+    return existing;
+  }
+
+  return project.createSourceFile(absolutePath, "", { overwrite: false });
+}
+
+function resolveMoveTargetFile(project: Project, root: string, sourceFilePath: string, targetUnit: string): import("ts-morph").SourceFile {
+  const normalizedTargetUnit = normalizeUnitSelector(targetUnit);
+  const candidates = project.getSourceFiles()
+    .filter((file) => normalizePath(file.getFilePath()) !== normalizePath(sourceFilePath))
+    .filter((file) => deriveUnitId(root, file.getFilePath()) === normalizedTargetUnit)
+    .sort((left, right) => left.getFilePath().localeCompare(right.getFilePath()));
+
+  if (candidates.length > 0) {
+    return candidates[0] as import("ts-morph").SourceFile;
+  }
+
+  const targetPath = unitDefaultFilePath(root, normalizedTargetUnit);
+  const existing = project.getSourceFile(targetPath);
+  if (existing) {
+    return existing;
+  }
+
+  return project.createSourceFile(targetPath, "", { overwrite: false });
+}
+
+function moveFunctionDeclaration(
+  declaration: import("ts-morph").FunctionDeclaration,
+  targetFile: import("ts-morph").SourceFile,
+  sourceFile: import("ts-morph").SourceFile,
+  root: string
+): void {
+  const nameNode = declaration.getNameNode();
+  if (!nameNode || !Node.isIdentifier(nameNode)) {
+    throw new Error("Move refactor requires a named function declaration");
+  }
+
+  const symbolName = nameNode.getText();
+  const localReferences = nameNode.findReferencesAsNodes().filter((reference) => {
+    return reference.getSourceFile().getFilePath() === sourceFile.getFilePath()
+      && reference.getStart() !== nameNode.getStart();
+  });
+
+  const declarationText = declaration.getText();
+
+  for (const importDeclaration of targetFile.getImportDeclarations()) {
+    const specifier = importDeclaration.getModuleSpecifierValue();
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+
+    const resolvedImport = path.resolve(path.dirname(targetFile.getFilePath()), specifier);
+    if (canonicalizeModulePath(resolvedImport) !== canonicalizeModulePath(sourceFile.getFilePath())) {
+      continue;
+    }
+
+    const matchingNamedImports = importDeclaration.getNamedImports()
+      .filter((entry) => entry.getName() === symbolName);
+    for (const namedImport of matchingNamedImports) {
+      namedImport.remove();
+    }
+
+    if (!importDeclaration.getDefaultImport()
+      && !importDeclaration.getNamespaceImport()
+      && importDeclaration.getNamedImports().length === 0) {
+      importDeclaration.remove();
+    }
+  }
+
+  declaration.remove();
+
+  targetFile.addStatements([declarationText]);
+
+  const moduleSpecifier = normalizeModuleSpecifier(sourceFile.getFilePath(), targetFile.getFilePath(), { root });
+
+  if (localReferences.length > 0) {
+    sourceFile.addImportDeclaration({
+      moduleSpecifier,
+      namedImports: [symbolName],
+    });
+  }
+}
+
+function removeTargetImportFromSourceModule(
+  targetFile: import("ts-morph").SourceFile,
+  sourceFile: import("ts-morph").SourceFile,
+  symbolName: string
+): void {
+  for (const importDeclaration of targetFile.getImportDeclarations()) {
+    const specifier = importDeclaration.getModuleSpecifierValue();
+    if (!specifier.startsWith(".")) {
+      continue;
+    }
+
+    const resolvedImport = path.resolve(path.dirname(targetFile.getFilePath()), specifier);
+    if (canonicalizeModulePath(resolvedImport) !== canonicalizeModulePath(sourceFile.getFilePath())) {
+      continue;
+    }
+
+    const matchingNamedImports = importDeclaration.getNamedImports()
+      .filter((entry) => entry.getName() === symbolName);
+    for (const namedImport of matchingNamedImports) {
+      namedImport.remove();
+    }
+
+    if (!importDeclaration.getDefaultImport()
+      && !importDeclaration.getNamespaceImport()
+      && importDeclaration.getNamedImports().length === 0) {
+      importDeclaration.remove();
+    }
+  }
+}
+
+function collectIdentifierNames(sourceFile: import("ts-morph").SourceFile): Set<string> {
+  return new Set(sourceFile.getDescendantsOfKind(SyntaxKind.Identifier).map((identifier) => identifier.getText()));
+}
+
+function allocateExtractImportAlias(sourceFile: import("ts-morph").SourceFile, symbolName: string): string {
+  const usedNames = collectIdentifierNames(sourceFile);
+  const base = `__choirExtract_${symbolName}`;
+  let alias = base;
+  let counter = 2;
+
+  while (usedNames.has(alias)) {
+    alias = `${base}_${counter}`;
+    counter += 1;
+  }
+
+  return alias;
+}
+
+function ensureNamedImportAlias(
+  sourceFile: import("ts-morph").SourceFile,
+  targetFile: import("ts-morph").SourceFile,
+  symbolName: string,
+  root: string
+): string {
+  const moduleSpecifier = normalizeModuleSpecifier(sourceFile.getFilePath(), targetFile.getFilePath(), { root });
+  const existingImport = sourceFile.getImportDeclaration((entry) => entry.getModuleSpecifierValue() === moduleSpecifier);
+  const alias = allocateExtractImportAlias(sourceFile, symbolName);
+
+  if (!existingImport) {
+    sourceFile.addImportDeclaration({
+      moduleSpecifier,
+      namedImports: [{ name: symbolName, alias }],
+    });
+    return alias;
+  }
+
+  const existingNamedImport = existingImport.getNamedImports().find((entry) => entry.getName() === symbolName);
+  if (existingNamedImport) {
+    const existingAlias = existingNamedImport.getAliasNode()?.getText();
+    if (existingAlias) {
+      return existingAlias;
+    }
+
+    existingNamedImport.setAlias(alias);
+    return alias;
+  }
+
+  existingImport.addNamedImport({ name: symbolName, alias });
+  return alias;
+}
+
+function extractFunctionDeclaration(
+  declaration: import("ts-morph").FunctionDeclaration,
+  targetFile: import("ts-morph").SourceFile,
+  sourceFile: import("ts-morph").SourceFile,
+  root: string
+): void {
+  const nameNode = declaration.getNameNode();
+  if (!nameNode || !Node.isIdentifier(nameNode)) {
+    throw new Error("Extract refactor requires a named function declaration");
+  }
+
+  if (!declaration.isExported() || declaration.isDefaultExport()) {
+    throw new Error("Extract refactor currently supports exported non-default top-level function declarations only");
+  }
+
+  if (!declaration.getBody()) {
+    throw new Error("Extract refactor requires a concrete function implementation (not overload signature)");
+  }
+
+  if (declaration.isGenerator()) {
+    throw new Error("Extract refactor does not yet support generator functions");
+  }
+
+  const symbolName = nameNode.getText();
+  const existingTargetFunction = targetFile.getFunction(symbolName);
+  if (existingTargetFunction) {
+    throw new Error(`Extract refactor target already defines function \"${symbolName}\"`);
+  }
+
+  removeTargetImportFromSourceModule(targetFile, sourceFile, symbolName);
+
+  const declarationText = declaration.getText();
+  targetFile.addStatements([declarationText]);
+
+  const delegatedAlias = ensureNamedImportAlias(sourceFile, targetFile, symbolName, root);
+  const typeArgumentList = declaration.getTypeParameters().map((typeParameter) => typeParameter.getName()).join(", ");
+  const typeArguments = typeArgumentList.length > 0 ? `<${typeArgumentList}>` : "";
+
+  const callArguments = declaration.getParameters().map((parameter) => {
+    if (parameter.isRestParameter()) {
+      return `...${parameter.getNameNode().getText()}`;
+    }
+
+    return parameter.getNameNode().getText();
+  }).join(", ");
+
+  declaration.setBodyText(`return ${delegatedAlias}${typeArguments}(${callArguments});`);
+}
+
+function rewriteMovedSymbolImports(
+  project: Project,
+  sourceFile: import("ts-morph").SourceFile,
+  targetFile: import("ts-morph").SourceFile,
+  symbolName: string,
+  root: string
+): void {
+  const sourceCanonical = canonicalizeModulePath(sourceFile.getFilePath());
+
+  for (const file of project.getSourceFiles()) {
+    for (const importDeclaration of file.getImportDeclarations()) {
+      const specifier = importDeclaration.getModuleSpecifierValue();
+      if (!specifier.startsWith(".")) {
+        continue;
+      }
+
+      const resolvedImport = path.resolve(path.dirname(file.getFilePath()), specifier);
+      if (canonicalizeModulePath(resolvedImport) !== sourceCanonical) {
+        continue;
+      }
+
+      const movedNamedImports = importDeclaration.getNamedImports()
+        .filter((entry) => entry.getName() === symbolName)
+        .map((entry) => ({
+          name: entry.getName(),
+          alias: entry.getAliasNode()?.getText(),
+        }));
+
+      if (movedNamedImports.length === 0) {
+        continue;
+      }
+
+      const targetSpecifier = normalizeModuleSpecifier(file.getFilePath(), targetFile.getFilePath(), { root });
+      let targetImport = file.getImportDeclaration((entry) => entry.getModuleSpecifierValue() === targetSpecifier);
+
+      if (!targetImport) {
+        targetImport = file.addImportDeclaration({
+          moduleSpecifier: targetSpecifier,
+          namedImports: [],
+        });
+      }
+
+      const existingNamedImports = new Set(
+        targetImport.getNamedImports().map((entry) => `${entry.getName()}:${entry.getAliasNode()?.getText() ?? ""}`)
+      );
+
+      for (const movedNamedImport of movedNamedImports) {
+        const key = `${movedNamedImport.name}:${movedNamedImport.alias ?? ""}`;
+        if (existingNamedImports.has(key)) {
+          continue;
+        }
+
+        targetImport.addNamedImport(
+          movedNamedImport.alias
+            ? { name: movedNamedImport.name, alias: movedNamedImport.alias }
+            : movedNamedImport.name
+        );
+      }
+
+      for (const namedImport of importDeclaration.getNamedImports().filter((entry) => entry.getName() === symbolName)) {
+        namedImport.remove();
+      }
+
+      if (!importDeclaration.getDefaultImport()
+        && !importDeclaration.getNamespaceImport()
+        && importDeclaration.getNamedImports().length === 0) {
+        importDeclaration.remove();
+      }
+    }
+  }
+}
+
+function applyMove(plan: RefactorPlan, graph: SymbolGraph, project: Project, root: string, moveIntent: Extract<RefactorIntent, { type: "move" }>): void {
+  const symbolNode = getSingleSymbolNode(plan, graph);
+  const declarationNode = getDeclarationNode(project, symbolNode, root);
+  const declaration = declarationNode.asKind(SyntaxKind.FunctionDeclaration)
+    ?? declarationNode.getFirstAncestorByKind(SyntaxKind.FunctionDeclaration);
+
+  if (!declaration) {
+    throw new Error("Move refactor currently supports top-level function declarations only");
+  }
+
+  const sourceFile = declaration.getSourceFile();
+  const targetFile = moveIntent.targetFile
+    ? resolveMoveTargetFileByPath(project, root, sourceFile.getFilePath(), moveIntent.targetFile)
+    : resolveMoveTargetFile(project, root, sourceFile.getFilePath(), moveIntent.to ?? "");
+
+  if (!moveIntent.targetFile && !moveIntent.to) {
+    throw new Error("Move refactor requires target unit or target file");
+  }
+
+  if (normalizePath(sourceFile.getFilePath()) === normalizePath(targetFile.getFilePath())) {
+    throw new Error("Move refactor requires target distinct from source declaration location");
+  }
+
+  const symbolName = declaration.getName();
+  if (!symbolName) {
+    throw new Error("Move refactor requires a named function declaration");
+  }
+
+  moveFunctionDeclaration(declaration, targetFile, sourceFile, root);
+  rewriteMovedSymbolImports(project, sourceFile, targetFile, symbolName, root);
+}
+
+function applyExtract(
+  plan: RefactorPlan,
+  graph: SymbolGraph,
+  project: Project,
+  root: string,
+  extractIntent: Extract<RefactorIntent, { type: "extract" }>
+): void {
+  const symbolNode = getSingleSymbolNode(plan, graph);
+  const declarationNode = getDeclarationNode(project, symbolNode, root);
+  const declaration = declarationNode.asKind(SyntaxKind.FunctionDeclaration)
+    ?? declarationNode.getFirstAncestorByKind(SyntaxKind.FunctionDeclaration);
+
+  if (!declaration || !Node.isSourceFile(declaration.getParent())) {
+    throw new Error("Extract refactor currently supports top-level function declarations only");
+  }
+
+  if (!extractIntent.targetUnit && !extractIntent.targetFile) {
+    throw new Error("Extract refactor requires target unit or target file");
+  }
+
+  if (extractIntent.targetUnit && extractIntent.targetFile) {
+    throw new Error("Extract refactor requires exactly one target: target unit or target file");
+  }
+
+  const sourceFile = declaration.getSourceFile();
+  const targetFile = extractIntent.targetFile
+    ? resolveMoveTargetFileByPath(project, root, sourceFile.getFilePath(), extractIntent.targetFile)
+    : resolveMoveTargetFile(project, root, sourceFile.getFilePath(), extractIntent.targetUnit ?? "");
+  if (normalizePath(sourceFile.getFilePath()) === normalizePath(targetFile.getFilePath())) {
+    throw new Error("Extract refactor requires target unit distinct from source declaration location");
+  }
+
+  extractFunctionDeclaration(declaration, targetFile, sourceFile, root);
 }
 
 function applyInline(plan: RefactorPlan, graph: SymbolGraph, project: Project, root: string): void {
   const symbolNode = getSingleSymbolNode(plan, graph);
-  const declaration = getDeclarationNode(project, symbolNode, root).asKind(SyntaxKind.VariableDeclaration);
+  const declaration = resolveInlineVariableDeclaration(getDeclarationNode(project, symbolNode, root));
   if (!declaration) {
     throw new Error("Inline refactor currently supports variable declarations only");
   }
@@ -641,8 +1345,13 @@ function applyRefactorPlan(plan: RefactorPlan, graph: SymbolGraph, snapshot: Wor
     applyRename(plan, graph, project, snapshot.root, plan.intent.replace.value);
   } else if (plan.intent.type === "inline") {
     applyInline(plan, graph, project, snapshot.root);
+  } else if (plan.intent.type === "move") {
+    applyMove(plan, graph, project, snapshot.root, plan.intent);
+  } else if (plan.intent.type === "extract") {
+    applyExtract(plan, graph, project, snapshot.root, plan.intent);
   } else {
-    throw new Error(`Refactor intent ${plan.intent.type} is not yet executable`);
+    const unsupportedIntent: never = plan.intent;
+    throw new Error(`Refactor intent is not yet executable: ${JSON.stringify(unsupportedIntent)}`);
   }
 
   const beforeMap = new Map(snapshot.files.map((file) => [normalizePath(file.path), file.content] as const));
@@ -653,7 +1362,16 @@ function applyRefactorPlan(plan: RefactorPlan, graph: SymbolGraph, snapshot: Wor
     const before = beforeMap.get(filePath);
     const after = sourceFile.getFullText();
 
-    if (before === undefined || before === after) {
+    if (before === undefined) {
+      if (after.trim().length === 0) {
+        continue;
+      }
+
+      changedFiles[toStableFilePath(snapshot.root, filePath)] = after;
+      continue;
+    }
+
+    if (before === after) {
       continue;
     }
 
@@ -691,13 +1409,22 @@ function snapshotWithChanges(snapshot: WorkspaceSnapshot, changedFiles: FileMap)
     Object.entries(changedFiles).map(([file, content]) => [normalizePath(toAbsolute(snapshot.root, file)), content] as const)
   );
 
+  const existingFiles = snapshot.files.map((file) => ({
+    path: file.path,
+    content: changedByAbsolute.get(normalizePath(file.path)) ?? file.content,
+  }));
+
+  const existingFileSet = new Set(existingFiles.map((file) => normalizePath(file.path)));
+  const createdFiles = [...changedByAbsolute.entries()]
+    .filter(([absolutePath]) => !existingFileSet.has(absolutePath))
+    .map(([absolutePath, content]) => ({
+      path: absolutePath,
+      content,
+    }));
+
   return {
     root: snapshot.root,
-    files: snapshot.files
-      .map((file) => ({
-        path: file.path,
-        content: changedByAbsolute.get(normalizePath(file.path)) ?? file.content,
-      }))
+    files: [...existingFiles, ...createdFiles]
       .sort((left, right) => left.path.localeCompare(right.path)),
   };
 }
@@ -753,7 +1480,9 @@ function applyPolicies(plan: RefactorPlan, controlPlane: ControlPlane): PolicyDe
   const violations: string[] = [];
 
   if (plan.intent.type === "move" || plan.intent.type === "extract") {
-    const target = (plan.intent.type === "move" ? plan.intent.to : plan.intent.targetUnit).toLowerCase();
+    const target = (plan.intent.type === "move"
+      ? (plan.intent.targetFile ?? plan.intent.to ?? "")
+      : (plan.intent.targetFile ?? plan.intent.targetUnit ?? "")).toLowerCase();
     const symbol = plan.intent.symbol.toLowerCase();
 
     const deniesFrontendDbMove = constraints.some((constraint) =>
@@ -878,10 +1607,10 @@ function createSnapshotId(plan: RefactorPlan, preview: RefactorPreview): string 
   return `refactor-${hash.slice(0, 16)}`;
 }
 
-function snapshotFilesForPlan(root: string, plan: RefactorPlan): Record<string, string> {
+function snapshotFilesForPreview(root: string, preview: RefactorPreview): Record<string, string> {
   const files: Record<string, string> = {};
 
-  for (const file of sortedUnique(plan.impact.affectedFiles)) {
+  for (const file of sortedUnique(preview.changes.map((change) => change.file))) {
     const absolute = toAbsolute(root, file);
     if (!fs.existsSync(absolute)) {
       continue;
@@ -919,7 +1648,7 @@ export async function executeRefactor(
   const snapshot: RefactorSnapshot = {
     id: snapshotId,
     createdAt: new Date().toISOString(),
-    files: snapshotFilesForPlan(options.root, plan),
+    files: snapshotFilesForPreview(options.root, preview),
     state: readStatePlane(options.root),
   };
   saveRefactorSnapshot(options.root, snapshot);
