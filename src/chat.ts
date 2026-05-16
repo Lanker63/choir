@@ -8,10 +8,12 @@ import {
     queryAudit,
 } from "./core/audit.js";
 import {
+    importLibrary,
     installLibrary,
-    listMacroLibraryCatalog,
+    listLibraryCatalog,
     loadMacroLibrary,
-    lockLibraries,
+    lockChoirLibraries,
+    parseLibraryFailure,
     readMacroLock,
     updateLibrary,
 } from "./core/macroLibraries.js";
@@ -1121,12 +1123,13 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 if (parsed.ast.type === "import-library") {
                     const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
-                    const installed = installLibrary(workspaceRoot, spec);
+                    const imported = importLibrary(workspaceRoot, spec);
                     stream.markdown([
-                        `Library imported: ${installed.library}`,
-                        `- requested: ${installed.requested}`,
-                        `- resolved: ${installed.resolvedVersion}`,
-                        "- lockfile: .choir/lock.yaml",
+                        `import:`,
+                        `  library: ${imported.library}`,
+                        `  selector: ${imported.selector}`,
+                        `  resolvedVersion: ${imported.resolvedVersion}`,
+                        `  status: ${imported.status}`,
                     ].join("\n"));
                     return;
                 }
@@ -1138,7 +1141,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         `Library installed: ${installed.library}`,
                         `- requested: ${installed.requested}`,
                         `- resolved: ${installed.resolvedVersion}`,
-                        "- lockfile: .choir/lock.yaml",
+                        "- lockfile: choir.lock",
+                        `- materialized: .choir/libraries/${installed.library}/manifest.yaml`,
                     ].join("\n"));
                     return;
                 }
@@ -1148,16 +1152,16 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     stream.markdown([
                         `Library updated: ${updated.library}`,
                         `- resolved: ${updated.resolvedVersion}`,
-                        "- lockfile: .choir/lock.yaml",
+                        "- lockfile: choir.lock",
                     ].join("\n"));
                     return;
                 }
 
                 if (parsed.ast.type === "library-lock") {
-                    const locked = lockLibraries(workspaceRoot);
+                    const locked = lockChoirLibraries(workspaceRoot);
                     const lines = Object.entries(locked.libraries)
                         .sort(([left], [right]) => left.localeCompare(right))
-                        .map(([library, version]) => `- ${library}: ${version}`);
+                        .map(([library, entry]) => `- ${library}: ${entry.version} (${entry.selector}, ${entry.integrityHash})`);
 
                     stream.markdown([
                         "Library lock refreshed.",
@@ -1167,7 +1171,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (parsed.ast.type === "library-list") {
-                    const catalog = listMacroLibraryCatalog(workspaceRoot);
+                    const catalog = listLibraryCatalog(workspaceRoot);
                     const lock = readMacroLock(workspaceRoot);
 
                     if (catalog.length === 0) {
@@ -1176,11 +1180,13 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     }
 
                     const lines = catalog.map((entry) => {
-                        const locked = lock.libraries[entry.name];
+                        const locked = lock.libraries[entry.id];
                         const versionList = entry.versions.join(", ");
+                        const selectorList = entry.selectors.join(", ");
+                        const capabilityCount = entry.capabilities.length;
                         return locked
-                            ? `- ${entry.name}: [${versionList}] (locked=${locked})`
-                            : `- ${entry.name}: [${versionList}]`;
+                            ? `- ${entry.id}: versions=[${versionList}] selectors=[${selectorList}] capabilities=${capabilityCount} compatibility=${entry.compatibility} (locked=${locked})`
+                            : `- ${entry.id}: versions=[${versionList}] selectors=[${selectorList}] capabilities=${capabilityCount} compatibility=${entry.compatibility}`;
                     });
 
                     stream.markdown([
@@ -2175,6 +2181,17 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         "```bnf",
                         CHOIR_DSL_GRAMMAR,
                         "```",
+                    ].join("\n"));
+                    return;
+                }
+
+                const libraryFailure = parseLibraryFailure(error);
+                if (libraryFailure) {
+                    stream.markdown([
+                        "library:",
+                        `  status: ${libraryFailure.status}`,
+                        `  stage: ${libraryFailure.stage}`,
+                        `  message: ${libraryFailure.message}`,
                     ].join("\n"));
                     return;
                 }

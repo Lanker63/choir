@@ -79,6 +79,10 @@ export type GraphSnapshot = {
       selected?: boolean;
     }>;
   };
+  capabilityGraph?: {
+    libraries: string[];
+    dependencies: string[];
+  };
   hotspots: GraphHotspot[];
   trace: GraphTrace;
 };
@@ -622,6 +626,46 @@ function resolveFocusNodeId(graph: UIGraph, focusNodeId: string | undefined): st
   return matched?.id;
 }
 
+function readCapabilityGraph(root: string): {
+  libraries: Array<{ id: string; version: string; selector: string }>;
+  dependencies: Array<{ from: string; to: string }>;
+} {
+  const filePath = path.join(root, ".choir", "capability-graph.json");
+  if (!fs.existsSync(filePath)) {
+    return {
+      libraries: [],
+      dependencies: [],
+    };
+  }
+
+  const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as {
+    libraries?: Array<{ id?: string; version?: string; selector?: string }>;
+    dependencies?: Array<{ from?: string; to?: string; type?: string }>;
+  };
+
+  const libraries = (parsed.libraries ?? [])
+    .filter((entry) => typeof entry.id === "string" && typeof entry.version === "string" && typeof entry.selector === "string")
+    .map((entry) => ({
+      id: entry.id as string,
+      version: entry.version as string,
+      selector: entry.selector as string,
+    }))
+    .sort((left, right) => left.id.localeCompare(right.id));
+
+  const dependencies = (parsed.dependencies ?? [])
+    .filter((entry) => entry.type === "depends-on" && typeof entry.from === "string" && typeof entry.to === "string")
+    .map((entry) => ({
+      from: entry.from as string,
+      to: entry.to as string,
+    }))
+    .sort((left, right) => left.from.localeCompare(right.from) || left.to.localeCompare(right.to));
+
+  return {
+    libraries,
+    dependencies,
+  };
+}
+
 export function buildGraphSnapshot(input: {
   root: string;
   control: ControlPlane;
@@ -654,10 +698,34 @@ export function buildGraphSnapshot(input: {
   };
 
   const overlay = resolvePlanOverlay(input.root, input.control, input.state, unitIndex);
+  const capabilityGraph = readCapabilityGraph(input.root);
+
+  const capabilityNodes = capabilityGraph.libraries.map((entry) => ({
+    id: `lib:${entry.id}`,
+    label: `${entry.id}@${entry.version}`,
+    type: "library",
+    metadata: {
+      selector: entry.selector,
+      origin: "capability-library",
+    },
+  }));
+
+  const capabilityEdges = capabilityGraph.dependencies.map((entry) => ({
+    id: `edge:lib:${entry.from}->lib:${entry.to}`,
+    source: `lib:${entry.from}`,
+    target: `lib:${entry.to}`,
+    label: "library-depends-on",
+  }));
+
+  const mergedGraph: UIGraph = {
+    nodes: [...enrichedGraph.nodes, ...capabilityNodes].sort((left, right) => left.id.localeCompare(right.id)),
+    edges: [...enrichedGraph.edges, ...capabilityEdges].sort((left, right) => left.id.localeCompare(right.id)),
+  };
+
   const overlaySet = nodeSetsFromOverlay(input.root, input.control, input.state, unitIndex, overlay);
   const violationNodeIds = resolveViolationNodeIds(input.root, input.state, unitIndex);
-  const resolvedFocusNodeId = resolveFocusNodeId(enrichedGraph, input.focusNodeId);
-  const projectedGraph = projectGraphMode(enrichedGraph, input.mode, resolvedFocusNodeId);
+  const resolvedFocusNodeId = resolveFocusNodeId(mergedGraph, input.focusNodeId);
+  const projectedGraph = projectGraphMode(mergedGraph, input.mode, resolvedFocusNodeId);
   const projectedNodeIds = new Set(projectedGraph.nodes.map((node) => node.id));
 
   const changedNodeIds = overlaySet.changedNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
@@ -696,6 +764,14 @@ export function buildGraphSnapshot(input: {
             ...(typeof candidate.rank === "number" ? { rank: candidate.rank } : {}),
             ...(candidate.selected === true ? { selected: true } : {}),
           })),
+        },
+      }
+      : {}),
+    ...(capabilityGraph.libraries.length > 0
+      ? {
+        capabilityGraph: {
+          libraries: capabilityGraph.libraries.map((entry) => `${entry.id}@${entry.version} (${entry.selector})`),
+          dependencies: capabilityGraph.dependencies.map((entry) => `${entry.from} -> ${entry.to}`),
         },
       }
       : {}),

@@ -167,6 +167,7 @@ const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"])
 
 export const ControlPlaneSchema = z.object({
     version: z.string().min(1),
+    registries: z.array(z.string().min(1)).optional(),
     mission: z.string().default(""),
     vision: z.string().default(""),
     intent: z.object({

@@ -551,6 +551,14 @@ function renderMacroLibraryView(): string {
     ? snapshot.macroUI.macros.map((macro) => `<li class="mono">${escapeHtml(macro)}</li>`).join("")
     : "<li>No macros discovered.</li>";
 
+  const lockedVersions = (snapshot.macroUI.lockedVersions ?? []).length > 0
+    ? (snapshot.macroUI.lockedVersions ?? []).map((entry) => `<li class="mono">${escapeHtml(entry)}</li>`).join("")
+    : "<li>No lock entries.</li>";
+
+  const transitiveDependencies = (snapshot.macroUI.transitiveDependencies ?? []).length > 0
+    ? (snapshot.macroUI.transitiveDependencies ?? []).map((entry) => `<li class="mono">${escapeHtml(entry)}</li>`).join("")
+    : "<li>No dependency edges recorded.</li>";
+
   const abstractions = snapshot.macroUI.abstractions.length > 0
     ? snapshot.macroUI.abstractions.map((abstraction) => `<li class="mono">${escapeHtml(abstraction)}</li>`).join("")
     : "<li>No abstractions discovered.</li>";
@@ -566,8 +574,16 @@ function renderMacroLibraryView(): string {
         <ul class="list">${macros}</ul>
       </article>
       <article class="card">
+        <div class="muted">Locked Versions</div>
+        <ul class="list">${lockedVersions}</ul>
+      </article>
+      <article class="card">
         <div class="muted">Abstractions</div>
         <ul class="list">${abstractions}</ul>
+      </article>
+      <article class="card full">
+        <div class="muted">Transitive Dependencies</div>
+        <ul class="list">${transitiveDependencies}</ul>
       </article>
       <article class="card full">
         <label for="macroCommandInput">Macro/Abstraction Command</label>

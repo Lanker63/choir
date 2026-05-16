@@ -13,6 +13,7 @@ import { formatPolicyVerificationReport, runPolicyVerification } from "./tests/v
 import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./tests/verification/core/orchestrationVerification.js";
 import { formatProductionVerificationReport, runProductionVerification } from "./tests/verification/core/productionVerification.js";
 import { formatFullSystemVerificationReport, runFullSystemVerification } from "./tests/verification/core/fullSystemVerification.js";
+import { formatLibraryVerificationReport, runLibraryVerification } from "./tests/verification/core/libraryVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
 import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./tests/verification/core/propertyChaosHarness.js";
 import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
@@ -32,6 +33,7 @@ function usage(): string {
     "  choir verify --policy",
     "  choir verify --orchestration",
     "  choir verify --production",
+    "  choir verify --libraries",
     "  choir verify --compiler",
     "  choir verify --full",
     "  choir verify --property [--seed <n>]",
@@ -155,6 +157,13 @@ async function main(): Promise<void> {
       if (remaining.length === 1 && remaining[0] === "--production") {
         const report = await runProductionVerification();
         console.log(formatProductionVerificationReport(report));
+        process.exitCode = report.passed ? 0 : 1;
+        return;
+      }
+
+      if (remaining.length === 1 && remaining[0] === "--libraries") {
+        const report = await runLibraryVerification();
+        console.log(formatLibraryVerificationReport(report));
         process.exitCode = report.passed ? 0 : 1;
         return;
       }

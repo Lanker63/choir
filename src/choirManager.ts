@@ -234,6 +234,7 @@ export function updateControlPlane(updater: (current: ControlPlane) => ControlPl
 export function createDefaultControlPlane(): ControlPlane {
     return {
         version: CONTROL_PLANE_VERSION,
+        registries: ["local", "org"],
         mission: "",
         vision: "",
         intent: {

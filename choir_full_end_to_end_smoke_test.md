@@ -2,6 +2,8 @@
 
 Validates all functional capabilities through a manual, step-by-step QA/QC procedure. Steps are grouped by what is being tested. Each numbered step describes the action to perform; sub-items describe what to validate as a result.
 
+Scope assumption: this manual smoke test is executed in a target repository using the Choir extension runtime surfaces (chat/UI), not in the Choir extension source repository.
+
 ---
 
 ## Preconditions
@@ -195,6 +197,50 @@ Topic setup for deterministic lineage:
 
 ---
 
+## Topic 8: Library Registry, Import, Install, Update, and Lock
+
+1. Ensure `.choir/choir.config.yaml` includes deterministic registry sources:
+
+   - `registries: [local, org]` (or equivalent explicit list).
+
+2. In chat, run `@choir library list`.
+
+   - Confirm output is deterministically ordered by library id.
+   - Confirm each entry includes versions, selectors, and capability metadata.
+
+3. In chat, run `@choir import org.auth-patterns@stable`.
+
+   - Confirm response includes `library`, `selector`, `resolvedVersion`, and `status: success`.
+   - Confirm no runtime exception occurs.
+
+4. In chat, run `@choir library install org.auth-patterns@stable`.
+
+   - Confirm `.choir/libraries/org.auth-patterns/manifest.yaml` exists.
+   - Confirm `choir.lock` is updated with deterministic selector/version/hash fields.
+
+5. In chat, run `@choir library update org.auth-patterns`.
+
+   - Confirm update is deterministic and does not silently cross incompatible boundaries.
+   - Confirm lock entry is updated predictably.
+
+6. In chat, run `@choir library lock`.
+
+   - Confirm `choir.lock` is rewritten in stable order.
+   - Confirm `.choir/capability-graph.json` exists and contains dependency edges.
+
+7. Run `npm run verify:libraries`.
+
+   - Confirm all checks pass:
+     - deterministic library resolution
+     - deterministic selector resolution
+     - lock replay stability
+     - capability graph deterministic
+     - policy inheritance correct
+     - updates replay-safe
+     - integrity validation enforced
+
+---
+
 ## Topic 6: Graph, Timeline, Diagnostics, and Webview Surfaces
 
 1. Open the Command Palette and run **Choir: Open Control Center**.
@@ -323,25 +369,83 @@ Topic setup for deterministic lineage:
 
 ## Topic 9: Library and Import Commands
 
-1. Run `@choir library list`.
+1. Prepare deterministic registry fixtures before running commands.
+
+   - Ensure `.choir/choir.config.yaml` includes explicit registries:
+     - `registries: [local, org]` (or equivalent explicit deterministic ordering).
+   - Create at least one library fixture under `.choir/registry/local/<library>/<version>/manifest.yaml`.
+   - Include selector-tagged versions for the same library (for example `stable` and `latest`).
+   - Include capabilities for at least: macro, strategy, template.
+   - Include a second library that depends on the first via `dependencies`.
+
+2. Run `@choir library list`.
 
    - Confirm the command returns a result without error.
+   - Confirm output ordering is deterministic (repeat command twice; ordering must be identical).
+   - Confirm each entry exposes: id, versions, selectors, capability metadata, compatibility.
 
-2. Run `@choir import <lib>@<selector>` using a prepared library reference.
+3. Run `@choir import <lib>@<selector>` using a selector-backed fixture (for example `stable`).
 
-   - Confirm the command completes without a runtime exception.
+   - Confirm the command completes without runtime exception.
+   - Confirm import response reports: library, selector, resolvedVersion, status.
+   - Confirm import attaches lock/import metadata but does not require full materialization.
+   - Confirm `choir.lock` contains the imported library with selector, version, and integrity hash.
 
-3. Run `@choir library install <lib>@<selector>`.
+4. Run `@choir library install <lib>@<selector>` for the same library.
 
-   - Confirm the install result is reported.
+   - Confirm install result is reported with resolved version.
+   - Confirm materialization exists under `.choir/libraries/<lib>/manifest.yaml`.
+   - Confirm capability sub-assets exist (`macros`, `policies`, `templates`, `strategies` as applicable).
+   - Confirm unrelated libraries are not mutated.
 
-4. Run `@choir library update <identifier>`.
+5. Run `@choir library update <identifier>`.
 
    - Confirm the update result is reported.
+   - Confirm update behavior is deterministic across repeated runs with unchanged registry state.
+   - Confirm updates do not silently cross incompatible major boundaries.
+   - Confirm updated version and integrity hash are reflected in `choir.lock`.
 
-5. Run `@choir library lock`.
+6. Run `@choir library lock`.
 
-   - Confirm lock behavior and any lock artifacts are reported.
+   - Confirm `choir.lock` is generated/normalized deterministically (stable key ordering).
+   - Confirm lock entries include `version`, `selector`, `integrityHash`, `source`, `installed`.
+   - Confirm `.choir/capability-graph.json` is created/updated.
+   - Confirm capability graph contains expected transitive dependency edges.
+
+7. Validate replay and integrity safety using the same locked state.
+
+   - Re-run `@choir library list`, `@choir import <lib>@<selector>`, and `@choir library lock` with unchanged inputs.
+   - Confirm same selector resolves to same version and same integrity hash.
+   - Confirm lock and graph artifacts remain stable across reruns.
+
+8. Validate fail-closed behavior for integrity mismatch.
+
+    - Establish a baseline first:
+       - Run `@choir import <lib>@<selector>` and `@choir library lock`.
+       - Record the current `integrityHash` for that library in `choir.lock`.
+    - Tamper one installed or registry manifest field (for example macro body text) without editing `choir.lock`.
+    - Trigger validation with `@choir library lock`.
+    - Confirm command is blocked (no silent fallback, no hidden version substitution).
+    - Confirm failure output reports a replay/integrity stage (for example `replay-validation` or `integrity-validation`).
+    - Implementation note for this smoke test:
+       - `@choir import <lib>@<selector>` may refresh that library's lock hash before replay validation and can succeed after tamper.
+       - Use `@choir library lock` as the authoritative fail-closed integrity trigger for Topic 9.8.
+
+9. Complete a final target-repo consistency pass (no source-repo scripts required).
+
+    - Re-run the same command sequence used in this topic:
+       - `@choir library list`
+       - `@choir import <lib>@<selector>`
+       - `@choir library install <lib>@<selector>`
+       - `@choir library update <identifier>`
+       - `@choir library lock`
+    - Confirm behavior remains deterministic with unchanged fixtures:
+       - same selector resolves to same version
+       - `choir.lock` remains stable except where updates are expected
+       - `.choir/capability-graph.json` remains stable for unchanged dependency inputs
+    - Confirm failure-path behavior is fail-closed:
+       - tamper detection blocks `@choir library lock` with replay/integrity stage reporting
+       - no silent fallback and no hidden version substitution
 
 ---
 

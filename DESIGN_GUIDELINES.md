@@ -146,6 +146,21 @@ Hard constraints:
 - require-approval binds to exact diff hash
 - duplicate policy ids across layers are invalid
 
+Imported libraries must participate in policy evaluation order (`org -> repo -> workspace -> library`) and may not bypass deny precedence.
+
+## Library Distribution Contract
+
+- registries are deterministic and explicit via control-plane `registries` configuration
+- import/install resolution must be deterministic for semantic and named selectors
+- `import` attaches capability metadata and lock state without requiring full materialization
+- `install` materializes capability bundles under `.choir/libraries/<id>/`
+- `update` is deterministic and compatibility-safe (no silent major drift)
+- `lock` writes authoritative dependency state to `choir.lock`
+- lock entries require integrity hash and selector provenance
+- capability graph must be auditable and persisted (`.choir/capability-graph.json`)
+- replay safety requires same lock, same library graph, same integrity hashes
+- integrity mismatch blocks orchestration fail-closed
+
 ## Execution Contract
 
 Execution primitive:

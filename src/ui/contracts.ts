@@ -91,6 +91,8 @@ export type AuditView = {
 
 export type MacroUI = {
   libraries: string[];
+  lockedVersions?: string[];
+  transitiveDependencies?: string[];
   macros: string[];
   abstractions: string[];
 };

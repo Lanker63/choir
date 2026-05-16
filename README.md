@@ -29,6 +29,9 @@ Minimal config:
 
 ```yaml
 version: "1.0.0"
+registries:
+  - local
+  - org
 mission: ""
 vision: ""
 intent:
@@ -114,6 +117,10 @@ Additional commands:
 - Libraries:
   - choir import <lib>@<selector>
   - choir library list|install|update|lock
+  - `@choir import` resolves and attaches capabilities into workspace scope without mandatory local materialization
+  - `@choir library install` materializes capability artifacts under `.choir/libraries/<library>/`
+  - `@choir library lock` writes deterministic lock state to `choir.lock`
+  - selectors support semantic selectors (`1.2.3`, `1.2.x`, `1.x`) and named selectors (`stable`, `latest`, custom tags)
 - CI:
   - choir ci run
 - Verification:
@@ -124,6 +131,45 @@ Additional commands:
   - npm run verify:simulation
   - npm run verify:execution
   - npm run verify:full
+  - npm run verify:libraries
+
+## Library Registry and Locking
+
+Choir libraries are deterministic capability bundles (macros, policies, strategies, templates).
+
+Registry sources are configured in `.choir/choir.config.yaml`:
+
+```yaml
+registries:
+  - local
+  - org
+```
+
+Supported registry roots:
+
+- `local` -> `.choir/registry/local`
+- `org` -> `.choir/registry/org`
+- `file:<path>` or relative/absolute custom paths for future remote/file-backed registries
+
+Deterministic lock output is written to `choir.lock`:
+
+```yaml
+libraries:
+  org.auth-patterns:
+    version: 2.1.4
+    selector: stable
+    integrityHash: sha256:...
+    source: local
+    installed: true
+```
+
+Hard runtime guarantees for libraries:
+
+- deterministic registry and selector resolution
+- policy-aware import/install (fail-closed on deny)
+- integrity-hash enforcement for replay safety
+- capability graph persistence at `.choir/capability-graph.json`
+- replay verification fails closed on lock/hash drift
 
 ## DSL Grammar (Compact)
 
@@ -160,7 +206,7 @@ Additional commands:
 <macro> ::= "macro" "list" | "macro" "show" <identifier> | "macro" <identifier> [<args>]
 
 <library-spec> ::= <identifier> "@" <version-selector>
-<version-selector> ::= MAJOR "." MINOR "." PATCH | MAJOR "." MINOR "." "x" | MAJOR "." "x"
+<version-selector> ::= MAJOR "." MINOR "." PATCH | MAJOR "." MINOR "." "x" | MAJOR "." "x" | <identifier>
 <args> ::= <key-value> ("," <key-value>)*
 <key-value> ::= <identifier> "=" <string>
 <execute-strategy> ::= "all-at-once" | "canary" | "phased" | "batched"

@@ -177,7 +177,7 @@ export const CHOIR_REFACTOR_FILE_FLAG = "--file" as const;
 export const CHOIR_EXPORT_FORMAT_KEYWORD = "dsl" as const;
 export const CHOIR_POLICY_STATUS_KEYWORD = "status" as const;
 export const CHOIR_LIBRARY_AT_SYMBOL = "@" as const;
-export const CHOIR_VERSION_SELECTOR_PATTERN = /^(?:\d+\.\d+\.\d+|\d+\.\d+\.x|\d+\.x)$/;
+export const CHOIR_VERSION_SELECTOR_PATTERN = /^(?:\d+\.\d+\.\d+|\d+\.\d+\.x|\d+\.x|[a-zA-Z0-9._-]+)$/;
 
 const KEYWORDS = new Set<string>([
   CHOIR_ROOT_KEYWORD,
@@ -1293,7 +1293,7 @@ class Parser {
     const versionSelector = this.expectIdentifierLike();
 
     if (!CHOIR_VERSION_SELECTOR_PATTERN.test(versionSelector)) {
-      throw new Error(`Invalid library version selector: ${versionSelector}`);
+      throw new Error(`Invalid library selector: ${versionSelector}`);
     }
 
     return {

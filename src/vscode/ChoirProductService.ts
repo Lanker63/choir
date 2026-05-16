@@ -29,10 +29,13 @@ import {
   rejectDiff,
 } from "../core/dslYamlCompiler.js";
 import {
+  importLibrary,
   installLibrary,
-  listMacroLibraryCatalog,
+  listLibraryCatalog,
   loadMacroLibrary,
-  lockLibraries,
+  lockChoirLibraries,
+  parseLibraryFailure,
+  readLibraryLock,
   readMacroLock,
   updateLibrary,
 } from "../core/macroLibraries.js";
@@ -143,6 +146,10 @@ function parseEnvironment(value: string | undefined): "local" | "ci" | "staging"
   }
 
   return undefined;
+}
+
+function capabilityGraphFile(root: string): string {
+  return path.join(root, ".choir", "capability-graph.json");
 }
 
 function toPlanView(plan: { id: string; tasks: Array<{ title: string; scope?: { files?: string[] } }> }): PlanView {
@@ -425,8 +432,9 @@ export class ChoirProductService {
   }
 
   private buildMacroUI(root: string): MacroUI {
-    const catalog = listMacroLibraryCatalog(root);
+    const catalog = listLibraryCatalog(root);
     const lock = readMacroLock(root);
+    const choirLock = readLibraryLock(root);
 
     const libraryMacros = Object.entries(lock.libraries)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -436,9 +444,24 @@ export class ChoirProductService {
       });
 
     const localMacros = listMacros(root).map((macro) => `local.${macro.id}`);
+    const lockedVersions = Object.entries(choirLock.libraries)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([library, entry]) => `${library}@${entry.version}`);
+
+    const graphPath = capabilityGraphFile(root);
+    const transitiveDependencies = fs.existsSync(graphPath)
+      ? (() => {
+        const parsed = JSON.parse(fs.readFileSync(graphPath, "utf-8")) as { dependencies?: Array<{ from: string; to: string; type: string }> };
+        return sortedUnique((parsed.dependencies ?? [])
+          .filter((edge) => edge.type === "depends-on")
+          .map((edge) => `${edge.from} -> ${edge.to}`));
+      })()
+      : [];
 
     return {
-      libraries: sortedUnique(catalog.map((entry) => entry.name)),
+      libraries: sortedUnique(catalog.map((entry) => entry.id)),
+      ...(lockedVersions.length > 0 ? { lockedVersions } : {}),
+      ...(transitiveDependencies.length > 0 ? { transitiveDependencies } : {}),
       macros: sortedUnique([...libraryMacros, ...localMacros]),
       abstractions: sortedUnique(listAbstractions(root).map((entry) => entry.id)),
     };
@@ -852,7 +875,7 @@ export class ChoirProductService {
     }
 
     if (parsed.ast.type === "library-list") {
-      const libraries = listMacroLibraryCatalog(root);
+      const libraries = listLibraryCatalog(root);
       const freshControl = readControlPlane() ?? control;
       return {
         message: `Found ${libraries.length} libraries.`,
@@ -860,7 +883,17 @@ export class ChoirProductService {
       };
     }
 
-    if (parsed.ast.type === "library-install" || parsed.ast.type === "import-library") {
+    if (parsed.ast.type === "import-library") {
+      const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
+      const imported = importLibrary(root, spec);
+      const freshControl = readControlPlane() ?? control;
+      return {
+        message: `Library ${imported.library} imported at selector ${imported.selector} (${imported.resolvedVersion}).`,
+        trace: this.createTrace("library.import", dsl, controlPlaneToChoirConfig(freshControl)),
+      };
+    }
+
+    if (parsed.ast.type === "library-install") {
       const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
       const installed = installLibrary(root, spec);
       const freshControl = readControlPlane() ?? control;
@@ -880,7 +913,7 @@ export class ChoirProductService {
     }
 
     if (parsed.ast.type === "library-lock") {
-      const locked = lockLibraries(root);
+      const locked = lockChoirLibraries(root);
       const freshControl = readControlPlane() ?? control;
       return {
         message: `Library lock refreshed (${Object.keys(locked.libraries).length} entries).`,
@@ -1168,6 +1201,16 @@ export class ChoirProductService {
         snapshot: await this.buildSnapshotOrFallback(role),
       };
     } catch (error) {
+      const libraryFailure = parseLibraryFailure(error);
+      if (libraryFailure) {
+        return {
+          ok: false,
+          message: `Library command failed at ${libraryFailure.stage}.`,
+          error: toUIError(libraryFailure.message),
+          snapshot: await this.buildSnapshotOrFallback(role, undefined, libraryFailure.message),
+        };
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       return {
         ok: false,
