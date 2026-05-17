@@ -75,7 +75,7 @@ jobs:
       - name: Run Choir CI pipeline
         run: |
           cd test-fixtures/simple-project
-          npm --prefix ../../packages/choir-cli exec -- choir ci run
+          node ../../out/cli.js ci run
 
   choir-nightly:
     if: github.event_name == 'schedule'
