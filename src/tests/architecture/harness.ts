@@ -361,7 +361,7 @@ export function searchCodebase(query: string | RegExp): string[] {
 }
 
 export function simulateRuleEditorValidation(): { source: "pipeline" | "unknown" } {
-  const providerPath = path.join(repoRoot, "src", "vscode", "RuleEditorProvider.ts");
+  const providerPath = path.join(repoRoot, "src", "vscode", "ruleEditorProvider.ts");
   const code = fs.readFileSync(providerPath, "utf-8");
 
   if (code.includes("runPipelineForWorkspace")) {
