@@ -15,6 +15,24 @@ It compiles intent and policy into executable checks, plans and previews changes
 - Install from Marketplace: Choir
 - Or install a .vsix from Extensions > Install from VSIX...
 
+Extension install does not add a global `choir` executable to your shell `PATH`.
+
+## CLI Usage
+
+- From this source repo: `npm run build:extension && node out/cli.js <args>`
+- For target repos, use the standalone CLI package installation flow. Do not assume VS Code extension installation exposes `choir` on `PATH`.
+
+Standalone CLI install and publish path:
+
+- Install globally: `npm install -g choir-cli`
+- One-off run: `npx choir-cli verify --quick`
+- Build publishable CLI package from source repo: `npm run build:cli:package`
+- Pack locally for validation: `npm run pack:cli`
+- Publish package: `npm run publish:cli`
+- CI behavior:
+  - PRs run `npm pack --dry-run ./packages/choir-cli` as a publishability check
+  - Tag pushes publish `choir-cli` to npm via `.github/workflows/choir-cli-publish.yml`
+
 ## Quick Start
 
 1. Initialize:

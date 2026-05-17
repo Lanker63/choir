@@ -1,0 +1,29 @@
+{
+  "name": "choir-cli",
+  "version": "0.0.1",
+  "description": "Choir command-line interface",
+  "type": "module",
+  "bin": {
+    "choir": "./dist/out/cli.js"
+  },
+  "files": [
+    "dist/out",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "prepare:dist": "node ./scripts/prepare-dist.mjs",
+    "prepack": "npm run prepare:dist"
+  },
+  "dependencies": {
+    "d3": "^7.9.0",
+    "glob": "^13.0.6",
+    "monaco-editor": "^0.53.0",
+    "monaco-yaml": "^5.4.1",
+    "ts-morph": "^28.0.0",
+    "yaml": "^2.8.4",
+    "zod": "^4.4.2"
+  }
+}

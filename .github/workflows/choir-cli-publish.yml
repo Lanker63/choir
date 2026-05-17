@@ -1,0 +1,66 @@
+name: Choir CLI Publish
+
+on:
+  pull_request:
+    paths:
+      - "packages/choir-cli/**"
+      - "src/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/choir-cli-publish.yml"
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+jobs:
+  choir-cli-pack-dry-run:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build CLI package artifacts
+        run: npm run build:cli:package
+
+      - name: Validate CLI npm pack (dry run)
+        run: npm pack --dry-run ./packages/choir-cli
+
+  choir-cli-publish:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build CLI package artifacts
+        run: npm run build:cli:package
+
+      - name: Publish choir-cli to npm
+        run: npm publish ./packages/choir-cli --access restricted
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

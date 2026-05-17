@@ -2359,17 +2359,38 @@ const pass2: TestPass = {
       id: "2.32",
       name: "macro expansion is deterministic with parameter defaults",
       run: async () => {
-        const macro = getMacro(repoRoot, "enforce-service-boundaries");
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-defaults-"));
+        fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
+          "macros:",
+          "  - id: enforce-service-boundaries",
+          "    version: 1.0.0",
+          "    parameters:",
+          "      - name: entity",
+          "        required: false",
+          "        default: service",
+          "    body:",
+          "      - choir define goal \"enforce clean {{entity}} boundaries\"",
+          "      - choir define constraint \"no direct db access\"",
+          "      - choir plan",
+          "",
+        ].join("\n"), "utf-8");
 
-        const first = expandMacro(macro, {});
-        const second = expandMacro(macro, {});
+        try {
+          const macro = getMacro(root, "enforce-service-boundaries");
 
-        assert.deepStrictEqual(first, second);
-        assert.deepStrictEqual(first, [
-          'choir define goal "enforce clean service boundaries"',
-          'choir define constraint "no direct db access"',
-          "choir plan",
-        ]);
+          const first = expandMacro(macro, {});
+          const second = expandMacro(macro, {});
+
+          assert.deepStrictEqual(first, second);
+          assert.deepStrictEqual(first, [
+            'choir define goal "enforce clean service boundaries"',
+            'choir define constraint "no direct db access"',
+            "choir plan",
+          ]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       },
     },
     {
@@ -8394,6 +8415,33 @@ const finalPass: TestPass = {
           [],
           `runtime source imports from /tests are forbidden: ${forbiddenImports.join(", ")}`
         );
+      },
+    },
+    {
+      id: "X.7",
+      name: "extension manifest does not expose npm bin path mapping",
+      run: async () => {
+        const packagePath = path.join(repoRoot, "package.json");
+        const parsed = JSON.parse(fs.readFileSync(packagePath, "utf-8")) as { bin?: unknown };
+        assert.strictEqual(parsed.bin, undefined, "package.json must not declare a bin entry in extension manifest");
+      },
+    },
+    {
+      id: "X.8",
+      name: "standalone choir-cli package declares deterministic bin and prepack flow",
+      run: async () => {
+        const cliPackagePath = path.join(repoRoot, "packages", "choir-cli", "package.json");
+        assert.strictEqual(fs.existsSync(cliPackagePath), true, "packages/choir-cli/package.json must exist");
+
+        const parsed = JSON.parse(fs.readFileSync(cliPackagePath, "utf-8")) as {
+          name?: unknown;
+          bin?: Record<string, unknown>;
+          scripts?: Record<string, unknown>;
+        };
+
+        assert.strictEqual(parsed.name, "choir-cli");
+        assert.deepStrictEqual(parsed.bin, { choir: "./dist/out/cli.js" });
+        assert.strictEqual(parsed.scripts?.prepack, "npm run prepare:dist");
       },
     },
   ],
