@@ -1,4 +1,4 @@
 node_modules/
 out/
 .tmp-*
-.choir/audit.log.jsonl
+/.choir/
