@@ -54,18 +54,8 @@ import { persistSelectedOptimizedPlan } from "./core/planPersistence.js";
 import { formatAnalyzeMarkdown } from "./core/analyzeOutput.js";
 import { resolveRollbackStageSelection, resolveRollbackUnitSelection } from "./core/rollbackSelectors.js";
 import { runRefactorIntent } from "./core/refactorEngine.js";
-import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
-import { formatCompilerVerificationReport, runCompilerVerification } from "./tests/verification/core/compilerVerification.js";
-import { formatDeterminismVerificationReport, runDeterminismVerification } from "./tests/verification/core/determinismVerification.js";
-import { formatTransactionVerificationReport, runTransactionVerification } from "./tests/verification/core/transactionVerification.js";
-import { formatStateVerificationReport, runStateVerification } from "./tests/verification/core/stateVerification.js";
-import { formatPolicyVerificationReport, runPolicyVerification } from "./tests/verification/core/policyVerification.js";
-import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./tests/verification/core/orchestrationVerification.js";
-import { formatProductionVerificationReport, runProductionVerification } from "./tests/verification/core/productionVerification.js";
-import { formatFullSystemVerificationReport, runFullSystemVerification } from "./tests/verification/core/fullSystemVerification.js";
+import { formatRuntimeVerificationReport, runRuntimeVerification } from "./core/runtimeVerification.js";
 import { CompilerPipelineError, compileInput, formatCompilerErrors } from "./core/compilerPipeline.js";
-import { formatChaosTestReport, runChaosTest, runPropertyTest } from "./tests/verification/core/propertyChaosHarness.js";
-import { formatContractVerificationReport, runContractVerification } from "./tests/verification/core/contractVerification.js";
 import {
     formatDSL,
     generateDSL,
@@ -77,6 +67,7 @@ import {
     parseExportChatCommand,
     parseGraphChatCommand,
     parseGoalMutationChatCommand,
+    parseCliInstallChatCommand,
     parseInitChatCommand,
     normalizeChatDSLInput,
     parsePanelChatCommand,
@@ -102,6 +93,11 @@ import {
     renderReview,
     saveInitSession,
 } from "./core/initWizard.js";
+import {
+    buildCliInstallCommand,
+    normalizeCliPackageSpec,
+    validateCliPackageSpec,
+} from "./core/cliInstall.js";
 import { Plan, Task } from "./schema.js";
 import {
     createEmptyStatePlane,
@@ -354,6 +350,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir verify --production",
         "- @choir verify --compiler",
         "- @choir verify --full",
+        "- @choir cli install",
         "- @choir export --format json",
         "- @choir control",
         "- @choir timeline",
@@ -401,6 +398,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const graphChatCommand = parseGraphChatCommand(raw);
             const panelChatCommand = parsePanelChatCommand(raw);
             const verifyChatCommand = parseVerifyChatCommand(raw);
+            const cliInstallChatCommand = parseCliInstallChatCommand(raw);
             const exportChatCommand = parseExportChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
@@ -742,103 +740,89 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 const workspaceRoot = getWorkspaceRoot() ?? undefined;
 
                 try {
-                    if (verifyChatCommand.mode === "property") {
-                        const report = await runPropertyTest(16, {
-                            throwOnFailure: false,
-                        });
-                        stream.markdown(formatChaosTestReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "chaos") {
-                        const report = await runChaosTest(verifyChatCommand.chaosMode ?? "moderate", 10, {
-                            throwOnFailure: false,
-                        });
-                        stream.markdown(formatChaosTestReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "contracts") {
-                        if (!workspaceRoot) {
-                            stream.markdown("No workspace folder found.");
-                            return;
-                        }
-
-                        const report = await runContractVerification({
-                            workspaceRoot,
-                            mode: "quick",
-                            throwOnFailure: false,
-                        });
-                        stream.markdown(formatContractVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "determinism") {
-                        const report = await runDeterminismVerification();
-                        stream.markdown(formatDeterminismVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "transactions") {
-                        const report = await runTransactionVerification();
-                        stream.markdown(formatTransactionVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "state") {
-                        const report = await runStateVerification();
-                        stream.markdown(formatStateVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "policy") {
-                        const report = await runPolicyVerification();
-                        stream.markdown(formatPolicyVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "orchestration") {
-                        const report = await runOrchestrationVerification();
-                        stream.markdown(formatOrchestrationVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "production") {
-                        const report = await runProductionVerification();
-                        stream.markdown(formatProductionVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "compiler") {
-                        const report = await runCompilerVerification();
-                        stream.markdown(formatCompilerVerificationReport(report));
-                        return;
-                    }
-
-                    if (verifyChatCommand.mode === "full-system") {
-                        const report = await runFullSystemVerification({
-                            mode: "full",
-                            workspaceRoot,
-                            throwOnFailure: false,
-                        });
-                        stream.markdown(formatFullSystemVerificationReport(report));
-                        return;
-                    }
-
-                    const report = await runFullVerification({
-                        workspaceRoot,
+                    const report = await runRuntimeVerification({
                         mode: verifyChatCommand.mode,
-                        throwOnFailure: false,
-                        detectFlakiness: true,
-                        parallelCaseExecution: false,
+                        workspaceRoot,
+                        chaosMode: verifyChatCommand.chaosMode,
                     });
-
-                    stream.markdown(formatVerificationReport(report));
+                    stream.markdown(formatRuntimeVerificationReport(report));
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);
                     stream.markdown(`Verification failed: ${message}`);
                 }
 
+                return;
+            }
+
+            if (cliInstallChatCommand) {
+                const scopeChoice = await vscode.window.showQuickPick([
+                    {
+                        label: "Install locally (recommended)",
+                        description: "npm install --save-dev <package-source>",
+                        scope: "local" as const,
+                    },
+                    {
+                        label: "Install globally",
+                        description: "npm install -g <package-source>",
+                        scope: "global" as const,
+                    },
+                    {
+                        label: "Cancel",
+                        description: "Do not run any install command",
+                        scope: "cancel" as const,
+                    },
+                ], {
+                    title: "Install Choir CLI",
+                    placeHolder: "Choose install scope",
+                    ignoreFocusOut: true,
+                });
+
+                if (!scopeChoice || scopeChoice.scope === "cancel") {
+                    stream.markdown("Choir CLI install cancelled.");
+                    return;
+                }
+
+                const packageInput = await vscode.window.showInputBox({
+                    title: "Choir CLI package source",
+                    prompt: "Enter explicit package source (for example @your-org/choir-cli or github:owner/repo#tag)",
+                    placeHolder: "@your-org/choir-cli",
+                    ignoreFocusOut: true,
+                });
+
+                if (typeof packageInput !== "string") {
+                    stream.markdown("Choir CLI install cancelled.");
+                    return;
+                }
+
+                const packageSpec = normalizeCliPackageSpec(packageInput);
+                const validation = validateCliPackageSpec(packageSpec);
+                if (!validation.ok) {
+                    stream.markdown(`Choir CLI install blocked: ${validation.reason}`);
+                    return;
+                }
+
+                const workspaceRoot = getWorkspaceRoot();
+                if (!workspaceRoot) {
+                    stream.markdown("No workspace folder found.");
+                    return;
+                }
+
+                const command = buildCliInstallCommand(scopeChoice.scope, packageSpec);
+
+                const terminal = vscode.window.createTerminal({
+                    name: "Choir CLI Install",
+                    cwd: workspaceRoot,
+                });
+                terminal.show(true);
+                terminal.sendText(command, true);
+
+                stream.markdown([
+                    "Choir CLI install command started in terminal.",
+                    `- scope: ${scopeChoice.scope}`,
+                    `- package: ${packageSpec}`,
+                    `- command: ${command}`,
+                    "- verify after install: choir --help",
+                ].join("\n"));
                 return;
             }
 

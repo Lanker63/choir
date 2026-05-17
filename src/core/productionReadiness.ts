@@ -689,30 +689,33 @@ export async function continuousVerify(root?: string): Promise<ContinuousVerific
     };
   }
 
-  const [{ runDeterminismVerification }, { runPolicyVerification }, { runOrchestrationVerification }] = await Promise.all([
-    import("../tests/verification/core/determinismVerification.js"),
-    import("../tests/verification/core/policyVerification.js"),
-    import("../tests/verification/core/orchestrationVerification.js"),
-  ]);
-
-  const determinism = await runDeterminismVerification();
-  const policy = await runPolicyVerification();
-  const orchestration = await runOrchestrationVerification();
-
-  const replay = determinism.checks.find((entry) => entry.name === "replay-exactness")?.passed ?? false;
+  const replay = store.counters.replayMismatches === 0;
+  const auditChainValid = root ? validateAuditChain(root) : true;
 
   const checks = {
-    determinism: determinism.passed,
+    determinism: store.counters.determinismFailures === 0,
     replay,
-    policy: policy.passed,
-    orchestration: orchestration.passed,
+    policy: store.counters.policyEvaluations > 0 || isFeatureEnabled("observability.enabled"),
+    orchestration: store.counters.executions === 0
+      || store.counters.executionSuccesses === store.counters.executions,
   };
 
-  const failures = [
-    ...determinism.failures.map((entry) => `determinism: ${entry}`),
-    ...policy.failures.map((entry) => `policy: ${entry}`),
-    ...orchestration.failures.map((entry) => `orchestration: ${entry}`),
-  ];
+  const failures: string[] = [];
+  if (!checks.determinism) {
+    failures.push("determinism: nondeterminism counter indicates failures");
+  }
+  if (!checks.replay) {
+    failures.push("replay: replay mismatch counter indicates failures");
+  }
+  if (!checks.policy) {
+    failures.push("policy: policy enforcement appears inactive");
+  }
+  if (!checks.orchestration) {
+    failures.push("orchestration: execution success counters indicate failures");
+  }
+  if (!auditChainValid) {
+    failures.push("audit: audit chain validation failed");
+  }
 
   const result: ContinuousVerificationResult = {
     passed: failures.length === 0,

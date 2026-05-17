@@ -28,6 +28,9 @@ Choir is deterministic, policy-driven workspace governance:
    - Not authoritative
 
 Hard rule: chat compiles into YAML; YAML remains source of truth.
+Hard rule: runtime source modules under `src/` must not import from `src/tests/`; test harnesses are built and executed separately.
+Chat-triggered environment actions (for example CLI install) must execute through explicit, user-visible terminal commands with clear scope selection and cancellation path.
+Chat-triggered CLI install must require an explicit package source and fail closed for ambiguous/default package names.
 
 Execute rollout mode must be behaviorally observable: `execute --strategy` must change reported execution stage grouping and expose rollout mode explicitly in runtime/chat output.
 Integrity lineage comparison must treat rollout mode as part of execution context; canonical-stage/DAG parity checks are only valid against rollout-compatible lineage artifacts.

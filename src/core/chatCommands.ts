@@ -20,6 +20,10 @@ export type PanelChatCommand = {
   target: "control" | "timeline";
 };
 
+export type CliInstallChatCommand = {
+  type: "cli-install";
+};
+
 export type VerifyChatCommand = {
   type: "verify";
   mode: "full" | "full-system" | "quick" | "property" | "chaos" | "contracts" | "determinism" | "transactions" | "state" | "policy" | "orchestration" | "production" | "compiler";
@@ -167,6 +171,17 @@ export function parsePanelChatCommand(input: string): PanelChatCommand | null {
 
   if (/^(?:@choir\s+)?timeline\s*$/i.test(normalized)) {
     return { target: "timeline" };
+  }
+
+  return null;
+}
+
+export function parseCliInstallChatCommand(input: string): CliInstallChatCommand | null {
+  const normalized = input.trim();
+  if (/^(?:@choir\s+)?cli\s+install\s*$/i.test(normalized)) {
+    return {
+      type: "cli-install",
+    };
   }
 
   return null;

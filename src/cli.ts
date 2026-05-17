@@ -4,19 +4,12 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import { formatCIRunResult, runCI } from "./core/ci.js";
-import { formatContractVerificationReport, runContractVerification } from "./tests/verification/core/contractVerification.js";
-import { formatCompilerVerificationReport, runCompilerVerification } from "./tests/verification/core/compilerVerification.js";
-import { formatDeterminismVerificationReport, runDeterminismVerification } from "./tests/verification/core/determinismVerification.js";
-import { formatTransactionVerificationReport, runTransactionVerification } from "./tests/verification/core/transactionVerification.js";
-import { formatStateVerificationReport, runStateVerification } from "./tests/verification/core/stateVerification.js";
-import { formatPolicyVerificationReport, runPolicyVerification } from "./tests/verification/core/policyVerification.js";
-import { formatOrchestrationVerificationReport, runOrchestrationVerification } from "./tests/verification/core/orchestrationVerification.js";
-import { formatProductionVerificationReport, runProductionVerification } from "./tests/verification/core/productionVerification.js";
-import { formatFullSystemVerificationReport, runFullSystemVerification } from "./tests/verification/core/fullSystemVerification.js";
-import { formatLibraryVerificationReport, runLibraryVerification } from "./tests/verification/core/libraryVerification.js";
 import { detectEnvironment } from "./core/policyEngine.js";
-import { ChaosMode, ciIterationLimit, formatChaosTestReport, runChaosTest, runPropertyTest, setSeed } from "./tests/verification/core/propertyChaosHarness.js";
-import { formatVerificationReport, runFullVerification } from "./tests/verification/core/verificationHarness.js";
+import {
+  formatRuntimeVerificationReport,
+  runRuntimeVerification,
+  type RuntimeVerificationMode,
+} from "./core/runtimeVerification.js";
 import { ControlPlaneSchema } from "./schema.js";
 
 function usage(): string {
@@ -82,127 +75,64 @@ async function main(): Promise<void> {
       const verifyArgs = args.slice(1);
       const parsed = parseSeedArg(verifyArgs);
       const remaining = parsed.remaining;
-      if (parsed.seed) {
-        setSeed(parsed.seed);
-      }
 
-      if (remaining.length === 0 || (remaining.length === 1 && remaining[0] === "--quick")) {
-        const report = await runFullVerification({
-          mode: remaining[0] === "--quick" ? "quick" : "full",
-          throwOnFailure: false,
-          detectFlakiness: true,
-          parallelCaseExecution: false,
-        });
-        console.log(formatVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
+      let mode: RuntimeVerificationMode | null = null;
+      let chaosMode: "none" | "light" | "moderate" | "extreme" | undefined;
 
-      if (remaining.length === 1 && remaining[0] === "--property") {
-        const report = await runPropertyTest(ciIterationLimit(60, 16), {
-          seed: parsed.seed,
-          throwOnFailure: false,
-        });
-        console.log(formatChaosTestReport(report));
-        process.exitCode = report.failures === 0 ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--contracts") {
-        const report = await runContractVerification({
-          workspaceRoot: process.cwd(),
-          mode: "quick",
-          throwOnFailure: false,
-        });
-        console.log(formatContractVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--determinism") {
-        const report = await runDeterminismVerification();
-        console.log(formatDeterminismVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--transactions") {
-        const report = await runTransactionVerification();
-        console.log(formatTransactionVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--state") {
-        const report = await runStateVerification();
-        console.log(formatStateVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--policy") {
-        const report = await runPolicyVerification();
-        console.log(formatPolicyVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--orchestration") {
-        const report = await runOrchestrationVerification();
-        console.log(formatOrchestrationVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--production") {
-        const report = await runProductionVerification();
-        console.log(formatProductionVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--libraries") {
-        const report = await runLibraryVerification();
-        console.log(formatLibraryVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--compiler") {
-        const report = await runCompilerVerification();
-        console.log(formatCompilerVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining.length === 1 && remaining[0] === "--full") {
-        const report = await runFullSystemVerification({
-          mode: "full",
-          workspaceRoot: process.cwd(),
-          throwOnFailure: false,
-        });
-        console.log(formatFullSystemVerificationReport(report));
-        process.exitCode = report.passed ? 0 : 1;
-        return;
-      }
-
-      if (remaining[0] === "--chaos" && remaining.length <= 2) {
-        const modeValue = (remaining[1] ?? "moderate").toLowerCase();
-        if (modeValue !== "none" && modeValue !== "light" && modeValue !== "moderate" && modeValue !== "extreme") {
-          throw new Error(`Invalid chaos mode: ${modeValue}`);
+      if (remaining.length === 0) {
+        mode = "full";
+      } else if (remaining.length === 1 && remaining[0] === "--quick") {
+        mode = "quick";
+      } else if (remaining.length === 1 && remaining[0] === "--property") {
+        mode = "property";
+      } else if (remaining.length === 1 && remaining[0] === "--contracts") {
+        mode = "contracts";
+      } else if (remaining.length === 1 && remaining[0] === "--determinism") {
+        mode = "determinism";
+      } else if (remaining.length === 1 && remaining[0] === "--transactions") {
+        mode = "transactions";
+      } else if (remaining.length === 1 && remaining[0] === "--state") {
+        mode = "state";
+      } else if (remaining.length === 1 && remaining[0] === "--policy") {
+        mode = "policy";
+      } else if (remaining.length === 1 && remaining[0] === "--orchestration") {
+        mode = "orchestration";
+      } else if (remaining.length === 1 && remaining[0] === "--production") {
+        mode = "production";
+      } else if (remaining.length === 1 && remaining[0] === "--libraries") {
+        mode = "libraries";
+      } else if (remaining.length === 1 && remaining[0] === "--compiler") {
+        mode = "compiler";
+      } else if (remaining.length === 1 && remaining[0] === "--full") {
+        mode = "full-system";
+      } else if (remaining[0] === "--chaos" && remaining.length <= 2) {
+        const parsedMode = (remaining[1] ?? "moderate").toLowerCase();
+        if (parsedMode !== "none" && parsedMode !== "light" && parsedMode !== "moderate" && parsedMode !== "extreme") {
+          throw new Error(`Invalid chaos mode: ${parsedMode}`);
         }
 
-        const report = await runChaosTest(modeValue as ChaosMode, ciIterationLimit(30, 10), {
-          seed: parsed.seed,
-          throwOnFailure: false,
-        });
-        console.log(formatChaosTestReport(report));
-        process.exitCode = report.failures === 0 ? 0 : 1;
+        mode = "chaos";
+        chaosMode = parsedMode;
+      }
+
+      if (!mode) {
+        console.error(usage());
+        process.exitCode = 1;
         return;
       }
 
-      console.error(usage());
-      process.exitCode = 1;
+      const report = await runRuntimeVerification({
+        mode,
+        workspaceRoot: process.cwd(),
+        chaosMode,
+      });
+
+      console.log(formatRuntimeVerificationReport(report));
+      if (parsed.seed) {
+        console.log(`- note: --seed ${parsed.seed} is ignored for runtime-safe verification modes`);
+      }
+      process.exitCode = report.status === "fail" ? 1 : 0;
+      return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Choir verification failed: ${message}`);

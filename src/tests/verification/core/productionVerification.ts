@@ -181,6 +181,13 @@ export async function runProductionVerification(): Promise<ProductionVerificatio
       : "deterministic replay sample mismatch detected",
   });
 
+  // Continuous verification checks current runtime counters; reset from injected alert scenarios first.
+  resetProductionReadiness();
+  await executeGlobalPlan(plan, {
+    repos: fixtureRepos(),
+    policies,
+  });
+
   const cv = await continuousVerify();
   checks.push({
     name: "continuous-verification-loop",

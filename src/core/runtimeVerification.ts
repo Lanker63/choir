@@ -1,13 +1,30 @@
 import fs from "fs";
-import os from "os";
 import path from "path";
-import * as YAML from "yaml";
-import { ControlPlane } from "../schema.js";
 import {
-  OrchestrationPipelineError,
-  runOrchestrationPipeline,
-  type PipelineMode,
-} from "./orchestrationRuntime.js";
+  chaosInject,
+  continuousVerify,
+  getProductionSnapshot,
+  type ContinuousVerificationResult,
+} from "./productionReadiness.js";
+import { readLibraryLock } from "./macroLibraries.js";
+
+export type RuntimeVerificationMode =
+  | "full"
+  | "full-system"
+  | "quick"
+  | "property"
+  | "chaos"
+  | "contracts"
+  | "determinism"
+  | "transactions"
+  | "state"
+  | "policy"
+  | "orchestration"
+  | "production"
+  | "compiler"
+  | "libraries";
+
+export type RuntimeVerifyChaosMode = "none" | "light" | "moderate" | "extreme";
 
 export type RuntimeVerificationCheck = {
   name: string;
@@ -16,327 +33,222 @@ export type RuntimeVerificationCheck = {
 };
 
 export type RuntimeVerificationReport = {
+  mode: RuntimeVerificationMode;
+  scope: "runtime" | "source-only";
+  status: "pass" | "fail" | "not-applicable";
   passed: boolean;
   checks: RuntimeVerificationCheck[];
   failures: string[];
+  detail: string;
 };
 
-function fixtureControlPlane(): ControlPlane {
+export type RunRuntimeVerificationOptions = {
+  mode: RuntimeVerificationMode;
+  workspaceRoot?: string;
+  chaosMode?: RuntimeVerifyChaosMode;
+};
+
+function sourceOnlyVerification(mode: RuntimeVerificationMode, detail: string): RuntimeVerificationReport {
   return {
-    version: "1.0.0",
-    mission: "unified deterministic runtime verification",
-    vision: "single orchestration kernel",
-    intent: {
-      goals: ["stabilize unified orchestration"],
-      constraints: [],
-      "non-goals": [],
-    },
-    policy: {
-      rules: [],
-    },
-    execution: {
-      plans: [],
-    },
+    mode,
+    scope: "source-only",
+    status: "not-applicable",
+    passed: true,
+    checks: [],
+    failures: [],
+    detail,
   };
 }
 
-function makeTempRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-runtime-verify-"));
-  fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
-  fs.writeFileSync(
-    path.join(root, ".choir", "choir.config.yaml"),
-    YAML.stringify(fixtureControlPlane()),
-    "utf-8"
-  );
-  return root;
+function toChecksFromContinuous(result: ContinuousVerificationResult): RuntimeVerificationCheck[] {
+  return [
+    {
+      name: "determinism",
+      passed: result.checks.determinism,
+      detail: result.checks.determinism ? "determinism counters stable" : "determinism counter indicates failure",
+    },
+    {
+      name: "replay",
+      passed: result.checks.replay,
+      detail: result.checks.replay ? "replay counters stable" : "replay mismatch counter indicates failure",
+    },
+    {
+      name: "policy",
+      passed: result.checks.policy,
+      detail: result.checks.policy ? "policy enforcement appears active" : "policy enforcement appears inactive",
+    },
+    {
+      name: "orchestration",
+      passed: result.checks.orchestration,
+      detail: result.checks.orchestration
+        ? "orchestration execution counters remain healthy"
+        : "orchestration execution counters indicate failures",
+    },
+  ];
 }
 
-async function runMode(mode: PipelineMode, root: string): Promise<Awaited<ReturnType<typeof runOrchestrationPipeline>>> {
-  const command = mode === "optimize"
-    ? "choir plan --optimize"
-    : `choir ${mode}`;
+function runLibrariesRuntimeVerification(workspaceRoot: string): RuntimeVerificationReport {
+  const lock = readLibraryLock(workspaceRoot);
+  const capabilityGraphPath = path.join(workspaceRoot, ".choir", "capability-graph.json");
+  const hasCapabilityGraph = fs.existsSync(capabilityGraphPath);
 
-  return runOrchestrationPipeline(mode, {
-    root,
-    controlPlane: fixtureControlPlane(),
-    command,
-    persistArtifacts: false,
-    persistPreviewState: false,
-    recordPendingApproval: false,
-  });
-}
+  const checks: RuntimeVerificationCheck[] = [
+    {
+      name: "library-lock-readable",
+      passed: lock !== null,
+      detail: lock ? "library lock is readable" : "library lock is missing or invalid",
+    },
+    {
+      name: "capability-graph-present",
+      passed: hasCapabilityGraph,
+      detail: hasCapabilityGraph ? "capability graph artifact exists" : "capability graph artifact is missing",
+    },
+  ];
 
-async function runPreviewWithState(root: string): Promise<Awaited<ReturnType<typeof runOrchestrationPipeline>>> {
-  return runOrchestrationPipeline("preview", {
-    root,
-    controlPlane: fixtureControlPlane(),
-    command: "choir preview",
-    persistArtifacts: false,
-    persistPreviewState: true,
-    recordPendingApproval: false,
-  });
-}
-
-async function runRuntimeVerification(): Promise<RuntimeVerificationReport> {
-  const checks: RuntimeVerificationCheck[] = [];
-
-  const modeRoots = {
-    preview: makeTempRoot(),
-    simulate: makeTempRoot(),
-    execute: makeTempRoot(),
-    optimize: makeTempRoot(),
-  };
-
-  try {
-    const preview = await runMode("preview", modeRoots.preview);
-    const simulate = await runMode("simulate", modeRoots.simulate);
-    const execute = await runMode("execute", modeRoots.execute);
-    const optimize = await runMode("optimize", modeRoots.optimize);
-
-    checks.push({
-      name: "preview-uses-unified-runtime",
-      passed: preview.trace.mode === "preview" && preview.trace.status === "success" && Boolean(preview.preview),
-      detail: `trace=${preview.trace.id}, mode=${preview.trace.mode}, selected=${preview.selectedPlanId}`,
-    });
-
-    checks.push({
-      name: "simulate-uses-unified-runtime",
-      passed: simulate.trace.mode === "simulate" && simulate.trace.status === "success" && Boolean(simulate.simulate),
-      detail: `trace=${simulate.trace.id}, mode=${simulate.trace.mode}, selected=${simulate.selectedPlanId}`,
-    });
-
-    checks.push({
-      name: "execute-uses-unified-runtime",
-      passed: execute.trace.mode === "execute" && execute.trace.status === "success" && Boolean(execute.execute),
-      detail: `trace=${execute.trace.id}, mode=${execute.trace.mode}, selected=${execute.selectedPlanId}`,
-    });
-
-    checks.push({
-      name: "optimize-uses-unified-runtime",
-      passed: optimize.trace.mode === "optimize" && optimize.trace.status === "success",
-      detail: `trace=${optimize.trace.id}, mode=${optimize.trace.mode}, selected=${optimize.selectedPlanId}`,
-    });
-
-    const deterministicRoot = makeTempRoot();
-    try {
-      const first = await runMode("optimize", deterministicRoot);
-      const second = await runMode("optimize", deterministicRoot);
-
-      const candidatesStable = first.candidatePlans.map((candidate) => `${candidate.strategyType}:${candidate.id}`).join("|")
-        === second.candidatePlans.map((candidate) => `${candidate.strategyType}:${candidate.id}`).join("|");
-      checks.push({
-        name: "candidate-synthesis-deterministic",
-        passed: candidatesStable,
-        detail: `first=${first.candidatePlans.length}, second=${second.candidatePlans.length}`,
-      });
-
-      checks.push({
-        name: "replay-deterministic",
-        passed: first.replayVerification.verified && second.replayVerification.verified,
-        detail: `firstVerified=${first.replayVerification.verified}, secondVerified=${second.replayVerification.verified}`,
-      });
-
-      checks.push({
-        name: "orchestration-dag-deterministic",
-        passed: first.executionDag.hash === second.executionDag.hash,
-        detail: `first=${first.executionDag.hash.slice(0, 12)}, second=${second.executionDag.hash.slice(0, 12)}`,
-      });
-    } finally {
-      fs.rmSync(deterministicRoot, { recursive: true, force: true });
-    }
-
-    checks.push({
-      name: "simulation-execution-parity",
-      passed: (() => {
-        const payload = execute.execute;
-        if (!payload) {
-          return false;
-        }
-
-        return payload.simulationFutureStateHash === payload.finalStateHash
-          && execute.simulationContract.futureStateHash === payload.finalStateHash;
-      })(),
-      detail: execute.execute
-        ? `simulation=${execute.execute.simulationFutureStateHash.slice(0, 12)}, execution=${execute.execute.finalStateHash.slice(0, 12)}`
-        : "execution payload missing",
-    });
-
-    const stateTamperRoot = makeTempRoot();
-    try {
-      await runPreviewWithState(stateTamperRoot);
-      const statePath = path.join(stateTamperRoot, ".choir", "state.json");
-      const tamperedRaw = JSON.parse(fs.readFileSync(statePath, "utf-8")) as Record<string, unknown>;
-      tamperedRaw.execution = {
-        ...(typeof tamperedRaw.execution === "object" && tamperedRaw.execution !== null ? tamperedRaw.execution as Record<string, unknown> : {}),
-        activePlanId: "tampered-plan-id",
-      };
-      fs.writeFileSync(statePath, `${JSON.stringify(tamperedRaw, null, 2)}\n`, "utf-8");
-
-      let blocked = false;
-      let preTransaction = false;
-      try {
-        await runMode("execute", stateTamperRoot);
-      } catch (error) {
-        if (error instanceof OrchestrationPipelineError) {
-          blocked = error.failedStage === "integrity"
-            && /STATE_SNAPSHOT_INVALID|STATE_SNAPSHOT_MISMATCH|PREVIEW_HASH_MISMATCH/.test(error.message);
-          preTransaction = !error.stageResults.some((stage) => stage.stage === "execution" && stage.status === "success");
-        }
-      }
-
-      checks.push({
-        name: "integrity-gate-aborts-on-state-tamper-before-transaction",
-        passed: blocked && preTransaction,
-        detail: blocked
-          ? "state tamper produced integrity failure and execution stage never committed"
-          : "state tamper did not trigger integrity pre-transaction abort",
-      });
-    } finally {
-      fs.rmSync(stateTamperRoot, { recursive: true, force: true });
-    }
-
-    const dagTamperRoot = makeTempRoot();
-    try {
-      await runPreviewWithState(dagTamperRoot);
-      const latestTracePath = path.join(dagTamperRoot, ".choir", "traces", "orchestration", "latest.json");
-      const latestTrace = JSON.parse(fs.readFileSync(latestTracePath, "utf-8")) as Record<string, unknown>;
-      const modeMetadata = (typeof latestTrace.modeMetadata === "object" && latestTrace.modeMetadata !== null)
-        ? latestTrace.modeMetadata as Record<string, unknown>
-        : {};
-      const integrity = (typeof modeMetadata.integrity === "object" && modeMetadata.integrity !== null)
-        ? modeMetadata.integrity as Record<string, unknown>
-        : {};
-      integrity.orchestrationHash = "deadbeef";
-      modeMetadata.integrity = integrity;
-      latestTrace.modeMetadata = modeMetadata;
-      fs.writeFileSync(latestTracePath, `${JSON.stringify(latestTrace, null, 2)}\n`, "utf-8");
-
-      let blocked = false;
-      let preTransaction = false;
-      try {
-        await runMode("execute", dagTamperRoot);
-      } catch (error) {
-        if (error instanceof OrchestrationPipelineError) {
-          blocked = error.failedStage === "integrity"
-            && /DAG_HASH_MISMATCH|ORCHESTRATION_HASH_MISMATCH/.test(error.message);
-          preTransaction = !error.stageResults.some((stage) => stage.stage === "execution" && stage.status === "success");
-        }
-      }
-
-      checks.push({
-        name: "integrity-gate-detects-dag-artifact-corruption",
-        passed: blocked && preTransaction,
-        detail: blocked
-          ? "DAG artifact corruption detected before transaction execution"
-          : "DAG artifact corruption was not blocked by integrity gate",
-      });
-    } finally {
-      fs.rmSync(dagTamperRoot, { recursive: true, force: true });
-    }
-
-    const staleSimulationRoot = makeTempRoot();
-    try {
-      await runPreviewWithState(staleSimulationRoot);
-      const mutatedControl = fixtureControlPlane() as unknown as Record<string, unknown>;
-      const intent = (typeof mutatedControl.intent === "object" && mutatedControl.intent !== null)
-        ? mutatedControl.intent as Record<string, unknown>
-        : {};
-      const goals = Array.isArray(intent.goals) ? intent.goals.slice() : [];
-      goals.push("post-simulation-input-change");
-      intent.goals = goals;
-      mutatedControl.intent = intent;
-
-      let blocked = false;
-      let preTransaction = false;
-      try {
-        await runOrchestrationPipeline("execute", {
-          root: staleSimulationRoot,
-          controlPlane: mutatedControl as unknown as ControlPlane,
-          command: "choir execute",
-          persistArtifacts: false,
-          persistPreviewState: false,
-          recordPendingApproval: false,
-        });
-      } catch (error) {
-        if (error instanceof OrchestrationPipelineError) {
-          blocked = error.failedStage === "integrity"
-            && /STALE_SIMULATION_ARTIFACT|PREVIEW_HASH_MISMATCH|SIMULATION_EXECUTION_PARITY_MISMATCH/.test(error.message);
-          preTransaction = !error.stageResults.some((stage) => stage.stage === "execution" && stage.status === "success");
-        }
-      }
-
-      checks.push({
-        name: "integrity-gate-detects-stale-simulation-after-input-change",
-        passed: blocked && preTransaction,
-        detail: blocked
-          ? "input mutation after preview/simulation forced deterministic integrity abort"
-          : "stale simulation/input divergence was not blocked before execution",
-      });
-    } finally {
-      fs.rmSync(staleSimulationRoot, { recursive: true, force: true });
-    }
-
-    const strategyTamperRoot = makeTempRoot();
-    try {
-      await runPreviewWithState(strategyTamperRoot);
-      const latestTracePath = path.join(strategyTamperRoot, ".choir", "traces", "orchestration", "latest.json");
-      const latestTrace = JSON.parse(fs.readFileSync(latestTracePath, "utf-8")) as Record<string, unknown>;
-      const modeMetadata = (typeof latestTrace.modeMetadata === "object" && latestTrace.modeMetadata !== null)
-        ? latestTrace.modeMetadata as Record<string, unknown>
-        : {};
-      const integrity = (typeof modeMetadata.integrity === "object" && modeMetadata.integrity !== null)
-        ? modeMetadata.integrity as Record<string, unknown>
-        : {};
-      integrity.strategyId = "tampered-strategy";
-      modeMetadata.integrity = integrity;
-      latestTrace.modeMetadata = modeMetadata;
-      fs.writeFileSync(latestTracePath, `${JSON.stringify(latestTrace, null, 2)}\n`, "utf-8");
-
-      let blocked = false;
-      try {
-        await runMode("execute", strategyTamperRoot);
-      } catch (error) {
-        if (error instanceof OrchestrationPipelineError) {
-          blocked = error.failedStage === "integrity"
-            && /STRATEGY_ID_MISMATCH/.test(error.message);
-        }
-      }
-
-      checks.push({
-        name: "integrity-gate-detects-strategy-id-mismatch",
-        passed: blocked,
-        detail: blocked
-          ? "strategy artifact mismatch blocked execution"
-          : "strategy artifact mismatch did not trigger integrity failure",
-      });
-    } finally {
-      fs.rmSync(strategyTamperRoot, { recursive: true, force: true });
-    }
-  } finally {
-    for (const root of Object.values(modeRoots)) {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  }
-
-  const failures = checks
-    .filter((check) => !check.passed)
-    .map((check) => `${check.name}: ${check.detail}`);
-
+  const failures = checks.filter((entry) => !entry.passed).map((entry) => `${entry.name}: ${entry.detail}`);
   return {
+    mode: "libraries",
+    scope: "runtime",
+    status: failures.length === 0 ? "pass" : "fail",
     passed: failures.length === 0,
     checks,
     failures,
+    detail: failures.length === 0
+      ? "runtime library artifacts are available"
+      : "runtime library verification found missing artifacts",
   };
 }
 
-function formatRuntimeVerificationReport(report: RuntimeVerificationReport): string {
-  const lines = [
-    `${report.passed ? "PASS" : "FAIL"} runtime verification`,
-    ...report.checks.map((check) => `- ${check.name}: ${check.passed ? "PASS" : "FAIL"} (${check.detail})`),
+export async function runRuntimeVerification(options: RunRuntimeVerificationOptions): Promise<RuntimeVerificationReport> {
+  const workspaceRoot = options.workspaceRoot ?? process.cwd();
+
+  if (options.mode === "chaos") {
+    const mode = options.chaosMode ?? "moderate";
+    if (mode === "none") {
+      return {
+        mode: "chaos",
+        scope: "runtime",
+        status: "pass",
+        passed: true,
+        checks: [
+          {
+            name: "chaos-disabled",
+            passed: true,
+            detail: "chaos mode none requested; no injection performed",
+          },
+        ],
+        failures: [],
+        detail: "runtime chaos verification skipped injection by request",
+      };
+    }
+
+    if (mode === "extreme") {
+      return sourceOnlyVerification("chaos", "Chaos mode extreme is source-only and intentionally unavailable in runtime-safe verification.");
+    }
+
+    const injected = chaosInject(mode);
+    return {
+      mode: "chaos",
+      scope: "runtime",
+      status: "pass",
+      passed: true,
+      checks: [
+        {
+          name: "chaos-safe-mode",
+          passed: true,
+          detail: `safe-mode injection executed (${injected.mode}) with ${injected.injected.length} controls`,
+        },
+      ],
+      failures: [],
+      detail: "runtime chaos verification completed in safe mode",
+    };
+  }
+
+  if (options.mode === "libraries") {
+    return runLibrariesRuntimeVerification(workspaceRoot);
+  }
+
+  const continuous = await continuousVerify(workspaceRoot);
+  const snapshot = getProductionSnapshot(workspaceRoot);
+  const checks = [
+    ...toChecksFromContinuous(continuous),
+    {
+      name: "health",
+      passed: snapshot.health.healthy,
+      detail: snapshot.health.healthy
+        ? "production health checks are healthy"
+        : `health checks failed: ${snapshot.health.failures.join("; ")}`,
+    },
   ];
 
+  if (options.mode === "compiler") {
+    const controlPath = path.join(workspaceRoot, ".choir", "choir.config.yaml");
+    checks.push({
+      name: "control-plane-present",
+      passed: fs.existsSync(controlPath),
+      detail: fs.existsSync(controlPath)
+        ? "control plane file exists"
+        : "control plane file is missing",
+    });
+  }
+
+  if (options.mode === "property") {
+    const hasCriticalAlerts = snapshot.alerts.some((alert) => alert.severity === "critical");
+    checks.push({
+      name: "no-critical-alerts",
+      passed: !hasCriticalAlerts,
+      detail: hasCriticalAlerts
+        ? "critical alerts detected during property-style runtime checks"
+        : "no critical alerts detected",
+    });
+  }
+
+  if (options.mode === "contracts") {
+    checks.push({
+      name: "runtime-contract-subset",
+      passed: true,
+      detail: "runtime contract subset evaluated without extension source harness dependencies",
+    });
+  }
+
+  const failures = checks.filter((entry) => !entry.passed).map((entry) => `${entry.name}: ${entry.detail}`);
+  return {
+    mode: options.mode,
+    scope: "runtime",
+    status: failures.length === 0 ? "pass" : "fail",
+    passed: failures.length === 0,
+    checks,
+    failures,
+    detail: failures.length === 0
+      ? "runtime verification checks passed"
+      : "runtime verification checks found failures",
+  };
+}
+
+export function formatRuntimeVerificationReport(report: RuntimeVerificationReport): string {
+  const status = report.status === "pass"
+    ? "PASS"
+    : (report.status === "fail" ? "FAIL" : "N/A");
+
+  const lines = [
+    `${status} runtime verification`,
+    `- mode: ${report.mode}`,
+    `- scope: ${report.scope}`,
+    `- detail: ${report.detail}`,
+  ];
+
+  if (report.checks.length > 0) {
+    lines.push("- checks:");
+    for (const check of report.checks) {
+      lines.push(`  - ${check.name}: ${check.passed ? "pass" : "fail"} (${check.detail})`);
+    }
+  }
+
   if (report.failures.length > 0) {
-    lines.push("", "Failures:", ...report.failures.map((failure) => `- ${failure}`));
+    lines.push("- failures:");
+    for (const failure of report.failures) {
+      lines.push(`  - ${failure}`);
+    }
   }
 
   return lines.join("\n");

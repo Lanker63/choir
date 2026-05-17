@@ -124,10 +124,13 @@ Additional commands:
 - CI:
   - choir ci run
 - Verification:
+  - @choir cli install (optional helper to install CLI from chat via terminal; requires explicit package source and blocks bare `choir` package)
   - @choir verify --production
   - choir verify --production
   - @choir verify --full
   - choir verify --full
+  - Chat/CLI verification now uses runtime-safe checks only (no direct dependency on `src/tests` modules)
+  - `verify --contracts` reports a runtime contract subset in target repos; full source harness contract checks remain source-repo CI concerns
   - npm run verify:simulation
   - npm run verify:execution
   - npm run verify:full

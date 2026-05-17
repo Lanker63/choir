@@ -461,29 +461,51 @@ Topic setup for deterministic lineage:
 
 ---
 
-## Topic 11: CLI Verification Surface
+## Topic 11: Verification Surface (Target Repo)
 
-Run each command below and confirm the stated result for each.
+Use extension runtime surfaces in the target repository. Do not assume extension source artifacts such as `out/cli.js` exist.
+Verification commands in this topic are expected to run runtime-safe checks that do not import extension source test harness modules.
 
-1. `node out/cli.js verify --compiler` — compiler verification passes with no failures.
+Primary path (chat): run each command below and confirm the stated result.
 
-2. `node out/cli.js verify --determinism` — determinism verification passes.
+1. `@choir verify --compiler` — compiler verification passes with no failures.
 
-3. `node out/cli.js verify --transactions` — transaction verification passes.
+2. `@choir verify --determinism` — determinism verification passes.
 
-4. `node out/cli.js verify --state` — state integrity verification passes.
+3. `@choir verify --transactions` — transaction verification passes.
 
-5. `node out/cli.js verify --policy` — policy enforcement verification passes.
+4. `@choir verify --state` — state integrity verification passes.
 
-6. `node out/cli.js verify --orchestration` — global orchestration verification passes.
+5. `@choir verify --policy` — policy enforcement verification passes.
 
-7. `node out/cli.js verify --production` — production readiness verification passes.
+6. `@choir verify --orchestration` — global orchestration verification passes.
 
-8. `node out/cli.js verify --property --seed 1337` — property test run reports zero failures.
+7. `@choir verify --production` — production readiness verification passes.
 
-9. `node out/cli.js verify --chaos moderate --seed 1337` — chaos test run reports zero failures.
+8. `@choir verify --property` — property test run reports zero failures.
 
-10. `node out/cli.js verify --full` — full-system gate passes with no unresolved invariant or hardening failures.
+9. `@choir verify --chaos moderate` — chaos test run reports zero failures.
+
+10. `@choir verify --full` — evaluate target-repo full verification outcome with target-repo criteria.
+
+    - Required PASS criteria in target repos:
+       - cross-system invariants are all PASS
+       - deterministic/hardening passes are PASS (for example chaos, replay stress, policy bypass)
+       - no runtime exception or crash in verify pipeline
+    - Target-repo non-blocking findings (record as N/A or known limitation, not automatic topic failure):
+       - contract coverage checks that rely on extension-source contract fixtures
+       - regression-lock checks that expect extension-source paths (for example `src/tests/...` and `src/core/...`)
+    - Fail Topic 11.10 only when required target-repo criteria above are not met.
+
+Optional path (if `choir` CLI is installed in the target repo environment):
+
+- Optional helper from chat: run `@choir cli install`, choose local or global scope, provide an explicit package source, and confirm the install command is launched in a visible terminal.
+- After completion, confirm `choir --help` succeeds in terminal before running CLI verify commands.
+
+- Repeat the same checks with `choir verify ...` flags from terminal.
+- CLI-only seed variants (not chat syntax):
+   - `choir verify --property --seed 1337`
+   - `choir verify --chaos moderate --seed 1337`
 
 ---
 

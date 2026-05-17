@@ -163,7 +163,19 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
-import { normalizeChatDSLInput, parseExportChatCommand, parseGoalMutationChatCommand, parseInitChatCommand, parseVerifyChatCommand } from "../../core/chatCommands.js";
+import {
+  normalizeChatDSLInput,
+  parseCliInstallChatCommand,
+  parseExportChatCommand,
+  parseGoalMutationChatCommand,
+  parseInitChatCommand,
+  parseVerifyChatCommand,
+} from "../../core/chatCommands.js";
+import {
+  buildCliInstallCommand,
+  normalizeCliPackageSpec,
+  validateCliPackageSpec,
+} from "../../core/cliInstall.js";
 import { synthesizePreviewContract } from "../../core/previewOrchestrator.js";
 import {
   getAbstraction,
@@ -2141,6 +2153,46 @@ const pass2: TestPass = {
             format: "yaml",
           }
         );
+      },
+    },
+    {
+      id: "2.30g",
+      name: "cli install chat shortcut parser accepts prefixed and stripped participant input",
+      run: async () => {
+        assert.deepStrictEqual(parseCliInstallChatCommand("@choir cli install"), {
+          type: "cli-install",
+        });
+
+        assert.deepStrictEqual(parseCliInstallChatCommand("cli install"), {
+          type: "cli-install",
+        });
+
+        assert.strictEqual(parseCliInstallChatCommand("choir cli install"), null);
+        assert.strictEqual(parseCliInstallChatCommand("@choir cli update"), null);
+      },
+    },
+    {
+      id: "2.30h",
+      name: "cli install requires explicit package source and rejects bare choir package",
+      run: async () => {
+        assert.strictEqual(normalizeCliPackageSpec("  @org/choir-cli  "), "@org/choir-cli");
+
+        assert.deepStrictEqual(validateCliPackageSpec(""), {
+          ok: false,
+          reason: "Package source is required.",
+        });
+
+        assert.deepStrictEqual(validateCliPackageSpec("choir"), {
+          ok: false,
+          reason: "Package `choir` is blocked. Provide an explicit private/pinned package source.",
+        });
+
+        assert.deepStrictEqual(validateCliPackageSpec("@org/choir-cli"), {
+          ok: true,
+        });
+
+        assert.strictEqual(buildCliInstallCommand("local", "@org/choir-cli"), "npm install --save-dev @org/choir-cli");
+        assert.strictEqual(buildCliInstallCommand("global", "@org/choir-cli"), "npm install -g @org/choir-cli");
       },
     },
     {
@@ -8327,6 +8379,20 @@ const finalPass: TestPass = {
             { fixId: "fix-D", reason: "dependency-failure" },
             { fixId: "fix-U", reason: "unsafe" },
           ]
+        );
+      },
+    },
+    {
+      id: "X.6",
+      name: "core runtime source never imports from /tests",
+      run: async () => {
+        const forbiddenImports = searchCodebase(/(?:from\s+["'][^"']*\/tests\/|import\(\s*["'][^"']*\/tests\/)/)
+          .filter((entry) => !entry.startsWith("src/tests/"));
+
+        assert.deepStrictEqual(
+          forbiddenImports,
+          [],
+          `runtime source imports from /tests are forbidden: ${forbiddenImports.join(", ")}`
         );
       },
     },
