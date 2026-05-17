@@ -1198,7 +1198,24 @@ export async function proveSystem(root = process.cwd()): Promise<ProofArtifact> 
   const deterministic = await runDeterminismVerification();
   const policy = await runPolicyVerification();
   const orchestration = await runOrchestrationVerification();
-  const continuous = await continuousVerify(root);
+
+  // Continuous verification is stateful; seed it from a clean readiness snapshot
+  // so prior intentional hardening failures do not pollute proof-loop counters.
+  const proofRuntimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-full-system-proof-"));
+  let continuous;
+  try {
+    resetProductionReadiness();
+    const proofPlan = buildLinearPlan("full-system-proof-loop", 3, "full-system-proof");
+    await executeGlobalPlan(proofPlan, {
+      ...buildExecutionOptions(proofPlan),
+      stateRoot: proofRuntimeRoot,
+    });
+
+    continuous = await continuousVerify(proofRuntimeRoot);
+  } finally {
+    fs.rmSync(proofRuntimeRoot, { recursive: true, force: true });
+  }
+
   const observabilityFingerprint = currentObservabilityFingerprint();
 
   const proofPayload = {
