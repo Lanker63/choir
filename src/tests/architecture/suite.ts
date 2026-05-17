@@ -2421,7 +2421,10 @@ const pass2: TestPass = {
           { entity: "repository" },
           makeControlPlane(),
           controlPath,
-          { workspaceRoot: root }
+          {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }
         );
 
         assert.strictEqual(executed.decision, "allow");
@@ -2453,7 +2456,10 @@ const pass2: TestPass = {
 
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         assert.throws(
-          () => runMacro(root, "a", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          () => runMacro(root, "a", {}, makeControlPlane(), controlPath, {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }),
           /Macro recursion detected/
         );
       },
@@ -3236,7 +3242,10 @@ const pass2: TestPass = {
           {},
           makeControlPlane(),
           controlPath,
-          { workspaceRoot: root }
+          {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }
         );
 
         assert.strictEqual(run.decision, "allow");
@@ -3414,11 +3423,16 @@ const pass2: TestPass = {
           "  local:",
           "    enforcePolicy: true",
           "    requireApproval: false",
+          "  ci:",
+          "    enforcePolicy: true",
+          "    requireApproval: false",
           "macros: []",
           "",
         ].join("\n"), "utf-8");
 
         const control = ControlPlaneSchema.parse(YAML.parse(fs.readFileSync(controlPath, "utf-8")));
+
+        const environment = detectEnvironment();
 
         const first = await runCI({
           root,
@@ -3426,7 +3440,7 @@ const pass2: TestPass = {
           controlPath,
           context: {
             role: "conductor",
-            environment: "local",
+            environment,
           },
           actorId: "test-runner",
         });
@@ -3437,7 +3451,7 @@ const pass2: TestPass = {
           controlPath,
           context: {
             role: "conductor",
-            environment: "local",
+            environment,
           },
           actorId: "test-runner",
         });
@@ -4296,7 +4310,10 @@ const pass2: TestPass = {
           { name: "user" },
           makeControlPlane(),
           controlPath,
-          { workspaceRoot: root }
+          {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }
         );
 
         assert.strictEqual(first.decision, "allow");
@@ -4313,7 +4330,10 @@ const pass2: TestPass = {
           { name: "user" },
           first.updatedControlPlane,
           controlPath,
-          { workspaceRoot: root }
+          {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }
         );
 
         assert.strictEqual(
@@ -4345,7 +4365,10 @@ const pass2: TestPass = {
 
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         assert.throws(
-          () => runAbstraction(root, "first", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          () => runAbstraction(root, "first", {}, makeControlPlane(), controlPath, {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }),
           /Abstraction recursion detected/
         );
       },
@@ -4368,7 +4391,10 @@ const pass2: TestPass = {
 
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         assert.throws(
-          () => runAbstraction(root, "invalid-macro-reference", {}, makeControlPlane(), controlPath, { workspaceRoot: root }),
+          () => runAbstraction(root, "invalid-macro-reference", {}, makeControlPlane(), controlPath, {
+            workspaceRoot: root,
+            executionMode: "ci-pipeline",
+          }),
           /Macro not found/
         );
 
