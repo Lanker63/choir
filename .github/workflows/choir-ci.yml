@@ -72,11 +72,10 @@ jobs:
       - name: Run final full-system hardening gate
         run: npm run verify:full
 
-      - name: Link choir CLI
-        run: npm link
-
       - name: Run Choir CI pipeline
-        run: choir ci run
+        run: |
+          cd test-fixtures/simple-project
+          npm --prefix ../../packages/choir-cli exec -- choir ci run
 
   choir-nightly:
     if: github.event_name == 'schedule'
