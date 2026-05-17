@@ -10,7 +10,7 @@ on:
       - ".github/workflows/choir-cli-publish.yml"
   push:
     tags:
-      - "*"
+      - "choir-cli-v*"
 
 permissions:
   contents: read
@@ -61,6 +61,6 @@ jobs:
         run: npm run build:cli:package
 
       - name: Publish choir-cli to npm
-        run: npm publish ./packages/choir-cli --access restricted
+        run: npm publish ./packages/choir-cli --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

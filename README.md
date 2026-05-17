@@ -31,7 +31,7 @@ Standalone CLI install and publish path:
 - Publish package: `npm run publish:cli`
 - CI behavior:
   - PRs run `npm pack --dry-run ./packages/choir-cli` as a publishability check
-  - Tag pushes publish `choir-cli` to npm via `.github/workflows/choir-cli-publish.yml`
+  - Release tag pushes matching `choir-cli-v*` publish `choir-cli` to npm via `.github/workflows/choir-cli-publish.yml`
 
 ## Quick Start
 

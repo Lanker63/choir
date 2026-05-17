@@ -145,7 +145,7 @@
     "build": "npm run clean:tmp && npm run build:extension && npm run build:webview",
     "build:cli:package": "npm run build:extension && node packages/choir-cli/scripts/prepare-dist.mjs",
     "pack:cli": "npm run build:cli:package && npm pack ./packages/choir-cli",
-    "publish:cli": "npm run build:cli:package && npm publish ./packages/choir-cli --access restricted",
+    "publish:cli": "npm run build:cli:package && npm publish ./packages/choir-cli --access public",
     "clean:tmp": "find . -name '.tmp-*' -exec rm -rf {} +",
     "build:extension": "tsc -p ./",
     "build:webview": "vite build",
