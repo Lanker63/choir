@@ -41,6 +41,7 @@ import { runStateVerification } from "./stateVerification.js";
 import { runPolicyVerification } from "./policyVerification.js";
 import { runOrchestrationVerification } from "./orchestrationVerification.js";
 import { runProductionVerification } from "./productionVerification.js";
+import { runRuntimeGovernanceVerification } from "./runtimeGovernanceVerification.js";
 import { resetProductionReadiness } from "../../../core/productionReadiness.js";
 
 export type VerificationCase = {
@@ -75,6 +76,7 @@ export type VerificationReport = {
     policy: boolean;
     orchestration: boolean;
     production: boolean;
+    runtimeGovernance: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -694,6 +696,7 @@ function runFingerprint(
     policy: boolean;
     orchestration: boolean;
     production: boolean;
+    runtimeGovernance: boolean;
     compiler: boolean;
     transactions: boolean;
     state: boolean;
@@ -793,6 +796,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const productionReport = await runProductionVerification();
     const production = productionReport.passed;
     failures.push(...productionReport.failures.map((failure) => `production: ${failure}`));
+    const runtimeGovernanceReport = await runRuntimeGovernanceVerification();
+    const runtimeGovernance = runtimeGovernanceReport.passed;
+    failures.push(...runtimeGovernanceReport.failures.map((failure) => `runtime-governance: ${failure}`));
     const compilerReport = await runCompilerVerification();
     const compiler = compilerReport.passed;
     failures.push(...compilerReport.failures.map((failure) => `compiler: ${failure}`));
@@ -809,7 +815,18 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
-    const firstFingerprint = runFingerprint(caseResults, { policy, orchestration, production, compiler, transactions, state, strategy, memory, adaptive });
+    const firstFingerprint = runFingerprint(caseResults, {
+      policy,
+      orchestration,
+      production,
+      runtimeGovernance,
+      compiler,
+      transactions,
+      state,
+      strategy,
+      memory,
+      adaptive,
+    });
 
     if (detectFlakiness) {
       for (let run = 1; run < flakeRuns; run += 1) {
@@ -823,6 +840,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         const rerunPolicy = (await runPolicyVerification()).passed;
         const rerunOrchestration = (await runOrchestrationVerification()).passed;
         const rerunProduction = (await runProductionVerification()).passed;
+        const rerunRuntimeGovernance = (await runRuntimeGovernanceVerification()).passed;
         const rerunCompiler = (await runCompilerVerification()).passed;
         const rerunTransactions = (await runTransactionVerification()).passed;
         const rerunState = (await runStateVerification()).passed;
@@ -830,6 +848,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
           policy: rerunPolicy,
           orchestration: rerunOrchestration,
           production: rerunProduction,
+          runtimeGovernance: rerunRuntimeGovernance,
           compiler: rerunCompiler,
           transactions: rerunTransactions,
           state: rerunState,
@@ -862,6 +881,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         && policy
         && orchestration
         && production
+        && runtimeGovernance
         && compiler
         && transactions
         && state
@@ -878,6 +898,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         policy,
         orchestration,
         production,
+        runtimeGovernance,
         compiler,
         transactions,
         state,
@@ -912,6 +933,7 @@ export function formatVerificationReport(report: VerificationReport): string {
     `- policy: ${report.metrics.policy}`,
     `- orchestration: ${report.metrics.orchestration}`,
     `- production: ${report.metrics.production}`,
+    `- runtimeGovernance: ${report.metrics.runtimeGovernance}`,
     `- compiler: ${report.metrics.compiler}`,
     `- transactions: ${report.metrics.transactions}`,
     `- state: ${report.metrics.state}`,

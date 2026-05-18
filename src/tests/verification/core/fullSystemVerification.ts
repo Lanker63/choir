@@ -28,6 +28,7 @@ import { runStateVerification, type StateVerificationReport } from "./stateVerif
 import { runOrchestrationVerification, type OrchestrationVerificationReport } from "./orchestrationVerification.js";
 import { runTransactionVerification, type TransactionVerificationReport } from "./transactionVerification.js";
 import { runCompilerVerification, type CompilerVerificationReport } from "./compilerVerification.js";
+import { runRuntimeGovernanceVerification, type RuntimeGovernanceVerificationReport } from "./runtimeGovernanceVerification.js";
 import { runChaosTest, type PropertyRunResult } from "./propertyChaosHarness.js";
 import {
   continuousVerify,
@@ -117,6 +118,7 @@ type VerificationBundle = {
   policy: PolicyVerificationReport;
   state: StateVerificationReport;
   orchestration: OrchestrationVerificationReport;
+  runtimeGovernance: RuntimeGovernanceVerificationReport;
   transactions: TransactionVerificationReport;
   compiler: CompilerVerificationReport;
 };
@@ -363,6 +365,7 @@ async function runVerificationBundle(mode: FullSystemVerificationMode, workspace
     policy: await runPolicyVerification(),
     state: await runStateVerification(),
     orchestration: await runOrchestrationVerification(),
+    runtimeGovernance: await runRuntimeGovernanceVerification(),
     transactions: await runTransactionVerification(),
     compiler: await runCompilerVerification(),
   };
@@ -378,7 +381,7 @@ export async function verifyAllContracts(workspaceRoot = process.cwd()): Promise
   const sectionsTotal = report.sections.length;
   const sectionsPassed = report.sections.filter((entry) => entry.passed).length;
   const allCommandsPassed = report.commands.every((entry) => entry.exitCode === 0);
-  const allSectionsPassed = sectionsPassed === 14 && sectionsTotal === 14;
+  const allSectionsPassed = sectionsPassed === sectionsTotal && sectionsTotal >= 14;
 
   return {
     passed: report.passed && allSectionsPassed && allCommandsPassed,

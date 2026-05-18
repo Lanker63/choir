@@ -21,6 +21,7 @@ import {
 import {
   runOrchestrationPipeline,
 } from "../core/orchestrationRuntime.js";
+import { evaluateRuntimeGovernance } from "../core/runtimeGovernance.js";
 import {
   compileDSLAndWrite,
   controlPlaneToChoirConfig,
@@ -85,6 +86,7 @@ import type {
   TimelineReplayTrace,
   UITrace,
   UISurface,
+  RuntimeGovernanceView,
   WorkflowState,
   WorkflowStep,
 } from "../ui/contracts.js";
@@ -185,6 +187,85 @@ function toUIError(message: string): UIError {
   return {
     message,
     source: "validation",
+  };
+}
+
+function readRuntimeGovernanceView(root: string): RuntimeGovernanceView | undefined {
+  const trace = readLatestOrchestrationTrace(root);
+  const modeMetadata = trace?.modeMetadata;
+  if (!modeMetadata || typeof modeMetadata !== "object" || Array.isArray(modeMetadata)) {
+    return undefined;
+  }
+
+  const runtimeGovernance = (modeMetadata as Record<string, unknown>).runtimeGovernance;
+  if (!runtimeGovernance || typeof runtimeGovernance !== "object" || Array.isArray(runtimeGovernance)) {
+    return undefined;
+  }
+
+  const record = runtimeGovernance as Record<string, unknown>;
+  const decision = record.decision;
+  const mode = record.mode;
+  const capability = record.capability;
+  const reason = record.reason;
+  const governanceHash = record.governanceHash;
+
+  if (
+    (decision !== "allow" && decision !== "deny" && decision !== "require-approval")
+    || typeof mode !== "string"
+    || typeof capability !== "string"
+    || typeof reason !== "string"
+    || typeof governanceHash !== "string"
+  ) {
+    return undefined;
+  }
+
+  const effectiveCapabilitiesRaw = record.effectiveCapabilities;
+  const effectiveCapabilities = typeof effectiveCapabilitiesRaw === "object" && effectiveCapabilitiesRaw !== null && !Array.isArray(effectiveCapabilitiesRaw)
+    ? Object.fromEntries(
+      Object.entries(effectiveCapabilitiesRaw)
+        .filter(([, value]) => typeof value === "boolean")
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, value]) => [key, value as boolean] as const)
+    )
+    : {};
+
+  const packageDecisionsRaw = record.packageDecisions;
+  const packageDecisions = Array.isArray(packageDecisionsRaw)
+    ? packageDecisionsRaw
+      .map((entry) => {
+        if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+          return null;
+        }
+
+        const candidate = entry as Record<string, unknown>;
+        if (
+          typeof candidate.packageName !== "string"
+          || typeof candidate.mode !== "string"
+          || (candidate.decision !== "allow" && candidate.decision !== "deny" && candidate.decision !== "require-approval")
+          || typeof candidate.reason !== "string"
+        ) {
+          return null;
+        }
+
+        return {
+          packageName: candidate.packageName,
+          mode: candidate.mode,
+          decision: candidate.decision as "allow" | "deny" | "require-approval",
+          reason: candidate.reason,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((left, right) => left.packageName.localeCompare(right.packageName))
+    : [];
+
+  return {
+    mode,
+    capability,
+    decision,
+    reason,
+    governanceHash,
+    effectiveCapabilities,
+    packageDecisions,
   };
 }
 
@@ -644,6 +725,7 @@ export class ChoirProductService {
       },
     };
     const replayView = this.buildReplayView(root, state);
+    const runtimeGovernance = readRuntimeGovernanceView(root);
 
     return {
       generatedAt: new Date().toISOString(),
@@ -683,6 +765,7 @@ export class ChoirProductService {
       stateInspector: replayView.stateInspector,
       ...(replayView.stateDiff ? { stateDiff: replayView.stateDiff } : {}),
       ...(replayView.replayTrace ? { replayTrace: replayView.replayTrace } : {}),
+      ...(runtimeGovernance ? { runtimeGovernance } : {}),
     };
   }
 
@@ -884,6 +967,14 @@ export class ChoirProductService {
     }
 
     if (parsed.ast.type === "import-library") {
+      const governance = evaluateRuntimeGovernance({
+        controlPlane: control,
+        capability: "import",
+      });
+      if (governance.decision !== "allow") {
+        throw new Error(`runtime-governance blocked import (mode=${governance.mode}, reason=${governance.reason})`);
+      }
+
       const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
       const imported = importLibrary(root, spec);
       const freshControl = readControlPlane() ?? control;
@@ -894,6 +985,14 @@ export class ChoirProductService {
     }
 
     if (parsed.ast.type === "library-install") {
+      const governance = evaluateRuntimeGovernance({
+        controlPlane: control,
+        capability: "install",
+      });
+      if (governance.decision !== "allow") {
+        throw new Error(`runtime-governance blocked install (mode=${governance.mode}, reason=${governance.reason})`);
+      }
+
       const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
       const installed = installLibrary(root, spec);
       const freshControl = readControlPlane() ?? control;
@@ -904,6 +1003,14 @@ export class ChoirProductService {
     }
 
     if (parsed.ast.type === "library-update") {
+      const governance = evaluateRuntimeGovernance({
+        controlPlane: control,
+        capability: "update",
+      });
+      if (governance.decision !== "allow") {
+        throw new Error(`runtime-governance blocked update (mode=${governance.mode}, reason=${governance.reason})`);
+      }
+
       const updated = updateLibrary(root, parsed.ast.library);
       const freshControl = readControlPlane() ?? control;
       return {

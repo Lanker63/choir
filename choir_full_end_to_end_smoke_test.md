@@ -527,6 +527,85 @@ Run each command below a second time on unchanged inputs and confirm stability.
 
 ---
 
+## Topic 13: Runtime Governance Modes and Capability Gates
+
+1. Edit `.choir/choir.config.yaml` and set:
+
+   ```yaml
+   runtime:
+     mode: observe-only
+   capabilities:
+     preview: true
+     simulate: true
+     execute: false
+     optimize: true
+     import: true
+     install: false
+     update: false
+   ```
+
+   - Confirm YAML parses and `@choir status` works.
+
+2. In chat, run `@choir execute`.
+
+   - Confirm execution is blocked before orchestration execution starts.
+   - Confirm output includes runtime-governance blocked context (capability `execute`, decision `deny`, reason `capability-disabled`).
+
+3. In chat, run `@choir simulate` and `@choir preview`.
+
+   - Confirm both commands are allowed and complete successfully in observe-only mode.
+
+4. In chat, run `@choir library install <lib>@<selector>` and `@choir library update <lib>`.
+
+   - Confirm both commands are blocked by runtime governance in observe-only mode.
+   - Confirm blocking is fail-closed (no partial materialization or lock mutation).
+
+5. Set runtime mode to approval-required:
+
+   ```yaml
+   runtime:
+     mode: approval-required
+   ```
+
+    - Remove the Topic 13.1 `capabilities` override block, or set `capabilities.execute: true`; otherwise `execute: false` will still deny execution and you cannot validate approval-required behavior.
+
+   - In chat, run `@choir preview` then `@choir execute`.
+   - Confirm preview may report approval as not required for preview while explicitly indicating execute requires approval.
+   - Confirm preview starts a fresh approval cycle (prior approvals for the same preview hash are invalidated).
+   - Confirm execute is blocked until approval is granted.
+   - Capture the pending reference from the blocked execute response (prefer pending id shown in approval stage detail).
+   - Run `@choir approve <pendingId>` (or `@choir approve <previewHash>`), then re-run execute; confirm success only after approval.
+
+6. Set package-level modes for a monorepo in `.choir/choir.config.yaml`:
+
+   ```yaml
+   packageModes:
+     payments:
+       mode: approval-required
+     playground:
+       mode: execution-enabled
+   ```
+
+   - Run orchestration targeting each package path/unit.
+   - Confirm governance decisions differ by package as configured.
+
+7. Run `npm run verify:runtime-governance`.
+
+   - Confirm all checks pass, including:
+     - execute blocked in observe-only
+     - approvals enforced
+     - runtime gates replay deterministically
+     - CI honors runtime gating
+     - package-level modes operational
+
+8. Open Control Center, Timeline, and Diagnostics panels after at least one governed run.
+
+   - Confirm runtime governance mode/capability/decision is visible in Control Center dashboard.
+   - Confirm runtime governance trace details are visible in Timeline view.
+   - Confirm diagnostics metadata includes runtime governance entries.
+
+---
+
 ## Sign-Off
 
 | Topic | Result | Notes |
@@ -543,6 +622,7 @@ Run each command below a second time on unchanged inputs and confirm stability.
 | 10. CI Pipeline | PASS / FAIL | |
 | 11. CLI Verification Surface | PASS / FAIL | |
 | 12. Determinism and Repeatability | PASS / FAIL | |
+| 13. Runtime Governance Modes and Capability Gates | PASS / FAIL | |
 
 **Overall result:** PASS / FAIL
 

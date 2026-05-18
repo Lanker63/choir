@@ -77,6 +77,7 @@ import {
     OrchestrationPipelineError,
     runOrchestrationPipeline,
 } from "./core/orchestrationRuntime.js";
+import { evaluateRuntimeGovernance, type Capability } from "./core/runtimeGovernance.js";
 import { buildExecutionPlan } from "./core/scheduler.js";
 import { readLatestOrchestrationTrace } from "./core/orchestrationRuntimeTrace.js";
 import {
@@ -139,6 +140,22 @@ function getWorkspaceRoot(): string | null {
 
 function sortedUnique(values: string[]): string[] {
     return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
+}
+
+function renderRuntimeGovernanceBlocked(input: {
+    mode: string;
+    capability: Capability;
+    decision: "deny" | "require-approval";
+    reason: string;
+}): string {
+    return [
+        "runtime-governance:",
+        "  status: blocked",
+        `  mode: ${input.mode}`,
+        `  capability: ${input.capability}`,
+        `  decision: ${input.decision}`,
+        `  reason: ${input.reason}`,
+    ].join("\n");
 }
 
 function deriveSimulationUnit(task: Task): string {
@@ -1106,6 +1123,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (parsed.ast.type === "import-library") {
+                    const governance = evaluateRuntimeGovernance({
+                        controlPlane: control,
+                        capability: "import",
+                    });
+                    if (governance.decision !== "allow") {
+                        stream.markdown(renderRuntimeGovernanceBlocked({
+                            mode: governance.mode,
+                            capability: "import",
+                            decision: governance.decision,
+                            reason: governance.reason,
+                        }));
+                        return;
+                    }
+
                     const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
                     const imported = importLibrary(workspaceRoot, spec);
                     stream.markdown([
@@ -1119,6 +1150,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (parsed.ast.type === "library-install") {
+                    const governance = evaluateRuntimeGovernance({
+                        controlPlane: control,
+                        capability: "install",
+                    });
+                    if (governance.decision !== "allow") {
+                        stream.markdown(renderRuntimeGovernanceBlocked({
+                            mode: governance.mode,
+                            capability: "install",
+                            decision: governance.decision,
+                            reason: governance.reason,
+                        }));
+                        return;
+                    }
+
                     const spec = `${parsed.ast.library}@${parsed.ast.versionSelector}`;
                     const installed = installLibrary(workspaceRoot, spec);
                     stream.markdown([
@@ -1132,6 +1177,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 }
 
                 if (parsed.ast.type === "library-update") {
+                    const governance = evaluateRuntimeGovernance({
+                        controlPlane: control,
+                        capability: "update",
+                    });
+                    if (governance.decision !== "allow") {
+                        stream.markdown(renderRuntimeGovernanceBlocked({
+                            mode: governance.mode,
+                            capability: "update",
+                            decision: governance.decision,
+                            reason: governance.reason,
+                        }));
+                        return;
+                    }
+
                     const updated = updateLibrary(workspaceRoot, parsed.ast.library);
                     stream.markdown([
                         `Library updated: ${updated.library}`,
@@ -1708,7 +1767,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ? runtime.approval.approved
                                 ? "required and satisfied"
                                 : `required and pending${runtime.approval.pendingId ? ` (${runtime.approval.pendingId})` : ""}`
-                            : "not required";
+                            : control.runtime?.mode === "approval-required"
+                                ? "not required for preview (execute requires approval)"
+                                : "not required";
 
                         const violationLines = runtime.policy.violations.length === 0
                             ? ["- none"]

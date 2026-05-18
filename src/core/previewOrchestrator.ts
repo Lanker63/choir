@@ -111,6 +111,7 @@ export class PreviewSynthesisError extends Error {
 }
 
 function mapStage(stage: PipelineStageName): PreviewSynthesisStageName {
+  if (stage === "runtime-governance") return "policy";
   if (stage === "compile") return "compile";
   if (stage === "structural-validation") return "structural-validation";
   if (stage === "semantic-validation") return "semantic-validation";

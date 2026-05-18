@@ -91,6 +91,18 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
   const comparisons = Array.isArray(selected.metadata?.planComparisons)
     ? selected.metadata?.planComparisons as Array<Record<string, unknown>>
     : [];
+  const runtimeGovernance = selected.metadata?.runtimeGovernance as Record<string, unknown> | undefined;
+  const runtimeMode = typeof runtimeGovernance?.mode === "string" ? runtimeGovernance.mode : "unknown";
+  const runtimeCapability = typeof runtimeGovernance?.capability === "string" ? runtimeGovernance.capability : "unknown";
+  const runtimeDecision = typeof runtimeGovernance?.decision === "string" ? runtimeGovernance.decision : "unknown";
+  const runtimeReason = typeof runtimeGovernance?.reason === "string" ? runtimeGovernance.reason : "unknown";
+  const runtimeCapabilities = runtimeGovernance?.effectiveCapabilities as Record<string, unknown> | undefined;
+  const runtimeCapabilityRows = runtimeCapabilities
+    ? Object.entries(runtimeCapabilities)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([capability, enabled]) => `<tr><td>${escapeHtml(capability)}</td><td>${escapeHtml(String(enabled))}</td></tr>`)
+      .join("")
+    : "";
 
   const candidateRows = candidatePlans.map((candidate) => {
     const selectedBadge = candidate.selected === true
@@ -128,6 +140,12 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
     + `<div>Command: ${escapeHtml(selected.command)}</div>`
     + `<div>Category: ${escapeHtml(selected.category)} | Result: ${escapeHtml(selected.result)} | Source: ${escapeHtml(selected.source)}</div>`
     + `<div>Timestamp: ${escapeHtml(selected.timestamp)}</div>`
+    + "<div><strong>Runtime Governance</strong></div>"
+    + `<div>mode=${escapeHtml(runtimeMode)} | capability=${escapeHtml(runtimeCapability)} | decision=${escapeHtml(runtimeDecision)} | reason=${escapeHtml(runtimeReason)}</div>`
+    + "<table>"
+    + "<thead><tr><th>Capability</th><th>Enabled</th></tr></thead>"
+    + `<tbody>${runtimeCapabilityRows.length > 0 ? runtimeCapabilityRows : "<tr><td colspan=\"2\">No runtime capability map recorded.</td></tr>"}</tbody>`
+    + "</table>"
     + "<table>"
     + "<thead><tr><th>Stage</th><th>Status</th><th>Detail</th></tr></thead>"
     + `<tbody>${stageRows.length > 0 ? stageRows : emptyStageRow}</tbody>`

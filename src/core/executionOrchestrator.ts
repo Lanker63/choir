@@ -88,6 +88,10 @@ export class ExecutionOrchestrationError extends Error {
 }
 
 function mapStage(stage: PipelineStageName): ExecutionOrchestrationStageName {
+  if (stage === "runtime-governance") {
+    return "policy-enforcement";
+  }
+
   if (stage === "analyze") {
     return "workspace-analysis";
   }

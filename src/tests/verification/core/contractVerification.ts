@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 export type ContractVerificationMode = "quick" | "full";
 
 export type ContractCommandResult = {
-  id: "build" | "architecture" | "verification" | "property" | "chaos";
+  id: "build" | "architecture" | "verification" | "property" | "chaos" | "runtime-governance";
   command: string;
   args: string[];
   exitCode: number;
@@ -29,7 +29,7 @@ export type ContractVerificationReport = {
   commands: ContractCommandResult[];
 };
 
-type OutputSource = "architecture" | "verification" | "property" | "chaos";
+type OutputSource = "architecture" | "verification" | "property" | "chaos" | "runtime-governance";
 
 type SectionCheck = {
   description: string;
@@ -323,6 +323,27 @@ const SECTION_SPECS: SectionSpec[] = [
       },
     ],
   },
+  {
+    id: 15,
+    name: "Runtime Governance",
+    checks: [
+      {
+        description: "runtime governance verification passes",
+        source: "runtime-governance",
+        pattern: /PASS runtime governance verification/,
+      },
+      {
+        description: "execute blocked in observe-only",
+        source: "runtime-governance",
+        pattern: /execute-blocked-in-observe-only: PASS/,
+      },
+      {
+        description: "ci honors runtime gating",
+        source: "runtime-governance",
+        pattern: /ci-honors-runtime-gating: PASS/,
+      },
+    ],
+  },
 ];
 
 function npmExecutable(): string {
@@ -450,7 +471,14 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
     { CHOIR_CHAOS_ITERATIONS: chaosIterations }
   );
 
-  return [build, architecture, verification, property, chaos];
+  const runtimeGovernance = runCommand(
+    "runtime-governance",
+    workspaceRoot,
+    node,
+    [path.join("out", "tests", "verification", "runtimeGovernance.js")]
+  );
+
+  return [build, architecture, verification, property, chaos, runtimeGovernance];
 }
 
 function evaluateSections(outputs: Record<OutputSource, string>): ContractSectionResult[] {
@@ -485,6 +513,7 @@ export async function runContractVerification(options: RunContractVerificationOp
     verification: commands.find((entry) => entry.id === "verification")?.output ?? "",
     property: commands.find((entry) => entry.id === "property")?.output ?? "",
     chaos: commands.find((entry) => entry.id === "chaos")?.output ?? "",
+    "runtime-governance": commands.find((entry) => entry.id === "runtime-governance")?.output ?? "",
   };
 
   const sections = evaluateSections(outputs);

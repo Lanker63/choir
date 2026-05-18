@@ -162,6 +162,35 @@ const ExecutionSchema = z.object({
     plans: z.array(PlanSchema).default([]),
 }).strict();
 
+const RuntimeModeSchema = z.enum([
+    "observe-only",
+    "simulation-only",
+    "approval-required",
+    "execution-enabled",
+    "distributed-control",
+]);
+
+const RuntimeCapabilitiesSchema = z.object({
+    preview: z.boolean().optional(),
+    simulate: z.boolean().optional(),
+    execute: z.boolean().optional(),
+    optimize: z.boolean().optional(),
+    import: z.boolean().optional(),
+    install: z.boolean().optional(),
+    update: z.boolean().optional(),
+}).strict();
+
+const RuntimeSchema = z.object({
+    mode: RuntimeModeSchema.default("execution-enabled"),
+}).strict().default({
+    mode: "execution-enabled",
+});
+
+const PackageRuntimeModeSchema = z.object({
+    mode: RuntimeModeSchema.optional(),
+    capabilities: RuntimeCapabilitiesSchema.optional(),
+}).strict();
+
 const PolicyRoleSchema = z.enum(["architect", "analyst", "conductor", "enforcer"]);
 const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"]);
 
@@ -185,6 +214,9 @@ export const ControlPlaneSchema = z.object({
         }).strict().optional()
     }).strict(),
     execution: ExecutionSchema.default({ plans: [] }),
+    runtime: RuntimeSchema.optional(),
+    capabilities: RuntimeCapabilitiesSchema.optional(),
+    packageModes: z.record(z.string().min(1), PackageRuntimeModeSchema).optional(),
 }).strict().superRefine((control, context) => {
     const planIdToIndexes = new Map<string, number[]>();
 
@@ -206,6 +238,26 @@ export const ControlPlaneSchema = z.object({
                 message: `Duplicate plan id \"${planId}\"`,
                 path: ["execution", "plans", planIndex, "id"],
             });
+        }
+    }
+
+    if (control.packageModes) {
+        for (const [packageName, packageMode] of Object.entries(control.packageModes)) {
+            if (packageName.trim().length === 0) {
+                context.addIssue({
+                    code: "custom",
+                    message: "packageModes keys must be non-empty",
+                    path: ["packageModes"],
+                });
+            }
+
+            if (!packageMode.mode && !packageMode.capabilities) {
+                context.addIssue({
+                    code: "custom",
+                    message: `Package mode \"${packageName}\" must define mode and/or capabilities`,
+                    path: ["packageModes", packageName],
+                });
+            }
         }
     }
 });

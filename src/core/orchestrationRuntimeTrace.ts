@@ -25,6 +25,7 @@ export type OrchestrationReplaySummary = {
   strategySelection: boolean;
   orchestrationDag: boolean;
   simulationContract: boolean;
+  runtimeGovernance?: boolean;
   verified: boolean;
 };
 

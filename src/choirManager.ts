@@ -247,6 +247,9 @@ export function createDefaultControlPlane(): ControlPlane {
         },
         execution: {
             plans: []
+        },
+        runtime: {
+            mode: "execution-enabled",
         }
     };
 }

@@ -60,6 +60,16 @@ policy:
   rules: []
 execution:
   plans: []
+runtime:
+  mode: execution-enabled
+capabilities:
+  preview: true
+  simulate: true
+  execute: true
+  optimize: true
+  import: true
+  install: true
+  update: true
 ```
 
 ## Core Model
@@ -70,6 +80,7 @@ execution:
 
 Policy merge order is deterministic: org -> repo -> environment.
 Parent deny cannot be bypassed.
+Runtime governance order is deterministic: runtime -> policy -> approval -> execution.
 
 ## Main Commands
 
@@ -151,6 +162,7 @@ Additional commands:
   - `verify --contracts` reports a runtime contract subset in target repos; full source harness contract checks remain source-repo CI concerns
   - npm run verify:simulation
   - npm run verify:execution
+  - npm run verify:runtime-governance
   - npm run verify:full
   - npm run verify:libraries
 
@@ -191,6 +203,54 @@ Hard runtime guarantees for libraries:
 - integrity-hash enforcement for replay safety
 - capability graph persistence at `.choir/capability-graph.json`
 - replay verification fails closed on lock/hash drift
+
+## Runtime Governance
+
+Runtime modes:
+
+- observe-only
+- simulation-only
+- approval-required
+- execution-enabled
+- distributed-control
+
+Capability gates:
+
+- preview
+- simulate
+- execute
+- optimize
+- import
+- install
+- update
+
+Example:
+
+```yaml
+runtime:
+  mode: observe-only
+
+capabilities:
+  preview: true
+  simulate: true
+  execute: false
+  optimize: true
+  import: true
+  install: false
+  update: false
+
+packageModes:
+  payments:
+    mode: approval-required
+  playground:
+    mode: execution-enabled
+```
+
+Runtime governance decisions are persisted in orchestration traces and diagnostics metadata under runtimeGovernance.
+
+In approval-required mode, each new preview invalidates any prior approval bound to that preview hash, so execute requires a fresh approval grant for the current preview cycle.
+
+When execute is blocked for approval, runtime emits both preview hash context and a pendingId; approve accepts either pending id or preview hash.
 
 ## DSL Grammar (Compact)
 

@@ -26,9 +26,10 @@ import {
   TransactionEnforcer,
   TransactionPipeline,
 } from "./scheduler.js";
-import { hasApprovalForDiff, listPendingApprovals, readStatePlane } from "./state.js";
+import { hasApprovalForDiff, hasApprovalForPreview, listPendingApprovals, readStatePlane } from "./state.js";
 import { Diagnostic } from "./types.js";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../schema.js";
+import { evaluateRuntimeGovernance } from "./runtimeGovernance.js";
 
 export type PipelineStage =
   | "source"
@@ -831,6 +832,17 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
       const currentExecutionControl = expectValue(executionControl, "Execute stage requires plan stage output");
       const currentPlan = expectValue(planned, "Execute stage requires plan stage output");
 
+      const runtimeGovernance = evaluateRuntimeGovernance({
+        controlPlane: currentExecutionControl,
+        capability: "execute",
+      });
+      if (runtimeGovernance.decision === "deny") {
+        failStage(
+          "execute",
+          `runtime-governance blocked execute (mode=${runtimeGovernance.mode}, reason=${runtimeGovernance.reason})`
+        );
+      }
+
       if (!preview) {
         preview = await generateExecutionPreview(currentPlan, {
           root: options.root,
@@ -847,6 +859,13 @@ export async function runCI(options: RunCIOptions): Promise<CIRunResult> {
 
       if (recomputedPreview.hash !== preview.hash) {
         failStage("execute", "Preview hash mismatch. Workspace or control plane changed; rerun preview before execute.");
+      }
+
+      if (runtimeGovernance.decision === "require-approval" && !hasApprovalForPreview(options.root, preview.hash)) {
+        failStage(
+          "execute",
+          `runtime-governance approval missing for previewHash=${preview.hash}`
+        );
       }
 
       const built = buildExecutionPlan([currentPlan]);

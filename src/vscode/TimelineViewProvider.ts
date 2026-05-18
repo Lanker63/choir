@@ -11,6 +11,7 @@ type TimelineProjection = {
   stateInspector: ProductSnapshot["stateInspector"];
   stateDiff?: ProductSnapshot["stateDiff"];
   replayTrace?: ProductSnapshot["replayTrace"];
+  runtimeGovernance?: ProductSnapshot["runtimeGovernance"];
 };
 
 type TimelineOutboundMessage =
@@ -138,6 +139,7 @@ export class TimelineViewProvider {
       stateInspector: snapshot.stateInspector,
       ...(snapshot.stateDiff ? { stateDiff: snapshot.stateDiff } : {}),
       ...(snapshot.replayTrace ? { replayTrace: snapshot.replayTrace } : {}),
+      ...(snapshot.runtimeGovernance ? { runtimeGovernance: snapshot.runtimeGovernance } : {}),
     };
   }
 
@@ -294,6 +296,8 @@ export class TimelineViewProvider {
       <pre id="diff"></pre>
       <h3>Replay Trace</h3>
       <pre id="trace"></pre>
+      <h3>Runtime Governance</h3>
+      <pre id="runtimeGovernance"></pre>
     </section>
   </div>
   <script nonce="${nonce}">
@@ -304,6 +308,7 @@ export class TimelineViewProvider {
     const inspector = document.getElementById('inspector');
     const diff = document.getElementById('diff');
     const trace = document.getElementById('trace');
+    const runtimeGovernance = document.getElementById('runtimeGovernance');
     const statusLine = document.getElementById('statusLine');
 
     function post(message) { vscode.postMessage(message); }
@@ -332,6 +337,7 @@ export class TimelineViewProvider {
       inspector.textContent = JSON.stringify(model.stateInspector, null, 2);
       diff.textContent = JSON.stringify(model.stateDiff ?? { patches: [] }, null, 2);
       trace.textContent = JSON.stringify(model.replayTrace ?? {}, null, 2);
+      runtimeGovernance.textContent = JSON.stringify(model.runtimeGovernance ?? {}, null, 2);
     }
 
     document.getElementById('refreshBtn').addEventListener('click', () => post({ type: 'REQUEST_STATE' }));

@@ -201,6 +201,19 @@ function renderDashboard(): string {
     ? snapshot.production.slos.map((slo) => `<li>${escapeHtml(slo.name)}: ${slo.actual.toFixed(2)} / ${slo.target.toFixed(2)} (${slo.met ? "met" : "miss"})</li>`).join("")
     : "<li>No SLO evaluation available.</li>";
 
+  const runtimeGovernance = snapshot.runtimeGovernance;
+  const runtimeCapabilities = runtimeGovernance
+    ? Object.entries(runtimeGovernance.effectiveCapabilities)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([capability, enabled]) => `<li>${escapeHtml(capability)}: ${enabled ? "enabled" : "disabled"}</li>`)
+      .join("")
+    : "<li>No runtime governance trace available yet.</li>";
+  const runtimePackageDecisions = runtimeGovernance && runtimeGovernance.packageDecisions.length > 0
+    ? runtimeGovernance.packageDecisions
+      .map((entry) => `<li>${escapeHtml(entry.packageName)}: mode=${escapeHtml(entry.mode)} decision=${escapeHtml(entry.decision)}</li>`)
+      .join("")
+    : "<li>No package-level governance decisions recorded.</li>";
+
   return `
     <section class="grid">
       <article class="card">
@@ -234,6 +247,17 @@ function renderDashboard(): string {
       <article class="card wide">
         <div class="muted">Production SLOs</div>
         <ul class="list">${productionSlos}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Runtime Governance</div>
+        ${runtimeGovernance
+      ? `<p>mode=${escapeHtml(runtimeGovernance.mode)} | capability=${escapeHtml(runtimeGovernance.capability)} | decision=${escapeHtml(runtimeGovernance.decision)} | reason=${escapeHtml(runtimeGovernance.reason)}</p>`
+      : "<p>No runtime governance record yet.</p>"}
+        <ul class="list">${runtimeCapabilities}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Package Governance Decisions</div>
+        <ul class="list">${runtimePackageDecisions}</ul>
       </article>
     </section>
   `;
@@ -394,6 +418,16 @@ function renderTimelineView(): string {
       </article>
     `
     : "";
+  const runtimeGovernance = snapshot.runtimeGovernance;
+  const runtimeGovernanceBlock = runtimeGovernance
+    ? `
+      <article class="card full">
+        <div class="muted">Runtime Governance Trace</div>
+        <p>mode=${escapeHtml(runtimeGovernance.mode)} | capability=${escapeHtml(runtimeGovernance.capability)} | decision=${escapeHtml(runtimeGovernance.decision)} | reason=${escapeHtml(runtimeGovernance.reason)}</p>
+        <p class="mono">governanceHash=${escapeHtml(runtimeGovernance.governanceHash)}</p>
+      </article>
+    `
+    : "";
 
   return `
     <section class="grid">
@@ -445,6 +479,7 @@ function renderTimelineView(): string {
       </article>
 
       ${replayTrace}
+      ${runtimeGovernanceBlock}
     </section>
   `;
 }

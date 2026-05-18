@@ -90,6 +90,10 @@ export class SimulationOrchestrationError extends Error {
 }
 
 function mapStage(stage: PipelineStageName): SimulationOrchestrationStageName {
+  if (stage === "runtime-governance") {
+    return "state";
+  }
+
   if (stage === "compile" || stage === "structural-validation" || stage === "semantic-validation" || stage === "cross-node-validation") {
     return "compile";
   }

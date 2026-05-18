@@ -2341,6 +2341,34 @@ export function hasApprovalForPreview(root: string, previewHash: string): boolea
   return state.approvals.some((entry) => (entry.previewHash ?? entry.diffHash) === previewHash);
 }
 
+export function revokeApprovalForPreview(
+  root: string,
+  previewHash: string
+): { statePath: string; state: StatePlane; revoked: boolean } {
+  const current = readStatePlane(root) ?? createEmptyStatePlane();
+  const nextApprovals = current.approvals.filter((entry) => (entry.previewHash ?? entry.diffHash) !== previewHash);
+  const revoked = nextApprovals.length !== current.approvals.length;
+  if (!revoked) {
+    return {
+      statePath: getStatePath(root),
+      state: current,
+      revoked: false,
+    };
+  }
+
+  const nextState = materializeStatePlane({
+    ...current,
+    approvals: nextApprovals,
+  });
+
+  const statePath = persistStatePlane(root, nextState, { action: "revoke-preview-approval" });
+  return {
+    statePath,
+    state: nextState,
+    revoked: true,
+  };
+}
+
 export function listPendingApprovals(root: string): PendingApprovalRecord[] {
   const state = readStatePlane(root) ?? createEmptyStatePlane();
   return [...state.pendingApprovals];
@@ -2389,7 +2417,17 @@ export function approvePendingDiff(
   timestamp: string
 ): { statePath: string; state: StatePlane; approved?: ApprovalRecord } {
   const current = readStatePlane(root) ?? createEmptyStatePlane();
-  const pending = current.pendingApprovals.find((entry) => entry.id === id);
+  const pending = current.pendingApprovals.find((entry) => {
+    if (entry.id === id) {
+      return true;
+    }
+
+    if (entry.diffHash === id) {
+      return true;
+    }
+
+    return entry.previewHash === id;
+  });
   if (!pending) {
     return {
       statePath: getStatePath(root),

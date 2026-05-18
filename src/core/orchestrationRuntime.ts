@@ -51,6 +51,7 @@ import {
   hasApprovalForDiff,
   hasApprovalForPreview,
   hashState as hashStatePlane,
+  revokeApprovalForPreview,
   readStatePlane,
   type StatePlane,
   updateExecutionState,
@@ -73,6 +74,12 @@ import {
   type OrchestrationSimulationContract,
   type OrchestrationTraceRecord,
 } from "./orchestrationRuntimeTrace.js";
+import {
+  capabilityForPipelineMode,
+  evaluateRuntimeGovernance,
+  packageNamesFromPlanTaskUnits,
+  type RuntimeGovernanceEvaluation,
+} from "./runtimeGovernance.js";
 import type { Diagnostic } from "./types.js";
 
 export { synthesizeCandidatePlans, rankCandidatePlans };
@@ -84,6 +91,7 @@ export type PipelineMode =
   | "optimize";
 
 export type PipelineStageName =
+  | "runtime-governance"
   | "analyze"
   | "validate"
   | "synthesize"
@@ -171,6 +179,7 @@ export type PipelineReplayVerification = {
   strategySelection: boolean;
   orchestrationDag: boolean;
   simulationContract: boolean;
+  runtimeGovernance: boolean;
   verified: boolean;
 };
 
@@ -573,6 +582,7 @@ function diagnosticsCategoryForMode(mode: PipelineMode): PipelineDiagnosticsCate
 function stageOrderForMode(mode: PipelineMode): PipelineStageName[] {
   if (mode === "execute") {
     return [
+      "runtime-governance",
       "analyze",
       "validate",
       "synthesize",
@@ -598,6 +608,7 @@ function stageOrderForMode(mode: PipelineMode): PipelineStageName[] {
   }
 
   return [
+    "runtime-governance",
     "compile",
     "structural-validation",
     "semantic-validation",
@@ -1415,11 +1426,13 @@ export async function generateSimulationContract(
 export async function verifyReplayDeterminism(input: {
   root: string;
   command: string;
+  mode: PipelineMode;
   controlPlane: ControlPlane;
   targetGoal?: string;
   selected: OptimizedPlanResult;
   simulationContract: PipelineSimulationContract;
   executionPolicies?: GlobalCompiledPolicy[];
+  runtimeGovernanceHash: string;
 }): Promise<{
   replayVerification: PipelineReplayVerification;
   replayOptimized: OptimizedPlanResult;
@@ -1455,13 +1468,20 @@ export async function verifyReplayDeterminism(input: {
     && replaySimulation.simulationContract.preWorkspaceSnapshotHash === input.simulationContract.preWorkspaceSnapshotHash
     && replaySimulation.simulationContract.postWorkspaceSnapshotHash === input.simulationContract.postWorkspaceSnapshotHash;
 
+  const replayRuntimeGovernance = evaluateRuntimeGovernance({
+    controlPlane: input.controlPlane,
+    capability: capabilityForPipelineMode(input.mode),
+  });
+  const runtimeGovernance = replayRuntimeGovernance.governanceHash === input.runtimeGovernanceHash;
+
   const replayVerification: PipelineReplayVerification = {
     candidateSynthesis,
     strategyRanking,
     strategySelection,
     orchestrationDag,
     simulationContract,
-    verified: candidateSynthesis && strategyRanking && strategySelection && orchestrationDag && simulationContract,
+    runtimeGovernance,
+    verified: candidateSynthesis && strategyRanking && strategySelection && orchestrationDag && simulationContract && runtimeGovernance,
   };
 
   return {
@@ -1502,6 +1522,7 @@ export async function runOrchestrationPipeline(
     strategySelection: false,
     orchestrationDag: false,
     simulationContract: false,
+    runtimeGovernance: false,
     verified: false,
   };
   let policy: PipelinePolicy = {
@@ -1515,6 +1536,7 @@ export async function runOrchestrationPipeline(
     required: false,
     approved: true,
   };
+  let runtimeGovernance: RuntimeGovernanceEvaluation | undefined;
 
   const markSuccess = (stage: PipelineStageName, detail: string): void => {
     stageResults.push({ stage, status: "success", detail });
@@ -1557,6 +1579,22 @@ export async function runOrchestrationPipeline(
     }
 
     const activeControlPlane = controlPlane;
+
+    runtimeGovernance = evaluateRuntimeGovernance({
+      controlPlane: activeControlPlane,
+      capability: capabilityForPipelineMode(mode),
+    });
+    if (runtimeGovernance.decision === "deny") {
+      return fail(
+        "runtime-governance",
+        `runtime-governance: status=blocked capability=${runtimeGovernance.capability} mode=${runtimeGovernance.mode} decision=${runtimeGovernance.decision} reason=${runtimeGovernance.reason}`
+      );
+    }
+
+    markSuccess(
+      "runtime-governance",
+      `Runtime governance decision=${runtimeGovernance.decision} capability=${runtimeGovernance.capability} mode=${runtimeGovernance.mode} (reason=${runtimeGovernance.reason}).`
+    );
 
     try {
       compileInput(intent.command, activeControlPlane);
@@ -1643,6 +1681,21 @@ export async function runOrchestrationPipeline(
     }
 
     selectedExecutionPlanForTrace = selectedExecutionPlan;
+    const selectedPlanPackageNames = packageNamesFromPlanTaskUnits(
+      selectedExecutionPlan.tasks.map((task) => deriveSimulationUnit(task))
+    );
+    runtimeGovernance = evaluateRuntimeGovernance({
+      controlPlane: activeControlPlane,
+      capability: capabilityForPipelineMode(mode),
+      packageNames: selectedPlanPackageNames,
+    });
+    if (runtimeGovernance.decision === "deny") {
+      return fail(
+        "runtime-governance",
+        `runtime-governance: status=blocked capability=${runtimeGovernance.capability} mode=${runtimeGovernance.mode} decision=${runtimeGovernance.decision} reason=${runtimeGovernance.reason}`
+      );
+    }
+
     const selectedExecutionControl = mergeExecutionPlan(activeControlPlane, selectedExecutionPlan);
     const diffs = computeDiff(
       controlPlaneToChoirConfig(activeControlPlane),
@@ -1699,11 +1752,13 @@ export async function runOrchestrationPipeline(
     const replayOutcome = await verifyReplayDeterminism({
       root: intent.root,
       command: intent.command,
+      mode,
       controlPlane: activeControlPlane,
       ...(intent.targetGoal ? { targetGoal: intent.targetGoal } : {}),
       selected: optimized,
       simulationContract,
       executionPolicies,
+      runtimeGovernanceHash: runtimeGovernance.governanceHash,
     });
 
     replayVerification = replayOutcome.replayVerification;
@@ -1740,7 +1795,13 @@ export async function runOrchestrationPipeline(
       );
     }
 
-    if (policy.requiresApproval) {
+    const runtimeRequiresApproval = runtimeGovernance?.decision === "require-approval";
+
+    if (runtimeGovernance?.mode === "approval-required" && mode === "preview") {
+      revokeApprovalForPreview(intent.root, selected.previewHash);
+    }
+
+    if (policy.requiresApproval || runtimeRequiresApproval) {
       const dslApproved = !evaluation.result.requiresApproval
         || hasApprovalForPreview(intent.root, selected.previewHash)
         || hasApprovalForDiff(intent.root, policy.diffHash);
@@ -1754,15 +1815,22 @@ export async function runOrchestrationPipeline(
         : undefined;
       const executionApproved = !executionPolicyResult.requiresApproval
         || (executionApprovalPreviewHash ? hasApprovalForPreview(intent.root, executionApprovalPreviewHash) : false);
-      const approved = dslApproved && executionApproved;
+      const runtimeApproved = !runtimeRequiresApproval || hasApprovalForPreview(intent.root, selected.previewHash);
+      const approved = dslApproved && executionApproved && runtimeApproved;
 
       let pendingId: string | undefined;
-      if (!approved && mode === "preview" && intent.recordPendingApproval !== false) {
+      const shouldRecordPendingApproval = (mode === "preview" || mode === "execute")
+        && intent.recordPendingApproval !== false;
+      if (!approved && shouldRecordPendingApproval) {
         if (evaluation.result.requiresApproval && !dslApproved) {
           pendingId = upsertPendingPreviewApproval(intent.root, selected.previewHash, intent.command).pendingId;
         }
         if (executionApprovalPreviewHash && !executionApproved) {
           const pending = upsertPendingPreviewApproval(intent.root, executionApprovalPreviewHash, intent.command).pendingId;
+          pendingId = pendingId ?? pending;
+        }
+        if (runtimeRequiresApproval && !runtimeApproved) {
+          const pending = upsertPendingPreviewApproval(intent.root, selected.previewHash, intent.command).pendingId;
           pendingId = pendingId ?? pending;
         }
       }
@@ -1777,8 +1845,12 @@ export async function runOrchestrationPipeline(
         const missingHashes = [
           ...(evaluation.result.requiresApproval && !dslApproved ? [selected.previewHash] : []),
           ...(executionApprovalPreviewHash && !executionApproved ? [executionApprovalPreviewHash] : []),
+          ...(runtimeRequiresApproval && !runtimeApproved ? [selected.previewHash] : []),
         ];
-        return fail("approval", `Execution requires approval for previewHash=${missingHashes.join(", ") || selected.previewHash}.`);
+        return fail(
+          "approval",
+          `Execution requires approval for previewHash=${missingHashes.join(", ") || selected.previewHash}${pendingId ? ` pendingId=${pendingId}` : ""}.`
+        );
       }
     }
 
@@ -2147,6 +2219,19 @@ export async function runOrchestrationPipeline(
       })),
       stageResults,
       modeMetadata: {
+        ...(runtimeGovernance
+          ? {
+            runtimeGovernance: {
+              mode: runtimeGovernance.mode,
+              capability: runtimeGovernance.capability,
+              decision: runtimeGovernance.decision,
+              reason: runtimeGovernance.reason,
+              governanceHash: runtimeGovernance.governanceHash,
+              effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
+              packageDecisions: runtimeGovernance.packageDecisions,
+            },
+          }
+          : {}),
         policyDecision: policy.decision,
         approvalRequired: approval.required,
         approvalSatisfied: approval.approved,
@@ -2193,6 +2278,19 @@ export async function runOrchestrationPipeline(
       metadata: {
         traceId: trace.id,
         mode,
+        ...(runtimeGovernance
+          ? {
+            runtimeGovernance: {
+              mode: runtimeGovernance.mode,
+              capability: runtimeGovernance.capability,
+              decision: runtimeGovernance.decision,
+              reason: runtimeGovernance.reason,
+              governanceHash: runtimeGovernance.governanceHash,
+              effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
+              packageDecisions: runtimeGovernance.packageDecisions,
+            },
+          }
+          : {}),
         selectedPlanId,
         selectedStrategyType,
         simulationContract,
@@ -2293,6 +2391,19 @@ export async function runOrchestrationPipeline(
       candidates: [],
       stageResults,
       modeMetadata: {
+        ...(runtimeGovernance
+          ? {
+            runtimeGovernance: {
+              mode: runtimeGovernance.mode,
+              capability: runtimeGovernance.capability,
+              decision: runtimeGovernance.decision,
+              reason: runtimeGovernance.reason,
+              governanceHash: runtimeGovernance.governanceHash,
+              effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
+              packageDecisions: runtimeGovernance.packageDecisions,
+            },
+          }
+          : {}),
         orchestration: {
           status: "failed",
           stage: failedStage,
@@ -2314,6 +2425,19 @@ export async function runOrchestrationPipeline(
       metadata: {
         traceId: trace.id,
         mode,
+        ...(runtimeGovernance
+          ? {
+            runtimeGovernance: {
+              mode: runtimeGovernance.mode,
+              capability: runtimeGovernance.capability,
+              decision: runtimeGovernance.decision,
+              reason: runtimeGovernance.reason,
+              governanceHash: runtimeGovernance.governanceHash,
+              effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
+              packageDecisions: runtimeGovernance.packageDecisions,
+            },
+          }
+          : {}),
         failedStage,
         orchestration: {
           status: "failed",

@@ -154,6 +154,19 @@ Hard constraints:
 
 Imported libraries must participate in policy evaluation order (`org -> repo -> workspace -> library`) and may not bypass deny precedence.
 
+## Runtime Governance Contract
+
+- Runtime governance is an execution control plane, not a UI preference toggle.
+- Capability gates must be evaluated in runtime before orchestration execution/mutation stages.
+- Runtime decision order is deterministic and fail-closed: runtime -> policy -> approval -> execution.
+- Runtime modes and capability maps must participate in replay determinism checks.
+- Runtime gates must be command-consistent across preview, simulate, optimize, execute, import, library install, and library update.
+- Runtime mode defaults must derive deterministic capability maps.
+- Package-level runtime modes are allowed for monorepo containment and must aggregate with global runtime gates using deny > require-approval > allow precedence.
+- CI execution paths must enforce the same runtime gates used by chat and orchestration runtime.
+- In approval-required mode, preview starts a fresh approval cycle by invalidating prior approvals bound to the same preview hash.
+- When execute is blocked by approval gating, a pending approval record must be persisted and surfaced for explicit approve/reject actions.
+
 ## Library Distribution Contract
 
 - registries are deterministic and explicit via control-plane `registries` configuration

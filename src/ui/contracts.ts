@@ -181,6 +181,21 @@ export type TimelineReplayTrace = {
   };
 };
 
+export type RuntimeGovernanceView = {
+  mode: string;
+  capability: string;
+  decision: "allow" | "deny" | "require-approval";
+  reason: string;
+  governanceHash: string;
+  effectiveCapabilities: Record<string, boolean>;
+  packageDecisions: Array<{
+    packageName: string;
+    mode: string;
+    decision: "allow" | "deny" | "require-approval";
+    reason: string;
+  }>;
+};
+
 export type WorkflowState = {
   current: WorkflowStep;
   completed: WorkflowStep[];
@@ -208,6 +223,7 @@ export type ProductSnapshot = {
   stateInspector: StateInspector;
   stateDiff?: StateDiff;
   replayTrace?: TimelineReplayTrace;
+  runtimeGovernance?: RuntimeGovernanceView;
 };
 
 export type ProductActionRequest =

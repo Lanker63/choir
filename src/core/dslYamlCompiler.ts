@@ -61,6 +61,11 @@ export type ChoirConfig = {
   execution: {
     plans: Plan[];
   };
+  runtime: {
+    mode: NonNullable<ControlPlane["runtime"]>["mode"];
+  };
+  capabilities?: ControlPlane["capabilities"];
+  packageModes?: ControlPlane["packageModes"];
 };
 
 export type CompilationChange = {
@@ -290,6 +295,23 @@ function canonicalizePlan(plan: Plan): Plan {
 }
 
 export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
+  const packageModeEntries = Object.entries(config.packageModes ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([packageName, value]) => ([
+      packageName,
+      {
+        ...(value.mode ? { mode: value.mode } : {}),
+        ...(value.capabilities
+          ? {
+            capabilities: Object.fromEntries(
+              Object.entries(value.capabilities)
+                .sort(([left], [right]) => left.localeCompare(right))
+            ) as NonNullable<ChoirConfig["packageModes"]>[string]["capabilities"],
+          }
+          : {}),
+      },
+    ] as const));
+
   return {
     version: config.version,
     mission: (config.mission ?? "").trim(),
@@ -308,6 +330,20 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
         .map((plan) => canonicalizePlan(plan))
         .sort((left, right) => left.id.localeCompare(right.id)),
     },
+    runtime: {
+      mode: config.runtime.mode,
+    },
+    ...(config.capabilities
+      ? {
+        capabilities: Object.fromEntries(
+          Object.entries(config.capabilities)
+            .sort(([left], [right]) => left.localeCompare(right))
+        ) as ChoirConfig["capabilities"],
+      }
+      : {}),
+    ...(packageModeEntries.length > 0
+      ? { packageModes: Object.fromEntries(packageModeEntries) }
+      : {}),
   };
 }
 
@@ -328,6 +364,11 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     execution: {
       plans: control.execution.plans,
     },
+    runtime: {
+      mode: control.runtime?.mode ?? "execution-enabled",
+    },
+    ...(control.capabilities ? { capabilities: control.capabilities } : {}),
+    ...(control.packageModes ? { packageModes: control.packageModes } : {}),
   });
 }
 
@@ -349,6 +390,11 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     execution: {
       plans: canonical.execution.plans,
     },
+    runtime: {
+      mode: canonical.runtime.mode,
+    },
+    ...(canonical.capabilities ? { capabilities: canonical.capabilities } : {}),
+    ...(canonical.packageModes ? { packageModes: canonical.packageModes } : {}),
   });
 }
 
