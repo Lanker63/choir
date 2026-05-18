@@ -61,7 +61,7 @@ export type ChoirConfig = {
   execution: {
     plans: Plan[];
   };
-  runtime: {
+  runtime?: {
     mode: NonNullable<ControlPlane["runtime"]>["mode"];
   };
   capabilities?: ControlPlane["capabilities"];
@@ -343,9 +343,13 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
         .map((plan) => canonicalizePlan(plan))
         .sort((left, right) => left.id.localeCompare(right.id)),
     },
-    runtime: {
-      mode: config.runtime.mode,
-    },
+    ...(config.runtime
+      ? {
+        runtime: {
+          mode: config.runtime.mode,
+        },
+      }
+      : {}),
     ...(config.capabilities
       ? {
         capabilities: Object.fromEntries(
@@ -381,9 +385,7 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     execution: {
       plans: control.execution.plans,
     },
-    runtime: {
-      mode: control.runtime?.mode ?? "execution-enabled",
-    },
+    ...(control.runtime ? { runtime: { mode: control.runtime.mode } } : {}),
     ...(control.capabilities ? { capabilities: control.capabilities } : {}),
     ...(control.packageModes ? { packageModes: control.packageModes } : {}),
     ...(control.strategicIntent ? { strategicIntent: control.strategicIntent } : {}),
@@ -411,9 +413,7 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     execution: {
       plans: canonical.execution.plans,
     },
-    runtime: {
-      mode: canonical.runtime.mode,
-    },
+    ...(canonical.runtime ? { runtime: { mode: canonical.runtime.mode } } : {}),
     ...(canonical.capabilities ? { capabilities: canonical.capabilities } : {}),
     ...(canonical.packageModes ? { packageModes: canonical.packageModes } : {}),
     ...(canonical.strategicIntent ? { strategicIntent: canonical.strategicIntent } : {}),
@@ -638,6 +638,16 @@ function compileActionToYAML(
   return next;
 }
 
+function isExecuteOnlyAst(ast: AST): boolean {
+  if (ast.type === "execute") {
+    return true;
+  }
+
+  return ast.type === "sequence"
+    && ast.actions.length === 1
+    && ast.actions[0]?.type === "execute";
+}
+
 export function compileASTToYAML(
   ast: AST,
   config: ChoirConfig,
@@ -683,6 +693,14 @@ export function serializeYAML(config: ChoirConfig): string {
       rules: [...control.policy.rules],
       ...(control.policy.priorityOverrides ? { priorityOverrides: control.policy.priorityOverrides } : {}),
     },
+    ...(control.runtime
+      ? {
+        runtime: {
+          mode: control.runtime.mode,
+        },
+      }
+      : {}),
+    ...(control.packageModes ? { packageModes: control.packageModes } : {}),
     execution: {
       plans: [...control.execution.plans]
         .map((plan) => canonicalizePlan(plan))
@@ -728,10 +746,23 @@ export function compileDSL(
 
   const beforeHash = hashConfig(baseConfig);
   const afterHash = hashConfig(controlPlaneToChoirConfig(updatedControl));
+  const changed = beforeHash !== afterHash;
+
+  const synthesizedRuntimeControl = !changed
+    && isExecuteOnlyAst(pipeline.normalizedAst)
+    && !updatedControl.runtime
+    && !updatedControl.packageModes
+    ? {
+      ...updatedControl,
+      runtime: {
+        mode: "execution-enabled" as const,
+      },
+    }
+    : updatedControl;
 
   return {
-    updatedControlPlane: updatedControl,
-    changed: beforeHash !== afterHash,
+    updatedControlPlane: synthesizedRuntimeControl,
+    changed,
     trace: {
       input,
       ast: pipeline.normalizedAst,

@@ -23,7 +23,7 @@ export type StrategicIntent = {
 
 export type ResolvedStrategicContext = {
   status: "resolved" | "failed";
-  reason?: "ambiguous-domain-resolution" | "missing-domain-resolution";
+  reason?: "ambiguous-domain-resolution";
   packageNames: string[];
   domains: string[];
   inheritanceChain: string[];
@@ -194,30 +194,9 @@ export function resolveStrategicContext(input: {
   const domainSet = new Set<string>();
   for (const packageName of packageNames) {
     const domain = packageDomain(control, packageName);
-    if (!domain) {
-      return {
-        status: "failed",
-        reason: "missing-domain-resolution",
-        packageNames,
-        domains: [],
-        inheritanceChain: [...globalChain],
-        intent: globalIntent,
-        hash: deterministicHash({
-          status: "failed",
-          reason: "missing-domain-resolution",
-          packageNames,
-          inheritanceChain: globalChain,
-        }),
-        explainability: {
-          priorities: [...globalIntent.priorities],
-          optimizationGoals: [...globalIntent.optimizationGoals],
-          rolloutPreferences: [...globalIntent.rolloutPreferences],
-          governanceIntensity: globalIntent.governanceIntensity,
-        },
-      };
+    if (domain) {
+      domainSet.add(domain);
     }
-
-    domainSet.add(domain);
   }
 
   const domains = sortedUnique([...domainSet]);
@@ -245,11 +224,11 @@ export function resolveStrategicContext(input: {
     };
   }
 
-  const domain = domains[0] as string;
-  const domainConfig = control.domains?.[domain];
+  const domain = domains.length === 1 ? domains[0] as string : undefined;
+  const domainConfig = domain ? control.domains?.[domain] : undefined;
 
   let effectiveIntent = mergeIntent(globalIntent, domainConfig?.strategicIntent);
-  const chain = [...globalChain, `domain:${domain}`];
+  const chain = domain ? [...globalChain, `domain:${domain}`] : [...globalChain];
 
   for (const packageName of packageNames) {
     const packageConfig = control.packages?.[packageName];
@@ -259,7 +238,11 @@ export function resolveStrategicContext(input: {
 
   const contexts = sortedUnique(Object.entries(control.contexts ?? {})
     .filter(([, context]) => {
-      if (context.domain && context.domain !== domain) {
+      if (context.domain && domain && context.domain !== domain) {
+        return false;
+      }
+
+      if (context.domain && !domain) {
         return false;
       }
 

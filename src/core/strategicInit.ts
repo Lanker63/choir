@@ -3,6 +3,7 @@ import path from "path";
 import * as YAML from "yaml";
 import type { ControlPlane } from "../schema.js";
 import { stableStringify, deterministicId } from "./deterministicCore.js";
+import { defaultCapabilitiesForMode } from "./runtimeGovernance.js";
 import { detectWorkspace, type WorkspaceConfig } from "./workspaceDetection.js";
 
 export type StrategicInitMode = "full" | "expand-domain" | "reclassify" | "recalibrate";
@@ -93,6 +94,7 @@ export type StrategicDomainModel = {
   rolloutPreferences: RolloutPreference[];
   stabilityProfile: StabilityProfile;
   governanceIntensity: GovernanceIntensity;
+  runtimeMode?: RuntimeMode;
 };
 
 export type StrategicDomainPromptDefaults = {
@@ -103,6 +105,7 @@ export type StrategicDomainPromptDefaults = {
   rolloutPreferences: RolloutPreference[];
   stabilityProfile: StabilityProfile;
   governanceIntensity: GovernanceIntensity;
+  runtimeMode: RuntimeMode;
 };
 
 export type StrategicCalibration = {
@@ -671,67 +674,74 @@ function strategicIntentFromModels(models: StrategicDomainModel[]): ControlPlane
 }
 
 function toRuntimeCapabilities(mode: RuntimeMode): ControlPlane["capabilities"] {
-  if (mode === "observe-only") {
-    return {
-      preview: true,
-      simulate: true,
-      execute: false,
-      optimize: true,
-      import: true,
-      install: false,
-      update: false,
-    };
-  }
-
-  if (mode === "simulation-only") {
-    return {
-      preview: true,
-      simulate: true,
-      execute: false,
-      optimize: true,
-      import: true,
-      install: true,
-      update: true,
-    };
-  }
-
-  return {
-    preview: true,
-    simulate: true,
-    execute: true,
-    optimize: true,
-    import: true,
-    install: true,
-    update: true,
-  };
+  return defaultCapabilitiesForMode(mode);
 }
 
 function toPackageMode(model: StrategicDomainModel): NonNullable<ControlPlane["packageModes"]>[string] {
+  if (model.runtimeMode) {
+    return {
+      mode: model.runtimeMode,
+      capabilities: toRuntimeCapabilities(model.runtimeMode),
+    };
+  }
+
   if (model.governanceIntensity === "strict" || model.riskTolerance === "low") {
+    const mode: RuntimeMode = "approval-required";
     return {
-      mode: "approval-required",
+      mode,
+      capabilities: toRuntimeCapabilities(mode),
     };
   }
 
-  if (model.governanceIntensity === "relaxed" && model.riskTolerance === "high") {
-    return {
-      mode: "execution-enabled",
-      capabilities: {
-        execute: true,
-        simulate: true,
-        preview: true,
-        optimize: true,
-      },
-    };
-  }
-
+  const mode: RuntimeMode = "execution-enabled";
   return {
-    mode: "execution-enabled",
+    mode,
+    capabilities: toRuntimeCapabilities(mode),
   };
 }
 
 function mergeUniqueSorted(left: string[] | undefined, right: string[] | undefined): string[] {
   return [...new Set([...(left ?? []), ...(right ?? [])])].sort((a, b) => a.localeCompare(b));
+}
+
+export function scopeControlPlaneRuntimeForWorkspace(
+  control: ControlPlane,
+  hasRootPackage: boolean
+): ControlPlane {
+  if (hasRootPackage) {
+    return control;
+  }
+
+  const { runtime: _runtime, capabilities: _capabilities, ...rest } = control;
+  return rest as ControlPlane;
+}
+
+function defaultRuntimeModeFromPosture(
+  governanceIntensity: GovernanceIntensity,
+  riskTolerance: RiskTolerance
+): RuntimeMode {
+  if (governanceIntensity === "strict" || riskTolerance === "low") {
+    return "approval-required";
+  }
+
+  return "execution-enabled";
+}
+
+function uniqueExistingDomainRuntimeMode(
+  domain: StrategicDomainDraft,
+  currentControl?: ControlPlane
+): RuntimeMode | undefined {
+  const modes = [...new Set(
+    domain.packages
+      .map((packagePath) => currentControl?.packageModes?.[packagePath]?.mode)
+      .filter((mode): mode is RuntimeMode => typeof mode === "string")
+  )].sort((left, right) => left.localeCompare(right));
+
+  if (modes.length === 1) {
+    return modes[0];
+  }
+
+  return undefined;
 }
 
 export function seedStrategicDomainPromptDefaults(
@@ -765,6 +775,11 @@ export function seedStrategicDomainPromptDefaults(
     rolloutPreferences: rolloutPreferences.sort((left, right) => left.localeCompare(right)),
     stabilityProfile: currentIntent?.stabilityProfile ?? domain.inferred.stabilityProfile,
     governanceIntensity: currentIntent?.governanceIntensity ?? domain.inferred.governanceIntensity,
+    runtimeMode: uniqueExistingDomainRuntimeMode(domain, currentControl)
+      ?? defaultRuntimeModeFromPosture(
+        currentIntent?.governanceIntensity ?? domain.inferred.governanceIntensity,
+        currentIntent?.riskTolerance ?? domain.inferred.riskTolerance,
+      ),
   };
 }
 
@@ -772,6 +787,7 @@ export function synthesizeStrategicControlPlane(
   existing: ControlPlane,
   input: StrategicInitSynthesisInput
 ): StrategicInitSynthesisResult {
+  const hasRootPackage = fs.existsSync(path.join(input.discovery.workspace.root, "package.json"));
   const packageDomainMap = new Map<string, string>();
   for (const domain of input.discovery.domains) {
     for (const pkg of domain.packages) {
@@ -781,24 +797,6 @@ export function synthesizeStrategicControlPlane(
 
   const domainById = new Map(input.models.map((model) => [model.id, model] as const));
 
-  const discoveredDomains = Object.fromEntries(
-    input.models.map((model) => [
-      model.id,
-      {
-        mission: model.mission,
-        strategicIntent: {
-          priorities: [...model.priorities],
-          optimizationGoals: [...model.optimizationGoals],
-          riskTolerance: model.riskTolerance,
-          architecturalPosture: [],
-          rolloutPreferences: [...model.rolloutPreferences],
-          stabilityProfile: model.stabilityProfile,
-          governanceIntensity: model.governanceIntensity,
-        },
-      },
-    ])
-  );
-
   const discoveredPackages = Object.fromEntries(
     input.discovery.packages.map((pkg) => {
       const domain = packageDomainMap.get(pkg.packagePath) ?? "platform";
@@ -806,7 +804,6 @@ export function synthesizeStrategicControlPlane(
       return [
         pkg.packagePath,
         {
-          domain,
           ...(model
             ? {
               strategicIntent: {
@@ -829,28 +826,36 @@ export function synthesizeStrategicControlPlane(
     input.discovery.packages.map((pkg) => {
       const domain = packageDomainMap.get(pkg.packagePath);
       const model = domain ? domainById.get(domain) : undefined;
-      return [pkg.packagePath, model ? toPackageMode(model) : { mode: "execution-enabled" as RuntimeMode }];
+      const defaultMode: RuntimeMode = "execution-enabled";
+      return [
+        pkg.packagePath,
+        model
+          ? toPackageMode(model)
+          : {
+            mode: defaultMode,
+            capabilities: toRuntimeCapabilities(defaultMode),
+          },
+      ];
     })
   );
 
   const baseControl = input.mode === "full"
     ? {
       ...existing,
-      domains: {},
       packages: {},
       contexts: {},
       packageModes: {},
     }
     : existing;
 
-  const nextDomains = input.mode === "expand-domain"
-    ? {
-      ...(baseControl.domains ?? {}),
-      ...Object.fromEntries(
-        Object.entries(discoveredDomains).filter(([id]) => !(baseControl.domains && Object.prototype.hasOwnProperty.call(baseControl.domains, id)))
-      ),
-    }
-    : (input.mode === "recalibrate" ? (baseControl.domains ?? {}) : discoveredDomains);
+  const { domains: _domains, ...baseWithoutDomains } = baseControl;
+  const runtimeScopedBase = scopeControlPlaneRuntimeForWorkspace(baseWithoutDomains as ControlPlane, hasRootPackage);
+  const strategicScopedBase = hasRootPackage
+    ? runtimeScopedBase
+    : (() => {
+      const { strategicIntent: _strategicIntent, ...rest } = runtimeScopedBase;
+      return rest as ControlPlane;
+    })();
 
   const nextPackages = input.mode === "expand-domain"
     ? {
@@ -862,28 +867,35 @@ export function synthesizeStrategicControlPlane(
     : (input.mode === "recalibrate" ? (baseControl.packages ?? {}) : discoveredPackages);
 
   const nextControl: ControlPlane = {
-    ...baseControl,
+    ...strategicScopedBase,
     ...(input.mission && input.mission.trim().length > 0 ? { mission: input.mission.trim() } : {}),
     ...(input.vision && input.vision.trim().length > 0 ? { vision: input.vision.trim() } : {}),
-    strategicIntent: strategicIntentFromModels(input.models),
-    domains: nextDomains,
+    ...(hasRootPackage ? { strategicIntent: strategicIntentFromModels(input.models) } : {}),
     packages: nextPackages,
     contexts: {
-      ...(baseControl.contexts ?? {}),
+      ...(strategicScopedBase.contexts ?? {}),
       "workspace:root": {
         packages: input.discovery.packages.map((pkg) => pkg.packagePath).sort((left, right) => left.localeCompare(right)),
       },
     },
-    runtime: {
-      mode: input.runtimeMode,
-    },
-    capabilities: toRuntimeCapabilities(input.runtimeMode),
-    packageModes: input.mode === "recalibrate"
+    ...(hasRootPackage
       ? {
-        ...(baseControl.packageModes ?? {}),
-        ...packageModes,
+        runtime: {
+          mode: input.runtimeMode,
+        },
+        capabilities: toRuntimeCapabilities(input.runtimeMode),
       }
-      : packageModes,
+      : {}),
+    ...(!hasRootPackage
+      ? {
+        packageModes: input.mode === "recalibrate"
+          ? {
+            ...(strategicScopedBase.packageModes ?? {}),
+            ...packageModes,
+          }
+          : packageModes,
+      }
+      : {}),
   };
 
   const topologyHash = deterministicId("init-topology", {
@@ -895,7 +907,6 @@ export function synthesizeStrategicControlPlane(
   const strategicHash = deterministicId("init-strategic", {
     models: input.models,
     strategicIntent: nextControl.strategicIntent,
-    domains: nextControl.domains,
     packages: nextControl.packages,
   }, 16);
 

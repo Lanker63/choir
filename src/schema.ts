@@ -241,7 +241,7 @@ const DomainStrategicSchema = z.object({
 }).strict();
 
 const PackageStrategicSchema = z.object({
-    domain: z.string().min(1),
+    domain: z.string().min(1).optional(),
     strategicIntent: StrategicIntentPartialSchema.optional(),
 }).strict();
 
@@ -253,9 +253,7 @@ const ContextStrategicSchema = z.object({
 
 const RuntimeSchema = z.object({
     mode: RuntimeModeSchema.default("execution-enabled"),
-}).strict().default({
-    mode: "execution-enabled",
-});
+}).strict();
 
 const PackageRuntimeModeSchema = z.object({
     mode: RuntimeModeSchema.optional(),
@@ -334,10 +332,38 @@ export const ControlPlaneSchema = z.object({
                 });
             }
         }
+
+        if (control.runtime && Object.keys(control.packageModes).length > 0) {
+            context.addIssue({
+                code: "custom",
+                message: "cannot define both global runtime and packageModes",
+                path: ["runtime"],
+            });
+            context.addIssue({
+                code: "custom",
+                message: "cannot define both global runtime and packageModes",
+                path: ["packageModes"],
+            });
+        }
+
+        if (control.strategicIntent && Object.keys(control.packageModes).length > 0) {
+            context.addIssue({
+                code: "custom",
+                message: "cannot define both global strategicIntent and packageModes",
+                path: ["strategicIntent"],
+            });
+            context.addIssue({
+                code: "custom",
+                message: "cannot define both global strategicIntent and packageModes",
+                path: ["packageModes"],
+            });
+        }
     }
 
+    const hasDomainCatalog = Object.keys(control.domains ?? {}).length > 0;
+
     for (const [packageName, packageConfig] of Object.entries(control.packages ?? {})) {
-        if (!Object.prototype.hasOwnProperty.call(control.domains ?? {}, packageConfig.domain)) {
+        if (hasDomainCatalog && packageConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, packageConfig.domain)) {
             context.addIssue({
                 code: "custom",
                 message: `Package "${packageName}" maps to unknown domain "${packageConfig.domain}"`,
@@ -347,7 +373,7 @@ export const ControlPlaneSchema = z.object({
     }
 
     for (const [contextName, contextConfig] of Object.entries(control.contexts ?? {})) {
-        if (contextConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, contextConfig.domain)) {
+        if (hasDomainCatalog && contextConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, contextConfig.domain)) {
             context.addIssue({
                 code: "custom",
                 message: `Context "${contextName}" maps to unknown domain "${contextConfig.domain}"`,

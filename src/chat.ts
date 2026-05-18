@@ -99,6 +99,7 @@ import {
     discoverStrategicDomains,
     readStrategicInitState,
     seedStrategicDomainPromptDefaults,
+    scopeControlPlaneRuntimeForWorkspace,
     strategicTemplateDefaults,
     synthesizeStrategicControlPlane,
     type GovernanceIntensity,
@@ -590,6 +591,23 @@ async function modelSingleStrategicDomain(
     }
     const governance = governancePick.label;
 
+    const domainRuntimeModePick = await vscode.window.showQuickPick([
+        { label: "observe-only" as RuntimeMode },
+        { label: "simulation-only" as RuntimeMode },
+        { label: "approval-required" as RuntimeMode },
+        { label: "execution-enabled" as RuntimeMode },
+        { label: "distributed-control" as RuntimeMode },
+    ], {
+        title: `Domain Runtime Governance Mode: ${domain.id}`,
+        placeHolder: `Suggested: ${defaults.runtimeMode} | applies to packages in this domain`,
+        ignoreFocusOut: true,
+    });
+
+    if (!domainRuntimeModePick) {
+        return null;
+    }
+    const runtimeMode = domainRuntimeModePick.label;
+
     return {
         id: domain.id,
         mission: mission.trim(),
@@ -599,6 +617,7 @@ async function modelSingleStrategicDomain(
         rolloutPreferences: rollout.map((entry) => entry.label as RolloutPreference).sort((left, right) => left.localeCompare(right)),
         stabilityProfile: stability,
         governanceIntensity: governance,
+        runtimeMode,
     };
 }
 
@@ -685,19 +704,10 @@ function selectDiscoveryForDomains(
 function mergeSelectedStrategicDomainsIntoControl(
     currentControl: ControlPlane,
     synthesizedControl: ControlPlane,
-    selectedDomainIds: string[],
     selectedPackagePaths: string[],
-    allDiscoveredPackagePaths: string[]
+    allDiscoveredPackagePaths: string[],
+    hasRootPackage: boolean
 ): ControlPlane {
-    const nextDomains = {
-        ...(currentControl.domains ?? {}),
-        ...(Object.fromEntries(
-            selectedDomainIds
-                .map((domainId) => [domainId, synthesizedControl.domains?.[domainId]] as const)
-                .filter((entry): entry is [string, NonNullable<ControlPlane["domains"]>[string]] => entry[1] !== undefined)
-        )),
-    };
-
     const nextPackages = {
         ...(currentControl.packages ?? {}),
         ...(Object.fromEntries(
@@ -707,21 +717,24 @@ function mergeSelectedStrategicDomainsIntoControl(
         )),
     };
 
-    const nextPackageModes = {
-        ...(currentControl.packageModes ?? {}),
-        ...(Object.fromEntries(
-            selectedPackagePaths
-                .map((packagePath) => [packagePath, synthesizedControl.packageModes?.[packagePath]] as const)
-                .filter((entry): entry is [string, NonNullable<ControlPlane["packageModes"]>[string]] => entry[1] !== undefined)
-        )),
-    };
+    const nextPackageModes = hasRootPackage
+        ? undefined
+        : {
+            ...(currentControl.packageModes ?? {}),
+            ...(Object.fromEntries(
+                selectedPackagePaths
+                    .map((packagePath) => [packagePath, synthesizedControl.packageModes?.[packagePath]] as const)
+                    .filter((entry): entry is [string, NonNullable<ControlPlane["packageModes"]>[string]] => entry[1] !== undefined)
+            )),
+        };
 
     const existingWorkspacePackages = currentControl.contexts?.["workspace:root"]?.packages ?? [];
     const mergedWorkspacePackages = sortedUnique([...existingWorkspacePackages, ...allDiscoveredPackagePaths]);
 
+    const { domains: _domains, packageModes: _packageModes, ...rest } = currentControl;
+
     return {
-        ...currentControl,
-        domains: nextDomains,
+        ...rest,
         packages: nextPackages,
         contexts: {
             ...(currentControl.contexts ?? {}),
@@ -730,7 +743,14 @@ function mergeSelectedStrategicDomainsIntoControl(
                 packages: mergedWorkspacePackages,
             },
         },
-        packageModes: nextPackageModes,
+        ...(hasRootPackage
+            ? {
+                runtime: synthesizedControl.runtime,
+                capabilities: synthesizedControl.capabilities,
+            }
+            : {
+                packageModes: nextPackageModes,
+            }),
     };
 }
 
@@ -799,6 +819,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 let initApplyMode: InitApplyMode = "merge";
                 let missionForSynthesis = currentControl.mission;
                 let visionForSynthesis = currentControl.vision;
+                const hasRootPackage = fs.existsSync(path.join(workspaceRoot, "package.json"));
 
                 if (strategicMode === "full") {
                     const statePath = getInitStatePath(workspaceRoot);
@@ -1026,6 +1047,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         ? (readControlPlane() ?? createDefaultControlPlane())
                         : createDefaultControlPlane();
 
+                    currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
+
                     for (const command of commands) {
                         const compiled = compileDSLAndWrite(command, currentControl, controlPath, {
                             workspaceRoot,
@@ -1056,6 +1079,12 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     missionForSynthesis = wizard.state.data.mission ?? currentControl.mission;
                     visionForSynthesis = wizard.state.data.vision ?? currentControl.vision;
+
+                    if (!hasRootPackage) {
+                        currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
+                        writeControlPlane(currentControl);
+                    }
+
                     clearInitSession(workspaceRoot);
                 }
 
@@ -1129,6 +1158,11 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     });
 
                     if (mergeSelection && models.length === 0) {
+                        if (!hasRootPackage) {
+                            currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
+                            writeControlPlane(currentControl);
+                        }
+
                         appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
                             command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
                             source: "chat",
@@ -1164,10 +1198,13 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         detail: `strategy=${calibration.selectedStrategyType} rollout=${calibration.rolloutDefault} blastRadius=${calibration.estimatedBlastRadius}`,
                     });
 
-                    const runtimeMode = await chooseRuntimeMode(
-                        calibration.governanceModeRecommendation,
-                        `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
-                    );
+                    const requiresGlobalRuntimePrompt = modelingDiscovery.domains.length <= 1;
+                    const runtimeMode = requiresGlobalRuntimePrompt
+                        ? await chooseRuntimeMode(
+                            calibration.governanceModeRecommendation,
+                            `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
+                        )
+                        : calibration.governanceModeRecommendation;
 
                     if (!runtimeMode) {
                         stream.markdown("Choir init cancelled during runtime governance modeling.");
@@ -1177,7 +1214,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     diagnosticsStages.push({
                         stage: "governance-modeling",
                         status: "success",
-                        detail: `runtime mode selected: ${runtimeMode}`,
+                        detail: requiresGlobalRuntimePrompt
+                            ? `global runtime mode selected: ${runtimeMode}`
+                            : `global runtime mode baseline (auto): ${runtimeMode}; domain runtime modes captured per domain`,
                     });
 
                     const runtimeModeForSynthesis = mergeSelection
@@ -1198,9 +1237,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         ? mergeSelectedStrategicDomainsIntoControl(
                             currentControl,
                             synthesis.controlPlane,
-                            mergeSelection.selectedDomainIds,
                             mergeSelection.selectedPackagePaths,
-                            discovery.packages.map((pkg) => pkg.packagePath)
+                            discovery.packages.map((pkg) => pkg.packagePath),
+                            hasRootPackage
                         )
                         : synthesis.controlPlane;
 

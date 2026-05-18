@@ -6,7 +6,6 @@ import { fileURLToPath } from "url";
 import * as YAML from "yaml";
 import { ControlPlane, ControlPlaneSchema } from "../../../schema.js";
 import {
-  PlanOptimizationError,
   synthesizeAndOptimizePlans,
 } from "../../../core/planOptimizationOrchestrator.js";
 import { stableStringify } from "../../../core/deterministicCore.js";
@@ -195,7 +194,7 @@ export async function runStrategicIntentVerification(): Promise<StrategicIntentV
   const ambiguityWorkspace = createFixtureWorkspace("simple-project");
   try {
     const base = loadControlPlane(ambiguityWorkspace.root);
-    const ambiguous = ControlPlaneSchema.parse({
+    const packageScoped = ControlPlaneSchema.parse({
       ...base,
       strategicIntent: {
         priorities: ["correctness"],
@@ -219,29 +218,41 @@ export async function runStrategicIntentVerification(): Promise<StrategicIntentV
           },
         },
       },
-      packages: {},
+      packages: {
+        ".": {
+          strategicIntent: {
+            priorities: ["correctness", "auditability"],
+            optimizationGoals: ["deterministic-replay"],
+            riskTolerance: "low",
+            architecturalPosture: ["conservative"],
+            rolloutPreferences: ["canary-required"],
+            stabilityProfile: "stable",
+            governanceIntensity: "strict",
+          },
+        },
+      },
       contexts: {},
       execution: { plans: [] },
     });
 
-    let failedClosed = false;
+    let packageResolutionPassesWithoutDomain = false;
     try {
-      await synthesizeAndOptimizePlans({
+      const optimized = await synthesizeAndOptimizePlans({
         root: ambiguityWorkspace.root,
         command: "choir plan --optimize",
-        controlPlane: ambiguous,
+        controlPlane: packageScoped,
       });
+      packageResolutionPassesWithoutDomain = optimized.selectedPlan.strategicContextHash.length > 0;
     } catch (error) {
-      if (error instanceof PlanOptimizationError) {
-        failedClosed = error.failedStage === "candidate-synthesis"
-          && /strategic-intent: status=failed reason=missing-domain-resolution/.test(error.message);
-      }
+      packageResolutionPassesWithoutDomain = false;
     }
 
     checks.push({
-      name: "strategic-domain-resolution-fail-closed",
-      passed: failedClosed,
-      detail: failedClosed ? "missing domain mapping blocked synthesis" : "ambiguous/missing mapping did not fail closed",
+      name: "strategic-package-resolution-without-domain-field",
+      passed: packageResolutionPassesWithoutDomain,
+      detail: packageResolutionPassesWithoutDomain
+        ? "package-level strategic intent resolves without package domain mapping"
+        : "package-level strategic resolution failed when package domain mapping was absent",
     });
   } finally {
     ambiguityWorkspace.dispose();

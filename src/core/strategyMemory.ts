@@ -205,10 +205,10 @@ function extractModules(state: StatePlane): string[] {
 
 export function buildSignature(control: ControlPlane, state: StatePlane): ContextSignature {
   const modules = extractModules(state);
-  const packageDomains = sortedUnique(Object.values(control.packages ?? {}).map((entry) => entry.domain));
+  const packageDomains = sortedUnique(Object.keys(control.packages ?? {}));
   const strategicRolloutPreferences = sortedUnique([
     ...(control.strategicIntent?.rolloutPreferences ?? []),
-    ...Object.values(control.domains ?? {}).flatMap((entry) => entry.strategicIntent?.rolloutPreferences ?? []),
+    ...Object.values(control.packages ?? {}).flatMap((entry) => entry.strategicIntent?.rolloutPreferences ?? []),
   ]);
 
   return {

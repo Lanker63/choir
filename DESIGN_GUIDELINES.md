@@ -157,8 +157,8 @@ Imported libraries must participate in policy evaluation order (`org -> repo -> 
 ## Strategic Intent Contract
 
 - Strategic intent is a first-class orchestration input, distinct from runtime governance.
-- Hierarchy is explicit and deterministic: `global strategicIntent -> domains -> packages -> contexts -> orchestration unit`.
-- Strategic intent must not be inferred implicitly; resolution is configuration-driven and fail-closed on ambiguity or missing domain mappings.
+- Hierarchy is explicit and deterministic: `global strategicIntent -> packages -> contexts -> orchestration unit`.
+- Strategic intent must not be inferred implicitly; resolution is configuration-driven and fail-closed on ambiguity or missing package/context mappings.
 - Deterministic planning must include strategic semantics in candidate synthesis, ranking, rollout bias, and rollback posture.
 - Deterministic ranking order is: `violations -> strategic alignment -> risk -> rollback complexity -> changes -> execution cost`.
 - Strategic inheritance must compose with governance inheritance and must not bypass deny precedence.
@@ -176,6 +176,12 @@ Strategic init contract:
 - Heuristics may suggest default strategic posture values, but may not override topology-derived domain identity.
 - In merge mode, scalar root fields (`mission`, `vision`) must be pre-populated from the current control plane before prompting.
 - In merge mode after root prompts, domain re-init must be operator-driven with a domain picker loop (select domain -> model domain -> return to picker), with an explicit finish option.
+- Strategic init persistence must use `packages` as the canonical strategic catalog and must not persist a duplicate top-level `domains` catalog.
+- Persisted package records must not require or emit legacy `packages.*.domain`; strategic resolution is package/context-driven.
+- Runtime governance persistence for init must be scope-exclusive: rooted workspaces persist global `runtime`/`capabilities` and omit `packageModes`; rootless workspaces persist `packageModes` and omit global `runtime`/`capabilities`.
+- Strategic intent persistence for init must align with governance scope: rooted workspaces may persist global `strategicIntent`; rootless workspaces using `packageModes` must omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`.
+- Rootless runtime omission must hold on all init exit paths, including merge-mode early finish with zero selected domains after root intent writes.
+- Init must persist default runtime `capabilities` correlated to selected mode at the applicable scope: global `runtime` when rooted, per-entry `packageModes.*` when rootless.
 - Runtime governance mode selection occurs only after strategic domain modeling and calibration.
 - Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
 - Init diagnostics must persist pipeline stage outcomes in `.choir/pipeline.diagnostics.jsonl`.

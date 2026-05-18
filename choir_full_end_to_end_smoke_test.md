@@ -41,7 +41,9 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 1.1 In chat, enter `@choir init --template fintech-platform` in a fresh test workspace.
 
    - Confirm strategic defaults are seeded for strict/high-governance initialization posture.
-   - Confirm resulting control plane initializes `strategicIntent`, `domains`, `packages`, `runtime`, and `packageModes` coherently.
+   - Confirm resulting control plane initializes `strategicIntent` and `packages` coherently, without persisting a duplicate top-level `domains` catalog.
+   - Confirm package entries do not persist legacy `packages.*.domain` fields.
+   - Confirm governance scope is exclusive for rooted workspaces: global `runtime` + `capabilities` are present and `packageModes` is omitted.
 
 1.2 In chat, enter `@choir init --template experimentation-platform` in a fresh test workspace.
 
@@ -57,6 +59,7 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm the picker includes an explicit finish option (for example, `Finish merge re-init`) to stop strategic domain re-initialization.
    - Confirm selecting a domain opens domain modeling prompts for that domain and, when completed, returns to the domain picker.
    - Confirm domain re-init prompts are pre-populated from current domain values in `.choir/choir.config.yaml` when present (for example domain mission, priorities, optimization goals, risk tolerance, rollout posture, stability profile, governance intensity).
+   - Confirm domain re-init includes a domain-specific runtime governance mode prompt and the selected mode is applied to package-level runtime configuration for that domain.
    - Confirm for fields with no existing domain value, prompts fall back to deterministic suggested defaults (not blank/undefined states).
    - Confirm this loop supports re-initializing multiple domains in one run (select domain -> model -> return -> repeat -> finish).
    - Confirm if finish is chosen immediately (no domain selected), root-level updates still apply and existing strategic domain/package mappings remain unchanged.
@@ -66,6 +69,13 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 
    - Confirm init proceeds as full re-initialization (not incremental merge behavior).
    - Confirm merge-specific domain picker loop is not used in overwrite path.
+
+1.5 In a rootless workspace (no top-level `package.json`, with package manifests only in subfolders), run `@choir init`.
+
+   - Confirm domain/package modeling still completes for discovered subfolder packages.
+   - Confirm `.choir/choir.config.yaml` does not persist global `runtime` or top-level `capabilities`.
+   - Confirm runtime governance is represented via per-package `packageModes`.
+   - Confirm `packageModes.*.capabilities` exists and matches the selected/runtime-derived mode defaults.
 
 2. In chat, enter `@choir status`.
 
@@ -112,6 +122,7 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
    - Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
    - Confirm rollout/governance recommendations are recalibrated and persisted without destructive resets of unrelated intent fields.
+   - For multi-domain workspaces, confirm runtime governance is captured per-domain during domain modeling and global runtime prompt is not required as an interactive blocker.
 
 ---
 

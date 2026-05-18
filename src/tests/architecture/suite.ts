@@ -587,6 +587,89 @@ const pass1: TestPass = {
         assert.throws(() => ControlPlaneSchema.parse(invalid), /Circular task dependency detected/);
       },
     },
+    {
+      id: "1.6",
+      name: "control plane rejects mixed global and package runtime governance",
+      run: async () => {
+        const invalid = {
+          ...makeControlPlane(),
+          runtime: {
+            mode: "execution-enabled",
+          },
+          packageModes: {
+            server: {
+              mode: "approval-required",
+            },
+          },
+        };
+
+        assert.throws(
+          () => ControlPlaneSchema.parse(invalid),
+          /cannot define both global runtime and packageModes/i
+        );
+      },
+    },
+    {
+      id: "1.7",
+      name: "control plane accepts package runtime governance without global runtime",
+      run: async () => {
+        const valid = {
+          ...makeControlPlane(),
+          packageModes: {
+            server: {
+              mode: "approval-required",
+            },
+          },
+        };
+
+        assert.doesNotThrow(() => ControlPlaneSchema.parse(valid));
+      },
+    },
+    {
+      id: "1.8",
+      name: "control plane rejects mixed global strategic intent and package runtime governance",
+      run: async () => {
+        const invalid = {
+          ...makeControlPlane(),
+          strategicIntent: {
+            priorities: ["auditability"],
+          },
+          packageModes: {
+            server: {
+              mode: "approval-required",
+            },
+          },
+        };
+
+        assert.throws(
+          () => ControlPlaneSchema.parse(invalid),
+          /cannot define both global strategicIntent and packageModes/i
+        );
+      },
+    },
+    {
+      id: "1.9",
+      name: "control plane accepts package runtime governance with package-level strategic intent only",
+      run: async () => {
+        const valid = {
+          ...makeControlPlane(),
+          packages: {
+            server: {
+              strategicIntent: {
+                priorities: ["dependency-safety"],
+              },
+            },
+          },
+          packageModes: {
+            server: {
+              mode: "approval-required",
+            },
+          },
+        };
+
+        assert.doesNotThrow(() => ControlPlaneSchema.parse(valid));
+      },
+    },
   ],
 };
 
@@ -1518,6 +1601,29 @@ const pass2: TestPass = {
             mode: "execution-enabled",
           },
         });
+      },
+    },
+    {
+      id: "2.14a",
+      name: "dsl compiler write path preserves packageModes-only governance without injecting global runtime",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-package-modes-only-write-"));
+        const controlPath = path.join(root, ".choir", "choir.config.yaml");
+        const control = makeControlPlane();
+        control.packageModes = {
+          server: {
+            mode: "approval-required",
+          },
+        };
+
+        const result = compileDSLAndWrite('choir define mission "m"', control, controlPath, { workspaceRoot: root });
+        assert.strictEqual(result.decision, "allow");
+        assert.strictEqual(result.updatedControlPlane.runtime, undefined);
+        assert.ok(result.updatedControlPlane.packageModes?.server);
+
+        const persisted = ControlPlaneSchema.parse(YAML.parse(fs.readFileSync(controlPath, "utf-8")));
+        assert.strictEqual(persisted.runtime, undefined);
+        assert.ok(persisted.packageModes?.server);
       },
     },
     {

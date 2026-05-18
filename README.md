@@ -64,7 +64,6 @@ strategicIntent:
   rolloutPreferences: []
   stabilityProfile: adaptive
   governanceIntensity: moderate
-domains: {}
 packages: {}
 contexts: {}
 policy:
@@ -115,6 +114,12 @@ Core flow:
 - strategic init does not guess domain IDs from keywords; domain IDs are derived from workspace topology/package paths and then confirmed by the user
 - merge-mode init pre-populates mission/vision prompts from current control-plane values
 - merge-mode strategic re-init is domain-by-domain: choose a candidate domain, re-initialize it, return to the domain list, then finish when ready
+- strategic init persists `packages` as the canonical strategic catalog; `domains` are modeling-time constructs and are not persisted as a duplicate catalog
+- package entries in persisted init output no longer carry legacy `packages.*.domain`; package-level `strategicIntent` and `contexts` provide canonical strategic scope
+- runtime governance scope is exclusive during init synthesis: rooted workspaces persist global `runtime` + `capabilities`, rootless workspaces persist `packageModes`
+- strategic intent scope is exclusive during init synthesis when `packageModes` are present: rootless workspaces omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`
+- rootless runtime scoping is enforced on final init write paths (including merge-mode finish with no domains selected) so root-level intent updates never leave global `runtime`/`capabilities` behind
+- init persists default `capabilities` correlated to each selected runtime mode: globally when a root package exists, otherwise per-package in `packageModes`
 - strategic init rerun modes: `@choir init --expand-domain`, `@choir init --reclassify`, `@choir init --recalibrate`
 - strategic init templates: `backend`, `frontend`, `fintech-platform`, `saas-product`, `enterprise-monolith`, `internal-tooling`, `experimentation-platform`, `distributed-platform`
 - analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text
@@ -255,7 +260,7 @@ Capability gates:
 - install
 - update
 
-Example:
+Rooted example (global runtime governance):
 
 ```yaml
 runtime:
@@ -269,13 +274,20 @@ capabilities:
   import: true
   install: false
   update: false
+```
 
+Rootless example (package-scoped runtime governance):
+
+```yaml
 packageModes:
   payments:
     mode: approval-required
   playground:
     mode: execution-enabled
 ```
+
+Global `runtime` and `packageModes` are mutually exclusive in a valid control plane.
+Global `strategicIntent` and `packageModes` are also mutually exclusive; package-scoped governance must use `packages.*.strategicIntent`.
 
 Runtime governance decisions are persisted in orchestration traces and diagnostics metadata under runtimeGovernance.
 
