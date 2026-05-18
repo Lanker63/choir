@@ -167,6 +167,18 @@ Imported libraries must participate in policy evaluation order (`org -> repo -> 
 - Monorepo orchestration must support domain-aware strategic partitioning and isolation boundaries.
 - Control Center and Timeline projections must render strategic explainability from traces (domain/package posture, selected-candidate alignment, and rollout bias rationale).
 
+Strategic init contract:
+
+- `@choir init` is a deterministic strategic discovery pipeline, not a static config bootstrap.
+- Canonical stage order is `discover -> classify -> model -> govern -> calibrate -> synthesize -> generate`.
+- Workspace discovery precedence must match workspace detection contract (nx -> turbo -> pnpm-workspace -> package.json workspaces -> fallback).
+- Domain IDs must be topology-derived from discovered package paths (no keyword-guessed domain naming during init) and require explicit user confirmation before write.
+- Heuristics may suggest default strategic posture values, but may not override topology-derived domain identity.
+- Runtime governance mode selection occurs only after strategic domain modeling and calibration.
+- Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
+- Init diagnostics must persist pipeline stage outcomes in `.choir/pipeline.diagnostics.jsonl`.
+- Strategic init replay artifact `.choir/init-strategic-state.json` is required for reviewable reruns and visualization.
+
 ## Runtime Governance Contract
 
 - Runtime governance is an execution control plane, not a UI preference toggle.
@@ -355,6 +367,10 @@ Workspace detection contract:
   - root fallback
 - output packages sorted and unique
 - exclude node_modules, .git, dist, out
+- root fallback must be deterministic:
+   - root `package.json` present -> packages = ["."]
+   - root `package.json` absent -> use top-level directories that contain `package.json` as package candidates
+   - ignore `.choir`, `.git`, `.github`, `.idea`, `.vscode`, `node_modules`, `dist`, `out`, `build`, `coverage`, `tmp`
 
 ## Distributed Sync Contract
 

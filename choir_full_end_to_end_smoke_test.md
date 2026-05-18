@@ -31,6 +31,20 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm `.choir/state.json` is created.
    - Confirm the mission, vision, goals, constraints, and non-goals in `.choir/choir.config.yaml` match exactly what was entered.
    - Confirm the YAML file parses without schema errors.
+   - Confirm strategic domain discovery prompts are shown after baseline mission/vision/intent prompts.
+   - Confirm inferred domains are explicitly confirmed/modelled before init completes (no silent implicit acceptance).
+   - Confirm `.choir/init-strategic-state.json` is created.
+   - Confirm `.choir/pipeline.diagnostics.jsonl` contains an init diagnostics record with stages for workspace-discovery, domain-classification, strategic-modeling, governance-modeling, orchestration-calibration, and control-plane-generation.
+
+1.1 In chat, enter `@choir init --template fintech-platform` in a fresh test workspace.
+
+   - Confirm strategic defaults are seeded for strict/high-governance initialization posture.
+   - Confirm resulting control plane initializes `strategicIntent`, `domains`, `packages`, `runtime`, and `packageModes` coherently.
+
+1.2 In chat, enter `@choir init --template experimentation-platform` in a fresh test workspace.
+
+   - Confirm strategic defaults are seeded for experimentation/velocity posture.
+   - Confirm initialization remains deterministic and replayable (re-run with unchanged workspace and verify equivalent topology/strategic hashes in diagnostics metadata when surfaced).
 
 2. In chat, enter `@choir status`.
 
@@ -67,6 +81,15 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Optionally add a `contexts` mapping for one orchestration context.
    - Confirm YAML parses and `@choir status` still succeeds.
    - Confirm no unknown-domain or unknown-package mapping errors are reported for valid entries.
+
+9. Validate strategic init rerun modes.
+
+   - Run `@choir init --expand-domain` after adding a new package/module in the workspace.
+   - Confirm newly discovered package/domain mappings are added without wiping existing strategic domain modeling.
+   - Run `@choir init --reclassify` with unchanged workspace.
+   - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
+   - Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
+   - Confirm rollout/governance recommendations are recalibrated and persisted without destructive resets of unrelated intent fields.
 
 ---
 
@@ -234,6 +257,15 @@ Topic setup for deterministic lineage:
 4. Open the Command Palette and run **Choir: Open Diagnostics**.
 
    - Confirm the diagnostics panel loads and displays entries.
+   - Confirm strategic init diagnostics entries appear after running `@choir init`.
+   - Confirm stage-level outcomes include strategic init pipeline stages (workspace-discovery through control-plane-generation).
+
+4.1 Open the Command Palette and run **Choir: Open Strategic Init Wizard**.
+
+   - Confirm the panel loads without runtime errors.
+   - Confirm domain visualization/heatmaps render (governance intensity and risk posture by domain).
+   - Confirm package-to-domain mapping table renders from current control plane.
+   - Confirm latest strategic init replay artifact details are visible from `.choir/init-strategic-state.json`.
 
 5. In chat, enter `@choir graph`.
 
@@ -502,6 +534,13 @@ Run each command below a second time on unchanged inputs and confirm stability.
 
    - Confirm the simulation outcome matches the first run.
 
+4. Re-run strategic init classification and calibration on unchanged workspace.
+
+   - Run `@choir init --reclassify` twice with no workspace/config changes.
+   - Confirm package/domain mapping remains identical across reruns.
+   - Run `@choir init --recalibrate` twice with no strategic input changes.
+   - Confirm selected orchestration calibration recommendation remains stable.
+
 ---
 
 ## Topic 13: Runtime Governance Modes and Capability Gates
@@ -582,6 +621,12 @@ Run each command below a second time on unchanged inputs and confirm stability.
    - Confirm runtime governance trace details are visible in Timeline view.
    - Confirm Timeline includes strategic rationale tied to selected replay candidate (alignment/domains/governance intensity/rollout bias when present).
    - Confirm diagnostics metadata includes runtime governance entries.
+
+9. Validate init->governance coherence after strategic modeling.
+
+   - Run `@choir init` (or `@choir init --recalibrate`) and accept modeled domain posture updates.
+   - Confirm runtime mode recommendation/persistence reflects strategic posture (for example strict/low-risk domains bias toward tighter governance).
+   - Confirm package-level modes remain coherent with domain-level governance intensity after init rerun.
 
 ---
 

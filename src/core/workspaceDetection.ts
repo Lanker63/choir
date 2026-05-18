@@ -17,6 +17,20 @@ const GLOB_IGNORE = [
   "**/out/**",
 ];
 
+const TOP_LEVEL_DIR_IGNORE = new Set([
+  ".choir",
+  ".git",
+  ".github",
+  ".idea",
+  ".vscode",
+  "build",
+  "coverage",
+  "dist",
+  "node_modules",
+  "out",
+  "tmp",
+]);
+
 function sortedUnique(values: string[]): string[] {
   return Array.from(new Set(values)).sort((left, right) => left.localeCompare(right));
 }
@@ -148,13 +162,28 @@ function detectPackageManagerType(root: string, pkg: Record<string, unknown> | n
   return "npm";
 }
 
-function fallbackPackages(root: string): string[] {
+function discoverTopLevelProjectDirs(root: string): string[] {
+  const entries = fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .filter((name) => !TOP_LEVEL_DIR_IGNORE.has(name))
+    .filter((name) => !name.startsWith("."))
+    .filter((name) => exists(path.join(root, name, "package.json")));
+
+  return sortedUnique(entries.map((name) => name.replace(/\\/g, "/")));
+}
+
+function fallbackPackages(root: string, hasRootPackageJson: boolean): string[] {
   const discovered = discoverPackages(root, DEFAULT_PACKAGE_PATTERNS);
   if (discovered.length > 0) {
     return discovered;
   }
 
-  return exists(path.join(root, "package.json")) ? ["."] : [];
+  if (hasRootPackageJson) {
+    return ["."];
+  }
+
+  return discoverTopLevelProjectDirs(root);
 }
 
 export function detectWorkspace(rootPath: string): WorkspaceConfig {
@@ -210,6 +239,6 @@ export function detectWorkspace(rootPath: string): WorkspaceConfig {
   return {
     type: detectPackageManagerType(root, pkg),
     root,
-    packages: fallbackPackages(root),
+    packages: fallbackPackages(root, Boolean(pkg)),
   };
 }

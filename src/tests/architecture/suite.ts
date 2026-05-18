@@ -8001,6 +8001,31 @@ const pass6: TestPass = {
       },
     },
     {
+      id: "6.14a",
+      name: "workspace detection top-level fallback includes package directories and excludes docs-only folders",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-top-level-"));
+
+        try {
+          for (const projectDir of ["server", "client"]) {
+            fs.mkdirSync(path.join(root, projectDir), { recursive: true });
+            fs.writeFileSync(path.join(root, projectDir, "package.json"), "{}", "utf-8");
+          }
+
+          fs.mkdirSync(path.join(root, "docs"), { recursive: true });
+
+          fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
+          fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+
+          const detected = detectWorkspace(root);
+          assert.strictEqual(detected.type, "npm");
+          assert.deepStrictEqual(detected.packages, ["client", "server"]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
       id: "6.15",
       name: "dependency graph transform to UI graph is deterministic and sorted",
       run: async () => {

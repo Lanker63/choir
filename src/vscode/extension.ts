@@ -9,6 +9,7 @@ import { RuleTreeProvider } from "./ruleTreeProvider.js";
 import { GraphViewProvider } from "./GraphViewProvider.js";
 import { TimelineViewProvider } from "./TimelineViewProvider.js";
 import { PipelineDiagnosticsViewProvider } from "./PipelineDiagnosticsViewProvider.js";
+import { StrategicInitWizardViewProvider } from "./StrategicInitWizardViewProvider.js";
 import { ChoirEventBus, MessageTraceStore, WebviewRegistry } from "./choirWebviewSync.js";
 import { readStatePlane } from "../core/state.js";
 import { recoverState, verifyReplayConsistency } from "../core/persistentStateAudit.js";
@@ -20,11 +21,21 @@ function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Di
     context.subscriptions.push(disposable);
 }
 
+function hasInitializedChoir(root: string): boolean {
+    const yamlPath = path.join(root, ".choir", "choir.config.yaml");
+    if (fs.existsSync(yamlPath)) {
+        return true;
+    }
+
+    const ymlPath = path.join(root, ".choir", "choir.config.yml");
+    return fs.existsSync(ymlPath);
+}
+
 export function activate(context: vscode.ExtensionContext) {
     console.log("Choir extension active");
 
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (root) {
+    if (root && hasInitializedChoir(root)) {
         try {
             recoverState(root);
             verifyReplayConsistency(root);
@@ -74,6 +85,7 @@ export function activate(context: vscode.ExtensionContext) {
         const graphProvider = new GraphViewProvider(context, eventBus, traceStore, webviewRegistry, triggerPipeline);
         const timelineProvider = new TimelineViewProvider(context, productService, eventBus, traceStore, webviewRegistry);
         const diagnosticsProvider = new PipelineDiagnosticsViewProvider(context, eventBus, traceStore, webviewRegistry);
+        const strategicInitWizardProvider = new StrategicInitWizardViewProvider();
 
         // Register tree provider for the activity view that lists rules
         const tree = new RuleTreeProvider();
@@ -180,6 +192,10 @@ export function activate(context: vscode.ExtensionContext) {
                 const message = error instanceof Error ? error.message : String(error);
                 void vscode.window.showErrorMessage(`Unable to open diagnostics: ${message}`);
             }
+        }));
+
+        addSubscription(context, vscode.commands.registerCommand("choir.openStrategicInitWizard", async () => {
+            strategicInitWizardProvider.openPanel(vscode.ViewColumn.Two);
         }));
 
         addSubscription(context, vscode.commands.registerCommand("choir.refreshDiagnostics", async () => {

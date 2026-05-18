@@ -1,4 +1,5 @@
 import { InitTemplateName } from "./initWizard.js";
+import type { StrategicInitMode, StrategicTemplateName } from "./strategicInit.js";
 
 export type AbstractionChatCommand =
   | { type: "list" }
@@ -7,8 +8,10 @@ export type AbstractionChatCommand =
 
 export type InitChatCommand = {
   type: "init";
-  template?: InitTemplateName;
+  template?: InitTemplateName | StrategicTemplateName;
+  mode?: StrategicInitMode;
   invalidTemplate?: string;
+  invalidMode?: string;
 };
 
 export type GraphChatCommand = {
@@ -108,23 +111,83 @@ export function parseAbstractionChatCommand(input: string): AbstractionChatComma
 
 export function parseInitChatCommand(input: string): InitChatCommand | null {
   const normalized = input.trim();
-  const match = normalized.match(/^(?:@choir\s+)?init(?:\s+--template\s+([a-zA-Z0-9._-]+))?\s*$/i);
-  if (!match) {
+  const prefixMatch = normalized.match(/^(?:@choir\s+)?init\b/i);
+  if (!prefixMatch) {
     return null;
   }
 
-  const templateValue = match[1]?.toLowerCase();
-  if (!templateValue) {
-    return { type: "init" };
+  const tail = normalized.slice(prefixMatch[0].length).trim();
+  const tokens = tail.length > 0 ? tail.split(/\s+/) : [];
+
+  let templateValue: string | undefined;
+  let mode: StrategicInitMode | undefined;
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index]?.toLowerCase();
+    if (!token) {
+      continue;
+    }
+
+    if (token === "--template") {
+      const next = tokens[index + 1];
+      if (!next) {
+        return {
+          type: "init",
+          invalidTemplate: "",
+        };
+      }
+
+      templateValue = next.toLowerCase();
+      index += 1;
+      continue;
+    }
+
+    if (token === "--expand-domain") {
+      mode = "expand-domain";
+      continue;
+    }
+
+    if (token === "--reclassify") {
+      mode = "reclassify";
+      continue;
+    }
+
+    if (token === "--recalibrate") {
+      mode = "recalibrate";
+      continue;
+    }
+
+    return null;
   }
 
-  if (templateValue === "backend" || templateValue === "frontend") {
-    return { type: "init", template: templateValue };
+  if (!templateValue) {
+    return {
+      type: "init",
+      ...(mode ? { mode } : {}),
+    };
+  }
+
+  if (
+    templateValue === "backend"
+    || templateValue === "frontend"
+    || templateValue === "fintech-platform"
+    || templateValue === "saas-product"
+    || templateValue === "enterprise-monolith"
+    || templateValue === "internal-tooling"
+    || templateValue === "experimentation-platform"
+    || templateValue === "distributed-platform"
+  ) {
+    return {
+      type: "init",
+      template: templateValue,
+      ...(mode ? { mode } : {}),
+    };
   }
 
   return {
     type: "init",
     invalidTemplate: templateValue,
+    ...(mode ? { mode } : {}),
   };
 }
 

@@ -111,6 +111,10 @@ Entry point: @choir
 Core flow:
 
 - define, analyze, plan, simulate, preview, execute, status
+- strategic initialization pipeline: `@choir init` now runs deterministic discovery -> topology-derived domain mapping -> strategic modeling -> governance modeling -> orchestration calibration -> control-plane synthesis
+- strategic init does not guess domain IDs from keywords; domain IDs are derived from workspace topology/package paths and then confirmed by the user
+- strategic init rerun modes: `@choir init --expand-domain`, `@choir init --reclassify`, `@choir init --recalibrate`
+- strategic init templates: `backend`, `frontend`, `fintech-platform`, `saas-product`, `enterprise-monolith`, `internal-tooling`, `experimentation-platform`, `distributed-platform`
 - analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
@@ -139,6 +143,7 @@ Additional commands:
   - Choir: Open Dependency Graph
   - Choir: Open Timeline
   - Choir: Open Diagnostics
+  - Choir: Open Strategic Init Wizard
   - Choir: Show Webview Sync Trace (opens Output channel `Choir Webview Sync Trace`)
   - Choir: Show DSL Editor Trace (opens Output channel `Choir DSL Editor Trace`)
   - Dependency Graph panel controls:
@@ -186,6 +191,7 @@ Additional commands:
   - npm run verify:execution
   - npm run verify:runtime-governance
   - npm run verify:strategic-intent
+  - npm run verify:init
   - npm run verify:full
   - npm run verify:libraries
 
@@ -422,6 +428,12 @@ detectWorkspace precedence:
 5. root fallback
 
 Package output is sorted and unique; node_modules, .git, dist, out are excluded.
+
+Root fallback behavior:
+
+- if root `package.json` exists, packages = ["."]
+- if root `package.json` does not exist, use top-level directories that contain `package.json` (for example `client`, `server`) as deterministic package candidates
+- ignore `.choir`, `.git`, `.github`, `.idea`, `.vscode`, `node_modules`, `dist`, `out`, `build`, `coverage`, `tmp`
 
 ## CI
 

@@ -60,6 +60,12 @@
         "command": "choir.showWebviewSyncTrace",
         "title": "Show Webview Sync Trace",
         "category": "Choir"
+      },
+      {
+        "command": "choir.openStrategicInitWizard",
+        "title": "Open Strategic Init Wizard",
+        "category": "Choir",
+        "icon": "$(symbol-namespace)"
       }
     ],
     "languages": [
@@ -171,6 +177,7 @@
     "verify:runtime": "npm run build:extension && node out/tests/verification/runtime.js",
     "verify:runtime-governance": "npm run build:extension && node out/tests/verification/runtimeGovernance.js",
     "verify:strategic-intent": "npm run build:extension && node out/tests/verification/strategicIntent.js",
+    "verify:init": "npm run build:extension && node out/tests/verification/init.js",
     "verify:full": "npm run build:extension && node out/tests/verification/full.js",
     "verify:contracts": "npm run build:extension && CHOIR_CONTRACT_MODE=quick node out/tests/verification/contracts.js",
     "verify:contracts:full": "npm run build:extension && CHOIR_CONTRACT_MODE=full node out/tests/verification/contracts.js",

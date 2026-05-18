@@ -95,6 +95,24 @@ import {
     saveInitSession,
 } from "./core/initWizard.js";
 import {
+    calibrateStrategicOrchestration,
+    discoverStrategicDomains,
+    readStrategicInitState,
+    strategicTemplateDefaults,
+    synthesizeStrategicControlPlane,
+    type GovernanceIntensity,
+    type OptimizationGoal,
+    type RiskTolerance,
+    type RolloutPreference,
+    type RuntimeMode,
+    type StabilityProfile,
+    type StrategicDomainModel,
+    type StrategicInitMode,
+    type StrategicPriority,
+    writeStrategicInitState,
+} from "./core/strategicInit.js";
+import { appendPipelineDiagnosticsRecordIfPossible } from "./core/pipelineDiagnostics.js";
+import {
     buildCliInstallCommand,
     normalizeCliPackageSpec,
     validateCliPackageSpec,
@@ -136,6 +154,15 @@ function registerParticipant(
 
 function getWorkspaceRoot(): string | null {
     return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+}
+
+function missingControlPlaneMessage(): string {
+    const workspaceRoot = getWorkspaceRoot();
+    if (!workspaceRoot) {
+        return "No workspace folder found. Open a workspace folder first.";
+    }
+
+    return "No control plane found in this workspace. This folder is not initialized for Choir yet. Run `@choir init` to initialize Choir for this repository.";
 }
 
 function sortedUnique(values: string[]): string[] {
@@ -356,6 +383,10 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "- @choir init",
         "- @choir init --template backend",
         "- @choir init --template frontend",
+        "- @choir init --template fintech-platform",
+        "- @choir init --reclassify",
+        "- @choir init --expand-domain",
+        "- @choir init --recalibrate",
         "- @choir verify",
         "- @choir verify --quick",
         "- @choir verify --property",
@@ -398,6 +429,185 @@ function countCompletedInitSteps(step: string): number {
     }
 }
 
+const STRATEGIC_PRIORITIES: StrategicPriority[] = [
+    "correctness",
+    "auditability",
+    "rollback-safety",
+    "minimal-blast-radius",
+    "deterministic-replay",
+    "iteration-speed",
+    "developer-autonomy",
+    "dependency-safety",
+    "stability",
+];
+
+const OPTIMIZATION_GOALS: OptimizationGoal[] = [
+    "minimal-blast-radius",
+    "deterministic-replay",
+    "rapid-delivery",
+    "low-governance-friction",
+    "dependency-isolation",
+    "rollback-minimized",
+    "parallel-throughput",
+];
+
+const ROLLOUT_PREFERENCES: RolloutPreference[] = [
+    "canary-required",
+    "phased-required",
+    "phased-optional",
+    "all-at-once-allowed",
+    "parallel-optimized",
+];
+
+async function modelStrategicDomainsInteractively(
+    discovery: ReturnType<typeof discoverStrategicDomains>
+): Promise<StrategicDomainModel[] | null> {
+    const models: StrategicDomainModel[] = [];
+
+    for (const domain of discovery.domains) {
+        const packageSummary = domain.packages.join(", ");
+        const reasonSummary = domain.reasons.join("; ");
+        const mission = await vscode.window.showInputBox({
+            title: `Strategic Domain: ${domain.id}`,
+            prompt: [
+                `Detected package(s): ${packageSummary}`,
+                `Domain derivation: ${reasonSummary}`,
+                `Confirm or edit what this topology-derived domain is responsible for (${domain.packages.length} package(s)).`,
+            ].join("\n"),
+            value: `Owns ${domain.id} outcomes across ${domain.packages.length} package(s).`,
+            ignoreFocusOut: true,
+        });
+
+        if (mission === undefined) {
+            return null;
+        }
+
+        const prioritiesPick = await vscode.window.showQuickPick(
+            STRATEGIC_PRIORITIES.map((priority) => ({
+                label: priority,
+                picked: domain.inferred.priorities.includes(priority),
+            })),
+            {
+                title: `Strategic Priorities: ${domain.id}`,
+                placeHolder: "Select one or more priorities",
+                canPickMany: true,
+                ignoreFocusOut: true,
+            }
+        );
+
+        if (!prioritiesPick) {
+            return null;
+        }
+
+        const goalsPick = await vscode.window.showQuickPick(
+            OPTIMIZATION_GOALS.map((goal) => ({
+                label: goal,
+                picked: domain.inferred.optimizationGoals.includes(goal),
+            })),
+            {
+                title: `Optimization Goals: ${domain.id}`,
+                placeHolder: "Select one or more optimization goals",
+                canPickMany: true,
+                ignoreFocusOut: true,
+            }
+        );
+
+        if (!goalsPick) {
+            return null;
+        }
+
+        const riskPick = await vscode.window.showQuickPick([
+            { label: "low" as RiskTolerance },
+            { label: "moderate" as RiskTolerance },
+            { label: "high" as RiskTolerance },
+        ], {
+            title: `Risk Tolerance: ${domain.id}`,
+            placeHolder: `Suggested: ${domain.inferred.riskTolerance}`,
+            ignoreFocusOut: true,
+        });
+        if (!riskPick) {
+            return null;
+        }
+        const risk = riskPick.label;
+
+        const rollout = await vscode.window.showQuickPick(
+            ROLLOUT_PREFERENCES.map((entry) => ({
+                label: entry,
+                picked: domain.inferred.rolloutPreferences.includes(entry),
+            })),
+            {
+                title: `Rollout Posture: ${domain.id}`,
+                placeHolder: "Select one or more rollout preferences",
+                canPickMany: true,
+                ignoreFocusOut: true,
+            }
+        );
+        if (!rollout) {
+            return null;
+        }
+
+        const stabilityPick = await vscode.window.showQuickPick([
+            { label: "stable" as StabilityProfile },
+            { label: "adaptive" as StabilityProfile },
+            { label: "experimental" as StabilityProfile },
+        ], {
+            title: `Stability Profile: ${domain.id}`,
+            placeHolder: `Suggested: ${domain.inferred.stabilityProfile}`,
+            ignoreFocusOut: true,
+        });
+        if (!stabilityPick) {
+            return null;
+        }
+        const stability = stabilityPick.label;
+
+        const governancePick = await vscode.window.showQuickPick([
+            { label: "strict" as GovernanceIntensity },
+            { label: "moderate" as GovernanceIntensity },
+            { label: "relaxed" as GovernanceIntensity },
+        ], {
+            title: `Governance Intensity: ${domain.id}`,
+            placeHolder: `Suggested: ${domain.inferred.governanceIntensity}`,
+            ignoreFocusOut: true,
+        });
+        if (!governancePick) {
+            return null;
+        }
+        const governance = governancePick.label;
+
+        models.push({
+            id: domain.id,
+            mission: mission.trim(),
+            priorities: prioritiesPick.map((entry) => entry.label as StrategicPriority).sort((left, right) => left.localeCompare(right)),
+            optimizationGoals: goalsPick.map((entry) => entry.label as OptimizationGoal).sort((left, right) => left.localeCompare(right)),
+            riskTolerance: risk,
+            rolloutPreferences: rollout.map((entry) => entry.label as RolloutPreference).sort((left, right) => left.localeCompare(right)),
+            stabilityProfile: stability,
+            governanceIntensity: governance,
+        });
+    }
+
+    return models.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function chooseRuntimeMode(
+    suggested: RuntimeMode,
+    calibrationSummary: string
+): Promise<RuntimeMode | null> {
+    const picked = await vscode.window.showQuickPick([
+        { label: "observe-only" as RuntimeMode },
+        { label: "simulation-only" as RuntimeMode },
+        { label: "approval-required" as RuntimeMode },
+        { label: "execution-enabled" as RuntimeMode },
+        { label: "distributed-control" as RuntimeMode },
+    ], {
+        title: "Runtime Governance Mode",
+        placeHolder: `Suggested: ${suggested} | ${calibrationSummary}`,
+        ignoreFocusOut: true,
+    });
+
+    return picked?.label ?? null;
+}
+
 export function registerChoir(context: vscode.ExtensionContext) {
     registerParticipant(
         context,
@@ -419,7 +629,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const exportChatCommand = parseExportChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
-                    stream.markdown(`Unsupported template: ${initChatCommand.invalidTemplate}. Supported templates: backend, frontend.`);
+                    stream.markdown("Unsupported template. Supported templates: backend, frontend, fintech-platform, saas-product, enterprise-monolith, internal-tooling, experimentation-platform, distributed-platform.");
                     return;
                 }
 
@@ -435,301 +645,414 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
-                const statePath = getInitStatePath(workspaceRoot);
-                const existingSession = loadInitSession(workspaceRoot);
-                let resumed = false;
-                let session: InitWizardSession | null = null;
+                const strategicMode: StrategicInitMode = initChatCommand.mode ?? "full";
+                const strategicTemplate = initChatCommand.template;
+                const diagnosticsStages: Array<{ stage: string; status: "success" | "failure"; detail: string }> = [];
 
-                if (existingSession) {
-                    const resumeChoice = await vscode.window.showQuickPick([
-                        {
-                            label: "Resume",
-                            description: `Continue from ${renderProgress(existingSession.state.currentStep)}`,
-                            value: "resume" as const,
-                        },
-                        {
-                            label: "Start Over",
-                            description: "Discard saved wizard state and begin from mission",
-                            value: "restart" as const,
-                        },
-                        {
-                            label: "Cancel",
-                            description: "Exit without changing the saved state",
-                            value: "cancel" as const,
-                        },
-                    ], {
-                        title: "Saved Choir init wizard found",
-                        placeHolder: "Choose resume or restart",
-                        ignoreFocusOut: true,
-                    });
+                let currentControl = readControlPlane() ?? createDefaultControlPlane();
+                let commandsApplied = 0;
+                let initApplyMode: InitApplyMode = "merge";
+                let missionForSynthesis = currentControl.mission;
+                let visionForSynthesis = currentControl.vision;
 
-                    if (!resumeChoice || resumeChoice.value === "cancel") {
-                        const trace: InitTrace = {
-                            stepsCompleted: countCompletedInitSteps(existingSession.state.currentStep),
-                            commandsGenerated: [],
-                            result: "cancelled",
-                            resumed: true,
-                            currentStep: existingSession.state.currentStep,
-                            statePath,
-                        };
-                        stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
-                        return;
-                    }
+                if (strategicMode === "full") {
+                    const statePath = getInitStatePath(workspaceRoot);
+                    const existingSession = loadInitSession(workspaceRoot);
+                    let resumed = false;
+                    let session: InitWizardSession | null = null;
 
-                    if (resumeChoice.value === "resume") {
-                        session = existingSession;
-                        resumed = true;
-                    } else {
-                        clearInitSession(workspaceRoot);
-                    }
-                }
-
-                if (!session) {
-                    const configExists = fs.existsSync(controlPath);
-                    let mode: InitApplyMode = "overwrite";
-
-                    if (configExists) {
-                        const selected = await vscode.window.showQuickPick([
+                    if (existingSession) {
+                        const resumeChoice = await vscode.window.showQuickPick([
                             {
-                                label: "Merge",
-                                description: "Upsert wizard values into existing control plane",
-                                mode: "merge" as const,
+                                label: "Resume",
+                                description: `Continue from ${renderProgress(existingSession.state.currentStep)}`,
+                                value: "resume" as const,
                             },
                             {
-                                label: "Overwrite",
-                                description: "Start from empty control plane and apply wizard DSL",
-                                mode: "overwrite" as const,
+                                label: "Start Over",
+                                description: "Discard saved wizard state and begin from mission",
+                                value: "restart" as const,
+                            },
+                            {
+                                label: "Cancel",
+                                description: "Exit without changing the saved state",
+                                value: "cancel" as const,
                             },
                         ], {
-                            title: "choir.config.yaml exists",
-                            placeHolder: "Choose merge or overwrite",
+                            title: "Saved Choir init wizard found",
+                            placeHolder: "Choose resume or restart",
                             ignoreFocusOut: true,
                         });
 
-                        if (!selected) {
+                        if (!resumeChoice || resumeChoice.value === "cancel") {
                             const trace: InitTrace = {
-                                stepsCompleted: 0,
+                                stepsCompleted: countCompletedInitSteps(existingSession.state.currentStep),
                                 commandsGenerated: [],
                                 result: "cancelled",
-                                resumed: false,
-                                currentStep: "mission",
+                                resumed: true,
+                                currentStep: existingSession.state.currentStep,
                                 statePath,
                             };
                             stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
                             return;
                         }
 
-                        mode = selected.mode;
+                        if (resumeChoice.value === "resume") {
+                            session = existingSession;
+                            resumed = true;
+                        } else {
+                            clearInitSession(workspaceRoot);
+                        }
                     }
 
-                    session = {
-                        version: 1,
-                        mode,
-                        state: createWizardState(initChatCommand.template),
-                    };
-                    saveInitSession(workspaceRoot, session);
-                }
+                    if (!session) {
+                        const configExists = fs.existsSync(controlPath);
+                        let mode: InitApplyMode = "overwrite";
 
-                const wizard = new InitWizard(session.state);
+                        if (configExists) {
+                            const selected = await vscode.window.showQuickPick([
+                                {
+                                    label: "Merge",
+                                    description: "Upsert wizard values into existing control plane",
+                                    mode: "merge" as const,
+                                },
+                                {
+                                    label: "Overwrite",
+                                    description: "Start from empty control plane and apply wizard DSL",
+                                    mode: "overwrite" as const,
+                                },
+                            ], {
+                                title: "choir.config.yaml exists",
+                                placeHolder: "Choose merge or overwrite",
+                                ignoreFocusOut: true,
+                            });
 
-                while (true) {
-                    const step = wizard.state.currentStep;
-                    const progress = renderProgress(step);
+                            if (!selected) {
+                                const trace: InitTrace = {
+                                    stepsCompleted: 0,
+                                    commandsGenerated: [],
+                                    result: "cancelled",
+                                    resumed: false,
+                                    currentStep: "mission",
+                                    statePath,
+                                };
+                                stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                                return;
+                            }
 
-                    if (step === "review") {
-                        stream.markdown([
-                            progress,
-                            "",
-                            "```text",
-                            renderReview(wizard.state.data),
-                            "```",
-                        ].join("\n"));
-                    }
-
-                    let input: string | undefined;
-
-                    if (step === "review" || step === "confirm") {
-                        const confirmSelection = await vscode.window.showQuickPick([
-                            { label: "yes", description: "Apply this configuration" },
-                            { label: "no", description: "Cancel and clear wizard state" },
-                            { label: "back", description: "Return to review" },
-                            { label: "cancel", description: "Cancel and clear wizard state" },
-                        ], {
-                            title: progress,
-                            placeHolder: renderPrompt(wizard.state),
-                            ignoreFocusOut: true,
-                        });
-
-                        if (!confirmSelection) {
-                            session.state = wizard.state;
-                            saveInitSession(workspaceRoot, session);
-                            const trace: InitTrace = {
-                                stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                                commandsGenerated: [],
-                                result: "paused",
-                                resumed,
-                                currentStep: wizard.state.currentStep,
-                                statePath,
-                            };
-                            stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
-                            return;
+                            mode = selected.mode;
                         }
 
-                        input = confirmSelection.label;
-                    } else {
-                        const stepInput = await vscode.window.showInputBox({
-                            title: progress,
-                            prompt: `${renderPrompt(wizard.state)} Type back to edit previous step or cancel to exit.`,
-                            placeHolder: "enter value",
-                            ignoreFocusOut: true,
-                        });
+                        const legacyTemplate = strategicTemplate === "backend" || strategicTemplate === "frontend"
+                            ? strategicTemplate
+                            : undefined;
 
-                        if (stepInput === undefined) {
-                            session.state = wizard.state;
-                            saveInitSession(workspaceRoot, session);
-                            const trace: InitTrace = {
-                                stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                                commandsGenerated: [],
-                                result: "paused",
-                                resumed,
-                                currentStep: wizard.state.currentStep,
-                                statePath,
-                            };
-                            stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
-                            return;
-                        }
-
-                        input = stepInput;
-                    }
-
-                    const transition = wizard.next(input);
-                    session.state = transition.state;
-                    saveInitSession(workspaceRoot, session);
-
-                    if (transition.message) {
-                        stream.markdown(`Init wizard: ${transition.message}`);
-                    }
-
-                    if (transition.status === "active") {
-                        continue;
-                    }
-
-                    if (transition.status === "cancelled") {
-                        clearInitSession(workspaceRoot);
-                        const trace: InitTrace = {
-                            stepsCompleted: countCompletedInitSteps(transition.state.currentStep),
-                            commandsGenerated: [],
-                            result: "cancelled",
-                            resumed,
-                            currentStep: transition.state.currentStep,
-                            statePath,
+                        session = {
+                            version: 1,
+                            mode,
+                            state: createWizardState(legacyTemplate),
                         };
-                        stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                        saveInitSession(workspaceRoot, session);
+                    }
+
+                    initApplyMode = session.mode;
+                    const wizard = new InitWizard(session.state);
+
+                    while (true) {
+                        const step = wizard.state.currentStep;
+                        const progress = renderProgress(step);
+
+                        if (step === "review") {
+                            stream.markdown([
+                                progress,
+                                "",
+                                "```text",
+                                renderReview(wizard.state.data),
+                                "```",
+                            ].join("\n"));
+                        }
+
+                        let input: string | undefined;
+
+                        if (step === "review" || step === "confirm") {
+                            const confirmSelection = await vscode.window.showQuickPick([
+                                { label: "yes", description: "Apply this configuration" },
+                                { label: "no", description: "Cancel and clear wizard state" },
+                                { label: "back", description: "Return to review" },
+                                { label: "cancel", description: "Cancel and clear wizard state" },
+                            ], {
+                                title: progress,
+                                placeHolder: renderPrompt(wizard.state),
+                                ignoreFocusOut: true,
+                            });
+
+                            if (!confirmSelection) {
+                                session.state = wizard.state;
+                                saveInitSession(workspaceRoot, session);
+                                const trace: InitTrace = {
+                                    stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                                    commandsGenerated: [],
+                                    result: "paused",
+                                    resumed,
+                                    currentStep: wizard.state.currentStep,
+                                    statePath,
+                                };
+                                stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                                return;
+                            }
+
+                            input = confirmSelection.label;
+                        } else {
+                            const stepInput = await vscode.window.showInputBox({
+                                title: progress,
+                                prompt: `${renderPrompt(wizard.state)} Type back to edit previous step or cancel to exit.`,
+                                placeHolder: "enter value",
+                                ignoreFocusOut: true,
+                            });
+
+                            if (stepInput === undefined) {
+                                session.state = wizard.state;
+                                saveInitSession(workspaceRoot, session);
+                                const trace: InitTrace = {
+                                    stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
+                                    commandsGenerated: [],
+                                    result: "paused",
+                                    resumed,
+                                    currentStep: wizard.state.currentStep,
+                                    statePath,
+                                };
+                                stream.markdown(`Choir init paused.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                                return;
+                            }
+
+                            input = stepInput;
+                        }
+
+                        const transition = wizard.next(input);
+                        session.state = transition.state;
+                        saveInitSession(workspaceRoot, session);
+
+                        if (transition.message) {
+                            stream.markdown(`Init wizard: ${transition.message}`);
+                        }
+
+                        if (transition.status === "active") {
+                            continue;
+                        }
+
+                        if (transition.status === "cancelled") {
+                            clearInitSession(workspaceRoot);
+                            const trace: InitTrace = {
+                                stepsCompleted: countCompletedInitSteps(transition.state.currentStep),
+                                commandsGenerated: [],
+                                result: "cancelled",
+                                resumed,
+                                currentStep: transition.state.currentStep,
+                                statePath,
+                            };
+                            stream.markdown(`Choir init cancelled.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                            return;
+                        }
+
+                        break;
+                    }
+
+                    const commands = buildDSL(wizard.state.data);
+                    if (commands.length === 0) {
+                        clearInitSession(workspaceRoot);
+                        stream.markdown("Choir init cancelled: no DSL commands generated.");
                         return;
                     }
 
-                    break;
-                }
+                    currentControl = session.mode === "merge"
+                        ? (readControlPlane() ?? createDefaultControlPlane())
+                        : createDefaultControlPlane();
 
-                const commands = buildDSL(wizard.state.data);
-                stream.markdown([
-                    "Preview configuration:",
-                    `- Mission: ${wizard.state.data.mission && wizard.state.data.mission.length > 0 ? wizard.state.data.mission : "(empty)"}`,
-                    `- Vision: ${wizard.state.data.vision && wizard.state.data.vision.length > 0 ? wizard.state.data.vision : "(empty)"}`,
-                    `- Goals: ${wizard.state.data.goals.length}`,
-                    `- Constraints: ${wizard.state.data.constraints.length}`,
-                    `- Non-goals: ${wizard.state.data.nonGoals.length}`,
-                    "",
-                    "Generated DSL:",
-                    "```text",
-                    ...(commands.length > 0 ? commands : ["# no commands generated"]),
-                    "```",
-                ].join("\n"));
+                    for (const command of commands) {
+                        const compiled = compileDSLAndWrite(command, currentControl, controlPath, {
+                            workspaceRoot,
+                            actorId: "chat-user",
+                        });
 
-                if (commands.length === 0) {
+                        if (compiled.decision === "deny") {
+                            session.state = wizard.state;
+                            saveInitSession(workspaceRoot, session);
+                            stream.markdown(`Choir init stopped by policy deny on: ${command}`);
+                            return;
+                        }
+
+                        if (compiled.decision === "require-approval") {
+                            session.state = wizard.state;
+                            saveInitSession(workspaceRoot, session);
+                            stream.markdown([
+                                `Choir init paused: approval required for command: ${command}`,
+                                compiled.pendingApprovalId ? `- diffId: ${compiled.pendingApprovalId}` : "",
+                                compiled.diffHash ? `- diffHash: ${compiled.diffHash}` : "",
+                            ].filter((line) => line.length > 0).join("\n"));
+                            return;
+                        }
+
+                        commandsApplied += 1;
+                        currentControl = compiled.updatedControlPlane;
+                    }
+
+                    missionForSynthesis = wizard.state.data.mission ?? currentControl.mission;
+                    visionForSynthesis = wizard.state.data.vision ?? currentControl.vision;
                     clearInitSession(workspaceRoot);
-                    const trace: InitTrace = {
-                        stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                        commandsGenerated: [],
-                        result: "cancelled",
-                        resumed,
-                        currentStep: wizard.state.currentStep,
-                        statePath,
-                    };
-                    stream.markdown(`Choir init cancelled: no DSL commands generated.\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
-                    return;
                 }
 
-                let currentControl = session.mode === "merge"
-                    ? readControlPlane()
-                    : createDefaultControlPlane();
-
-                if (!currentControl) {
-                    currentControl = createDefaultControlPlane();
-                }
-
-                for (const command of commands) {
-                    const compiled = compileDSLAndWrite(command, currentControl, controlPath, {
-                        workspaceRoot,
-                        actorId: "chat-user",
+                try {
+                    diagnosticsStages.push({
+                        stage: "workspace-discovery",
+                        status: "success",
+                        detail: "detected workspace and package topology",
                     });
 
-                    if (compiled.decision === "deny") {
-                        session.state = wizard.state;
-                        saveInitSession(workspaceRoot, session);
-                        const trace: InitTrace = {
-                            stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                            commandsGenerated: commands,
-                            result: "paused",
-                            resumed,
-                            currentStep: wizard.state.currentStep,
-                            statePath,
-                        };
-                        stream.markdown(`Choir init stopped by policy deny on: ${command}\n\nTrace: ${JSON.stringify(trace, null, 2)}`);
+                    const discovery = discoverStrategicDomains(
+                        workspaceRoot,
+                        (strategicTemplate as Parameters<typeof discoverStrategicDomains>[1])
+                    );
+
+                    if (discovery.domains.length === 0) {
+                        stream.markdown("Strategic init failed: no packages were discovered for domain modeling.");
+                        appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                            command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                            source: "chat",
+                            category: "pipeline",
+                            result: "failure",
+                            summary: "Strategic init failed at domain classification: no discoverable packages.",
+                            stages: [
+                                ...diagnosticsStages,
+                                {
+                                    stage: "domain-classification",
+                                    status: "failure",
+                                    detail: "no packages discovered",
+                                },
+                            ],
+                        });
                         return;
                     }
 
-                    if (compiled.decision === "require-approval") {
-                        session.state = wizard.state;
-                        saveInitSession(workspaceRoot, session);
-                        const trace: InitTrace = {
-                            stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                            commandsGenerated: commands,
-                            result: "paused",
-                            resumed,
-                            currentStep: wizard.state.currentStep,
-                            statePath,
-                        };
-                        stream.markdown([
-                            `Choir init paused: approval required for command: ${command}`,
-                            compiled.pendingApprovalId ? `- diffId: ${compiled.pendingApprovalId}` : "",
-                            compiled.diffHash ? `- diffHash: ${compiled.diffHash}` : "",
-                            "",
-                            `Trace: ${JSON.stringify(trace, null, 2)}`,
-                        ].filter((line) => line.length > 0).join("\n"));
+                    diagnosticsStages.push({
+                        stage: "domain-classification",
+                        status: "success",
+                        detail: `inferred ${discovery.domains.length} domains from ${discovery.packages.length} packages`,
+                    });
+
+                    const models = await modelStrategicDomainsInteractively(discovery);
+                    if (!models) {
+                        stream.markdown("Choir init cancelled during strategic domain modeling.");
                         return;
                     }
 
-                    currentControl = compiled.updatedControlPlane;
+                    diagnosticsStages.push({
+                        stage: "strategic-modeling",
+                        status: "success",
+                        detail: `confirmed strategic posture for ${models.length} domains`,
+                    });
+
+                    const calibration = calibrateStrategicOrchestration(discovery, models);
+                    diagnosticsStages.push({
+                        stage: "orchestration-calibration",
+                        status: "success",
+                        detail: `strategy=${calibration.selectedStrategyType} rollout=${calibration.rolloutDefault} blastRadius=${calibration.estimatedBlastRadius}`,
+                    });
+
+                    const runtimeMode = await chooseRuntimeMode(
+                        calibration.governanceModeRecommendation,
+                        `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
+                    );
+
+                    if (!runtimeMode) {
+                        stream.markdown("Choir init cancelled during runtime governance modeling.");
+                        return;
+                    }
+
+                    diagnosticsStages.push({
+                        stage: "governance-modeling",
+                        status: "success",
+                        detail: `runtime mode selected: ${runtimeMode}`,
+                    });
+
+                    const synthesis = synthesizeStrategicControlPlane(currentControl, {
+                        mode: strategicMode,
+                        mission: missionForSynthesis,
+                        vision: visionForSynthesis,
+                        runtimeMode,
+                        discovery,
+                        models,
+                        calibration,
+                    });
+
+                    writeControlPlane(synthesis.controlPlane);
+                    writeStrategicInitState(workspaceRoot, {
+                        discovery,
+                        models,
+                        synthesis: synthesis.report,
+                        previous: readStrategicInitState(workspaceRoot),
+                    });
+
+                    diagnosticsStages.push({
+                        stage: "control-plane-generation",
+                        status: "success",
+                        detail: `generated runId=${synthesis.report.runId}`,
+                    });
+
+                    appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                        command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                        source: "chat",
+                        category: "pipeline",
+                        result: "success",
+                        summary: `Strategic init completed: ${discovery.domains.length} domains, mode=${strategicMode}, runtime=${runtimeMode}`,
+                        stages: diagnosticsStages,
+                        metadata: {
+                            strategicInit: {
+                                mode: strategicMode,
+                                template: strategicTemplate ?? "none",
+                                workspaceType: discovery.workspace.type,
+                                packageCount: discovery.packages.length,
+                                domainCount: discovery.domains.length,
+                                runtimeMode,
+                                calibration,
+                                report: synthesis.report,
+                                initApplyMode,
+                                commandsApplied,
+                            },
+                        },
+                    });
+
+                    stream.markdown([
+                        "Choir strategic init completed.",
+                        `- mode: ${strategicMode}`,
+                        `- template: ${strategicTemplate ?? "none"}`,
+                        `- workspace: ${discovery.workspace.type}`,
+                        `- packages: ${discovery.packages.length}`,
+                        `- domains: ${discovery.domains.length}`,
+                        `- selectedStrategy: ${calibration.selectedStrategyType}`,
+                        `- rolloutDefault: ${calibration.rolloutDefault}`,
+                        `- runtimeMode: ${runtimeMode}`,
+                        `- blastRadiusEstimate: ${calibration.estimatedBlastRadius}`,
+                        `- topologyHash: ${synthesis.report.topologyHash}`,
+                        `- strategicHash: ${synthesis.report.strategicHash}`,
+                        `- calibrationHash: ${synthesis.report.calibrationHash}`,
+                    ].join("\n"));
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                        command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                        source: "chat",
+                        category: "pipeline",
+                        result: "failure",
+                        summary: `Strategic init failed: ${message}`,
+                        stages: [...diagnosticsStages, {
+                            stage: "strategic-modeling",
+                            status: "failure",
+                            detail: message,
+                        }],
+                    });
+                    stream.markdown(`Strategic init failed: ${message}`);
                 }
 
-                clearInitSession(workspaceRoot);
-                const trace: InitTrace = {
-                    stepsCompleted: countCompletedInitSteps(wizard.state.currentStep),
-                    commandsGenerated: commands,
-                    result: "success",
-                    resumed,
-                    currentStep: wizard.state.currentStep,
-                    statePath,
-                };
-
-                stream.markdown([
-                    "Choir init completed.",
-                    `- mode: ${session.mode}`,
-                    `- commandsApplied: ${commands.length}`,
-                    "",
-                    `Trace: ${JSON.stringify(trace, null, 2)}`,
-                ].join("\n"));
                 return;
             }
 
@@ -851,7 +1174,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 const control = readControlPlane();
                 if (!control) {
-                    stream.markdown("No control plane found. Open a workspace folder first.");
+                    stream.markdown(missingControlPlaneMessage());
                     return;
                 }
 
@@ -887,7 +1210,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                 const control = readControlPlane();
                 if (!control) {
-                    stream.markdown("No control plane found. Open a workspace folder first.");
+                    stream.markdown(missingControlPlaneMessage());
                     return;
                 }
 
@@ -966,7 +1289,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     const control = readControlPlane();
                     if (!control) {
-                        stream.markdown("No control plane found. Open a workspace folder first.");
+                        stream.markdown(missingControlPlaneMessage());
                         return;
                     }
 
@@ -1054,7 +1377,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
             const control = readControlPlane();
             if (!control) {
-                stream.markdown("No control plane found. Open a workspace folder first.");
+                stream.markdown(missingControlPlaneMessage());
                 return;
             }
 
