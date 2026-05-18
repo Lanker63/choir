@@ -180,6 +180,77 @@ const RuntimeCapabilitiesSchema = z.object({
     update: z.boolean().optional(),
 }).strict();
 
+const StrategicPrioritySchema = z.enum([
+    "correctness",
+    "auditability",
+    "rollback-safety",
+    "minimal-blast-radius",
+    "deterministic-replay",
+    "iteration-speed",
+    "developer-autonomy",
+    "dependency-safety",
+    "stability",
+]);
+
+const OptimizationGoalSchema = z.enum([
+    "minimal-blast-radius",
+    "deterministic-replay",
+    "rapid-delivery",
+    "low-governance-friction",
+    "dependency-isolation",
+    "rollback-minimized",
+    "parallel-throughput",
+]);
+
+const RiskToleranceSchema = z.enum(["low", "moderate", "high"]);
+
+const ArchitecturalPostureSchema = z.enum([
+    "conservative",
+    "highly-reviewed",
+    "exploratory",
+    "adaptive",
+    "strict-boundaries",
+    "performance-optimized",
+]);
+
+const RolloutPreferenceSchema = z.enum([
+    "canary-required",
+    "phased-required",
+    "phased-optional",
+    "all-at-once-allowed",
+    "parallel-optimized",
+]);
+
+const StabilityProfileSchema = z.enum(["stable", "adaptive", "experimental"]);
+const GovernanceIntensitySchema = z.enum(["strict", "moderate", "relaxed"]);
+
+const StrategicIntentPartialSchema = z.object({
+    mission: z.string().optional(),
+    priorities: z.array(StrategicPrioritySchema).optional(),
+    optimizationGoals: z.array(OptimizationGoalSchema).optional(),
+    riskTolerance: RiskToleranceSchema.optional(),
+    architecturalPosture: z.array(ArchitecturalPostureSchema).optional(),
+    rolloutPreferences: z.array(RolloutPreferenceSchema).optional(),
+    stabilityProfile: StabilityProfileSchema.optional(),
+    governanceIntensity: GovernanceIntensitySchema.optional(),
+}).strict();
+
+const DomainStrategicSchema = z.object({
+    mission: z.string().optional(),
+    strategicIntent: StrategicIntentPartialSchema.optional(),
+}).strict();
+
+const PackageStrategicSchema = z.object({
+    domain: z.string().min(1),
+    strategicIntent: StrategicIntentPartialSchema.optional(),
+}).strict();
+
+const ContextStrategicSchema = z.object({
+    domain: z.string().min(1).optional(),
+    packages: z.array(z.string().min(1)).optional(),
+    strategicIntent: StrategicIntentPartialSchema.optional(),
+}).strict();
+
 const RuntimeSchema = z.object({
     mode: RuntimeModeSchema.default("execution-enabled"),
 }).strict().default({
@@ -204,6 +275,10 @@ export const ControlPlaneSchema = z.object({
         constraints: z.array(z.string()).default([]),
         "non-goals": z.array(z.string()).default([])
     }).strict(),
+    strategicIntent: StrategicIntentPartialSchema.optional(),
+    domains: z.record(z.string().min(1), DomainStrategicSchema).optional(),
+    packages: z.record(z.string().min(1), PackageStrategicSchema).optional(),
+    contexts: z.record(z.string().min(1), ContextStrategicSchema).optional(),
     policy: z.object({
         rules: z.array(DSLRuleSchema).default([]),
         priorityOverrides: z.object({
@@ -260,6 +335,39 @@ export const ControlPlaneSchema = z.object({
             }
         }
     }
+
+    for (const [packageName, packageConfig] of Object.entries(control.packages ?? {})) {
+        if (!Object.prototype.hasOwnProperty.call(control.domains ?? {}, packageConfig.domain)) {
+            context.addIssue({
+                code: "custom",
+                message: `Package "${packageName}" maps to unknown domain "${packageConfig.domain}"`,
+                path: ["packages", packageName, "domain"],
+            });
+        }
+    }
+
+    for (const [contextName, contextConfig] of Object.entries(control.contexts ?? {})) {
+        if (contextConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, contextConfig.domain)) {
+            context.addIssue({
+                code: "custom",
+                message: `Context "${contextName}" maps to unknown domain "${contextConfig.domain}"`,
+                path: ["contexts", contextName, "domain"],
+            });
+        }
+
+        if (contextConfig.packages) {
+            for (let packageIndex = 0; packageIndex < contextConfig.packages.length; packageIndex += 1) {
+                const packageName = contextConfig.packages[packageIndex] as string;
+                if (!Object.prototype.hasOwnProperty.call(control.packages ?? {}, packageName)) {
+                    context.addIssue({
+                        code: "custom",
+                        message: `Context "${contextName}" references unknown package "${packageName}"`,
+                        path: ["contexts", contextName, "packages", packageIndex],
+                    });
+                }
+            }
+        }
+    }
 });
 
 export type ControlPlane = z.infer<typeof ControlPlaneSchema>;
@@ -267,3 +375,10 @@ export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
 export type PolicyRole = z.infer<typeof PolicyRoleSchema>;
 export type PolicyEnvironment = z.infer<typeof PolicyEnvironmentSchema>;
+export type StrategicPriority = z.infer<typeof StrategicPrioritySchema>;
+export type OptimizationGoal = z.infer<typeof OptimizationGoalSchema>;
+export type RiskTolerance = z.infer<typeof RiskToleranceSchema>;
+export type ArchitecturalPosture = z.infer<typeof ArchitecturalPostureSchema>;
+export type RolloutPreference = z.infer<typeof RolloutPreferenceSchema>;
+export type StabilityProfile = z.infer<typeof StabilityProfileSchema>;
+export type GovernanceIntensity = z.infer<typeof GovernanceIntensitySchema>;

@@ -58,6 +58,7 @@ import {
 } from "../core/policyEngine.js";
 import { getProductionSnapshot } from "../core/productionReadiness.js";
 import { readLatestOrchestrationTrace } from "../core/orchestrationRuntimeTrace.js";
+import type { OrchestrationTraceRecord } from "../core/orchestrationRuntimeTrace.js";
 import type { Role } from "../core/policyEngine.js";
 import {
   formatDSL,
@@ -87,6 +88,7 @@ import type {
   UITrace,
   UISurface,
   RuntimeGovernanceView,
+  StrategicSummaryView,
   WorkflowState,
   WorkflowStep,
 } from "../ui/contracts.js";
@@ -190,9 +192,9 @@ function toUIError(message: string): UIError {
   };
 }
 
-function readRuntimeGovernanceView(root: string): RuntimeGovernanceView | undefined {
-  const trace = readLatestOrchestrationTrace(root);
-  const modeMetadata = trace?.modeMetadata;
+function readRuntimeGovernanceView(root: string, trace?: OrchestrationTraceRecord | null): RuntimeGovernanceView | undefined {
+  const latestTrace = trace ?? readLatestOrchestrationTrace(root);
+  const modeMetadata = latestTrace?.modeMetadata;
   if (!modeMetadata || typeof modeMetadata !== "object" || Array.isArray(modeMetadata)) {
     return undefined;
   }
@@ -258,6 +260,27 @@ function readRuntimeGovernanceView(root: string): RuntimeGovernanceView | undefi
       .sort((left, right) => left.packageName.localeCompare(right.packageName))
     : [];
 
+  const strategicRaw = record.strategic;
+  const strategic = typeof strategicRaw === "object" && strategicRaw !== null && !Array.isArray(strategicRaw)
+    ? (() => {
+      const strategicRecord = strategicRaw as Record<string, unknown>;
+      const governanceIntensity = strategicRecord.governanceIntensity;
+      const domainsRaw = strategicRecord.domains;
+      if (
+        (governanceIntensity !== "strict" && governanceIntensity !== "moderate" && governanceIntensity !== "relaxed")
+        || !Array.isArray(domainsRaw)
+      ) {
+        return undefined;
+      }
+
+      const domains = domainsRaw.filter((entry): entry is string => typeof entry === "string").sort((left, right) => left.localeCompare(right));
+      return {
+        governanceIntensity: governanceIntensity as "strict" | "moderate" | "relaxed",
+        domains,
+      };
+    })()
+    : undefined;
+
   return {
     mode,
     capability,
@@ -266,6 +289,135 @@ function readRuntimeGovernanceView(root: string): RuntimeGovernanceView | undefi
     governanceHash,
     effectiveCapabilities,
     packageDecisions,
+    ...(strategic ? { strategic } : {}),
+  };
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+function readStrategicSummary(controlPlane: object, trace?: OrchestrationTraceRecord | null): StrategicSummaryView | undefined {
+  const record = controlPlane as Record<string, unknown>;
+  const strategicIntentRaw = record.strategicIntent;
+  const domainsRaw = record.domains;
+  const packagesRaw = record.packages;
+
+  const global = typeof strategicIntentRaw === "object" && strategicIntentRaw !== null && !Array.isArray(strategicIntentRaw)
+    ? (() => {
+      const strategicIntent = strategicIntentRaw as Record<string, unknown>;
+      const mission = typeof strategicIntent.mission === "string" ? strategicIntent.mission : undefined;
+      const priorities = toStringArray(strategicIntent.priorities);
+      const optimizationGoals = toStringArray(strategicIntent.optimizationGoals);
+      const riskTolerance = typeof strategicIntent.riskTolerance === "string" ? strategicIntent.riskTolerance : "balanced";
+      const governanceIntensity = typeof strategicIntent.governanceIntensity === "string" ? strategicIntent.governanceIntensity : "moderate";
+      const rolloutPreferences = toStringArray(strategicIntent.rolloutPreferences);
+
+      if (!mission && priorities.length === 0 && optimizationGoals.length === 0 && rolloutPreferences.length === 0) {
+        return undefined;
+      }
+
+      return {
+        ...(mission ? { mission } : {}),
+        priorities,
+        optimizationGoals,
+        riskTolerance,
+        governanceIntensity,
+        rolloutPreferences,
+      };
+    })()
+    : undefined;
+
+  const domains = typeof domainsRaw === "object" && domainsRaw !== null && !Array.isArray(domainsRaw)
+    ? Object.entries(domainsRaw as Record<string, unknown>)
+      .map(([id, value]) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) {
+          return null;
+        }
+
+        const domain = value as Record<string, unknown>;
+        const mission = typeof domain.mission === "string" ? domain.mission : undefined;
+        const governanceIntensity = typeof domain.governanceIntensity === "string" ? domain.governanceIntensity : undefined;
+        const priorities = toStringArray(domain.priorities);
+        const rolloutPreferences = toStringArray(domain.rolloutPreferences);
+
+        if (!mission && !governanceIntensity && priorities.length === 0 && rolloutPreferences.length === 0) {
+          return null;
+        }
+
+        return {
+          id,
+          ...(mission ? { mission } : {}),
+          ...(governanceIntensity ? { governanceIntensity } : {}),
+          priorities,
+          rolloutPreferences,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((left, right) => left.id.localeCompare(right.id))
+    : [];
+
+  const packages = typeof packagesRaw === "object" && packagesRaw !== null && !Array.isArray(packagesRaw)
+    ? Object.entries(packagesRaw as Record<string, unknown>)
+      .map(([id, value]) => {
+        if (typeof value !== "object" || value === null || Array.isArray(value)) {
+          return null;
+        }
+
+        const packageRecord = value as Record<string, unknown>;
+        const domain = typeof packageRecord.domain === "string" ? packageRecord.domain : "unassigned";
+        const governanceIntensity = typeof packageRecord.governanceIntensity === "string" ? packageRecord.governanceIntensity : undefined;
+        const rolloutPreferences = toStringArray(packageRecord.rolloutPreferences);
+
+        return {
+          id,
+          domain,
+          ...(governanceIntensity ? { governanceIntensity } : {}),
+          rolloutPreferences,
+        };
+      })
+      .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+      .sort((left, right) => left.id.localeCompare(right.id))
+    : [];
+
+  const selected = trace?.candidates.find((candidate) => candidate.selected)
+    ?? (trace?.rankingOrder[0]
+      ? trace.candidates.find((candidate) => candidate.id === trace.rankingOrder[0])
+      : undefined);
+  const selectedCandidate = selected
+    ? {
+      id: selected.id,
+      strategyType: selected.strategyType,
+      ...(typeof selected.strategicAlignment === "number" ? { strategicAlignment: selected.strategicAlignment } : {}),
+      ...(selected.governanceIntensity ? { governanceIntensity: selected.governanceIntensity } : {}),
+      ...(selected.strategicDomains ? { strategicDomains: [...selected.strategicDomains].sort((left, right) => left.localeCompare(right)) } : {}),
+      ...(selected.rolloutBias
+        ? {
+          rolloutBias: {
+            preferred: selected.rolloutBias.preferred,
+            stageSizing: selected.rolloutBias.stageSizing,
+            rollbackAggressiveness: selected.rolloutBias.rollbackAggressiveness,
+            dependencyIsolation: selected.rolloutBias.dependencyIsolation,
+            reasons: [...selected.rolloutBias.reasons],
+          },
+        }
+        : {}),
+    }
+    : undefined;
+
+  if (!global && domains.length === 0 && packages.length === 0 && !selectedCandidate) {
+    return undefined;
+  }
+
+  return {
+    ...(global ? { global } : {}),
+    domains,
+    packages,
+    ...(selectedCandidate ? { selectedCandidate } : {}),
   };
 }
 
@@ -627,6 +779,11 @@ export class ChoirProductService {
               id: candidate.id,
               strategyType: candidate.strategyType,
               orchestrationDagHash: candidate.orchestrationDagHash,
+              strategicContextHash: candidate.strategicContextHash,
+              strategicAlignment: candidate.strategicAlignment,
+              strategicDomains: candidate.strategicDomains,
+              governanceIntensity: candidate.governanceIntensity,
+              rolloutBias: candidate.rolloutBias,
               ...(typeof candidate.rank === "number" ? { rank: candidate.rank } : {}),
               ...(candidate.selected === true ? { selected: true } : {}),
             })),
@@ -725,7 +882,9 @@ export class ChoirProductService {
       },
     };
     const replayView = this.buildReplayView(root, state);
-    const runtimeGovernance = readRuntimeGovernanceView(root);
+    const orchestrationTrace = readLatestOrchestrationTrace(root);
+    const runtimeGovernance = readRuntimeGovernanceView(root, orchestrationTrace);
+    const strategicSummary = readStrategicSummary(controlPlaneToChoirConfig(control), orchestrationTrace);
 
     return {
       generatedAt: new Date().toISOString(),
@@ -766,6 +925,7 @@ export class ChoirProductService {
       ...(replayView.stateDiff ? { stateDiff: replayView.stateDiff } : {}),
       ...(replayView.replayTrace ? { replayTrace: replayView.replayTrace } : {}),
       ...(runtimeGovernance ? { runtimeGovernance } : {}),
+      ...(strategicSummary ? { strategicSummary } : {}),
     };
   }
 

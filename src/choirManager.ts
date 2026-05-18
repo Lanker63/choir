@@ -242,6 +242,18 @@ export function createDefaultControlPlane(): ControlPlane {
             constraints: [],
             "non-goals": []
         },
+        strategicIntent: {
+            priorities: [],
+            optimizationGoals: [],
+            riskTolerance: "moderate",
+            architecturalPosture: [],
+            rolloutPreferences: [],
+            stabilityProfile: "adaptive",
+            governanceIntensity: "moderate",
+        },
+        domains: {},
+        packages: {},
+        contexts: {},
         policy: {
             rules: [],
         },

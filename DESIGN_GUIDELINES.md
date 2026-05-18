@@ -154,6 +154,19 @@ Hard constraints:
 
 Imported libraries must participate in policy evaluation order (`org -> repo -> workspace -> library`) and may not bypass deny precedence.
 
+## Strategic Intent Contract
+
+- Strategic intent is a first-class orchestration input, distinct from runtime governance.
+- Hierarchy is explicit and deterministic: `global strategicIntent -> domains -> packages -> contexts -> orchestration unit`.
+- Strategic intent must not be inferred implicitly; resolution is configuration-driven and fail-closed on ambiguity or missing domain mappings.
+- Deterministic planning must include strategic semantics in candidate synthesis, ranking, rollout bias, and rollback posture.
+- Deterministic ranking order is: `violations -> strategic alignment -> risk -> rollback complexity -> changes -> execution cost`.
+- Strategic inheritance must compose with governance inheritance and must not bypass deny precedence.
+- Replay determinism must validate strategic context hash, inheritance chain, and strategic ranking outcomes.
+- Diagnostics and traces must expose strategic resolution, alignment, rollout bias, and governance intensity as explainable metadata.
+- Monorepo orchestration must support domain-aware strategic partitioning and isolation boundaries.
+- Control Center and Timeline projections must render strategic explainability from traces (domain/package posture, selected-candidate alignment, and rollout bias rationale).
+
 ## Runtime Governance Contract
 
 - Runtime governance is an execution control plane, not a UI preference toggle.
@@ -301,7 +314,7 @@ Selection:
 
 - default strategy selection is simulation-first and violation-intolerant
 - strategies with violations are rejected unless explicitly allowed by config
-- strict lexicographic order: violations -> risk -> changes -> executionCost
+- strict lexicographic order: violations -> strategic alignment -> risk -> rollback complexity -> changes -> execution cost
 - optional weighted scoring is secondary and applies only after lexicographic filtering
 - final tie-break is lexical strategy id
 
@@ -374,18 +387,18 @@ Workspace detection contract:
 - .choir language support is grammar-state driven (completions, hover, validation)
 - internal roles (architect, analyst, conductor, enforcer) are routing boundaries, not user-facing participants
 - refactor DSL surface:
-   - choir refactor rename <symbol> <newName>
-          - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
-   - semantic rename must resolve the declaration identifier token (including exported declarations)
-     - name-only rename must fail closed when multiple declarations share the same symbol name, with deterministic candidate locations
-          - ambiguity failures are runtime command errors and must not be labeled as DSL grammar-invalid
-   - choir refactor inline <symbol>
-   - choir refactor move <symbol> <targetUnit>
-          - choir refactor move <symbol> --file "<workspace-relative-file>"
-       - MVP execution supports top-level function declaration moves as clean relocation (no automatic source compatibility re-export)
-    - choir refactor extract <symbol> <targetUnit>
-          - choir refactor extract <symbol> --file "<workspace-relative-file>"
-       - MVP execution supports extracting top-level exported non-default function declarations with deterministic source wrapper delegation to target implementation
+  - choir refactor rename <symbol> <newName>
+  - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
+  - semantic rename must resolve the declaration identifier token (including exported declarations)
+  - name-only rename must fail closed when multiple declarations share the same symbol name, with deterministic candidate locations
+  - ambiguity failures are runtime command errors and must not be labeled as DSL grammar-invalid
+  - choir refactor inline <symbol>
+  - choir refactor move <symbol> <targetUnit>
+  - choir refactor move <symbol> --file "<workspace-relative-file>"
+  - MVP execution supports top-level function declaration moves as clean relocation (no automatic source compatibility re-export)
+  - choir refactor extract <symbol> <targetUnit>
+  - choir refactor extract <symbol> --file "<workspace-relative-file>"
+  - MVP execution supports extracting top-level exported non-default function declarations with deterministic source wrapper delegation to target implementation
 - plan optimization surface:
    - choir plan --optimize
    - choir plan --optimize for <goalRef>
@@ -424,6 +437,7 @@ Workspace detection contract:
 - Polling-based state synchronization is forbidden
 - View lifecycle must support deterministic rehydrate on reopen
 - All inbound webview messages must be validated before execution
+- Webview strategic sections must remain projection-only and must not synthesize strategic decisions client-side.
 
 ## Non-Negotiable Safeguards
 
@@ -449,7 +463,7 @@ Workspace detection contract:
 - .choir/state.audit.jsonl
 - .choir/audit.log.jsonl
 - .choir/memory.json
-- .choir/lock.yaml
+- choir.lock
 - .choir/ci.yaml
 - .choir/abstractions.yaml
 - .choir/libraries/

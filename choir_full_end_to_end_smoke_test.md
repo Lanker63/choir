@@ -59,6 +59,15 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm both non-goals are persisted.
    - Confirm `.choir/choir.config.yaml` remains valid YAML after all define operations.
 
+8. Edit `.choir/choir.config.yaml` and add strategic hierarchy configuration.
+
+   - Add a global `strategicIntent` block with at least: `mission`, `priorities`, `optimizationGoals`, `riskTolerance`, `governanceIntensity`, `rolloutPreferences`.
+   - Add at least two `domains` with different governance/priority posture (for example `payments` and `experimentation`).
+   - Add at least two `packages` mapped to those domains.
+   - Optionally add a `contexts` mapping for one orchestration context.
+   - Confirm YAML parses and `@choir status` still succeeds.
+   - Confirm no unknown-domain or unknown-package mapping errors are reported for valid entries.
+
 ---
 
 ## Topic 2: Analysis and Planning
@@ -84,10 +93,19 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm multiple candidate plans are evaluated.
    - Confirm a selected plan and strategy are returned.
    - Confirm selected plan id is persisted in control plane (for example via `persistedPlan` in output or `.choir/choir.config.yaml`).
+   - Confirm planning output includes strategic evidence (for example strategic alignment, strategic domains, governance intensity, or rollout bias rationale).
 
 5. Re-run `@choir plan --optimize` without changing any input.
 
    - Confirm the same plan and strategy are selected (deterministic output).
+   - Confirm strategic ranking evidence remains stable for unchanged input (same selected strategic posture and deterministic candidate order).
+
+6. Validate fail-closed strategic resolution.
+
+   - Introduce a temporary invalid strategic mapping in `.choir/choir.config.yaml` (for example package mapped to a non-existent domain).
+   - Re-run `@choir plan --optimize`.
+   - Confirm planning fails closed with a strategic resolution/mapping error (no silent fallback).
+   - Restore valid mapping and confirm planning succeeds again.
 
 ---
 
@@ -197,55 +215,12 @@ Topic setup for deterministic lineage:
 
 ---
 
-## Topic 8: Library Registry, Import, Install, Update, and Lock
-
-1. Ensure `.choir/choir.config.yaml` includes deterministic registry sources:
-
-   - `registries: [local, org]` (or equivalent explicit list).
-
-2. In chat, run `@choir library list`.
-
-   - Confirm output is deterministically ordered by library id.
-   - Confirm each entry includes versions, selectors, and capability metadata.
-
-3. In chat, run `@choir import org.auth-patterns@stable`.
-
-   - Confirm response includes `library`, `selector`, `resolvedVersion`, and `status: success`.
-   - Confirm no runtime exception occurs.
-
-4. In chat, run `@choir library install org.auth-patterns@stable`.
-
-   - Confirm `.choir/libraries/org.auth-patterns/manifest.yaml` exists.
-   - Confirm `choir.lock` is updated with deterministic selector/version/hash fields.
-
-5. In chat, run `@choir library update org.auth-patterns`.
-
-   - Confirm update is deterministic and does not silently cross incompatible boundaries.
-   - Confirm lock entry is updated predictably.
-
-6. In chat, run `@choir library lock`.
-
-   - Confirm `choir.lock` is rewritten in stable order.
-   - Confirm `.choir/capability-graph.json` exists and contains dependency edges.
-
-7. Run `npm run verify:libraries`.
-
-   - Confirm all checks pass:
-     - deterministic library resolution
-     - deterministic selector resolution
-     - lock replay stability
-     - capability graph deterministic
-     - policy inheritance correct
-     - updates replay-safe
-     - integrity validation enforced
-
----
-
 ## Topic 6: Graph, Timeline, Diagnostics, and Webview Surfaces
 
 1. Open the Command Palette and run **Choir: Open Control Center**.
 
    - Confirm the panel loads and renders without console or runtime errors.
+   - Confirm the dashboard includes strategic sections (global strategic overview, domain strategic context, package strategic posture, and selected candidate strategic rationale) after at least one optimize/preview/execute run.
 
 2. Open the Command Palette and run **Choir: Open Dependency Graph**.
 
@@ -254,6 +229,7 @@ Topic setup for deterministic lineage:
 3. Open the Command Palette and run **Choir: Open Timeline**.
 
    - Confirm the timeline panel loads and prior transitions appear.
+   - Confirm strategic rationale appears for the selected replay state (selected candidate strategy, strategic alignment, governance intensity, and rollout-bias details when available).
 
 4. Open the Command Palette and run **Choir: Open Diagnostics**.
 
@@ -289,6 +265,7 @@ Topic setup for deterministic lineage:
    - Confirm the status line updates to include `refreshed=<time>`.
    - Confirm Trace updates with `generatedAt=<isoTime>` (new value on each refresh).
    - Confirm pipeline-driven projections refresh (graph/timeline/diagnostics) rather than a no-op repaint.
+   - If strategic config changed since last run, confirm refreshed Control Center/Timeline projections reflect the updated strategic posture.
 
 11. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
 
@@ -601,7 +578,9 @@ Run each command below a second time on unchanged inputs and confirm stability.
 8. Open Control Center, Timeline, and Diagnostics panels after at least one governed run.
 
    - Confirm runtime governance mode/capability/decision is visible in Control Center dashboard.
+   - Confirm runtime governance strategic overlays are visible in Control Center (strategic domains and governance intensity, when present).
    - Confirm runtime governance trace details are visible in Timeline view.
+   - Confirm Timeline includes strategic rationale tied to selected replay candidate (alignment/domains/governance intensity/rollout bias when present).
    - Confirm diagnostics metadata includes runtime governance entries.
 
 ---
@@ -620,7 +599,7 @@ Run each command below a second time on unchanged inputs and confirm stability.
 | 8. Refactor Feature Surface | PASS / FAIL | |
 | 9. Library and Import Commands | PASS / FAIL | |
 | 10. CI Pipeline | PASS / FAIL | |
-| 11. CLI Verification Surface | PASS / FAIL | |
+| 11. Verification Surface (Target Repo) | PASS / FAIL | |
 | 12. Determinism and Repeatability | PASS / FAIL | |
 | 13. Runtime Governance Modes and Capability Gates | PASS / FAIL | |
 

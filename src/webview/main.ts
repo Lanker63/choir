@@ -213,6 +213,33 @@ function renderDashboard(): string {
       .map((entry) => `<li>${escapeHtml(entry.packageName)}: mode=${escapeHtml(entry.mode)} decision=${escapeHtml(entry.decision)}</li>`)
       .join("")
     : "<li>No package-level governance decisions recorded.</li>";
+  const strategicSummary = snapshot.strategicSummary;
+  const strategicOverview = strategicSummary?.global
+    ? `
+      <p>governanceIntensity=${escapeHtml(strategicSummary.global.governanceIntensity)} | riskTolerance=${escapeHtml(strategicSummary.global.riskTolerance)}${strategicSummary.global.mission ? ` | mission=${escapeHtml(strategicSummary.global.mission)}` : ""}</p>
+      <p>priorities=${escapeHtml(strategicSummary.global.priorities.join(", ") || "none")} | optimizationGoals=${escapeHtml(strategicSummary.global.optimizationGoals.join(", ") || "none")}</p>
+      <p>rolloutPreferences=${escapeHtml(strategicSummary.global.rolloutPreferences.join(", ") || "none")}</p>
+    `
+    : "<p>No global strategic intent configured.</p>";
+  const strategicDomains = strategicSummary && strategicSummary.domains.length > 0
+    ? strategicSummary.domains
+      .map((domain) => `<li>${escapeHtml(domain.id)}: governance=${escapeHtml(domain.governanceIntensity ?? "inherited")} priorities=${escapeHtml(domain.priorities.join(", ") || "none")} rollout=${escapeHtml(domain.rolloutPreferences.join(", ") || "none")}</li>`)
+      .join("")
+    : "<li>No domain strategic contexts configured.</li>";
+  const strategicPackages = strategicSummary && strategicSummary.packages.length > 0
+    ? strategicSummary.packages
+      .map((pkg) => `<li>${escapeHtml(pkg.id)}: domain=${escapeHtml(pkg.domain)} governance=${escapeHtml(pkg.governanceIntensity ?? "inherited")} rollout=${escapeHtml(pkg.rolloutPreferences.join(", ") || "none")}</li>`)
+      .join("")
+    : "<li>No package strategic posture mappings configured.</li>";
+  const selectedStrategicCandidate = strategicSummary?.selectedCandidate
+    ? `
+      <p>id=${escapeHtml(strategicSummary.selectedCandidate.id)} | strategy=${escapeHtml(strategicSummary.selectedCandidate.strategyType)} | alignment=${typeof strategicSummary.selectedCandidate.strategicAlignment === "number" ? strategicSummary.selectedCandidate.strategicAlignment.toFixed(4) : "n/a"}</p>
+      <p>governanceIntensity=${escapeHtml(strategicSummary.selectedCandidate.governanceIntensity ?? "n/a")} | domains=${escapeHtml((strategicSummary.selectedCandidate.strategicDomains ?? []).join(", ") || "none")}</p>
+      ${strategicSummary.selectedCandidate.rolloutBias
+      ? `<p>rolloutBias=${escapeHtml(strategicSummary.selectedCandidate.rolloutBias.preferred)} stageSizing=${escapeHtml(strategicSummary.selectedCandidate.rolloutBias.stageSizing)} rollback=${escapeHtml(strategicSummary.selectedCandidate.rolloutBias.rollbackAggressiveness)} isolation=${escapeHtml(strategicSummary.selectedCandidate.rolloutBias.dependencyIsolation)} reasons=${escapeHtml(strategicSummary.selectedCandidate.rolloutBias.reasons.join(" | ") || "none")}</p>`
+      : "<p>No rollout bias reasoning on selected candidate.</p>"}
+    `
+    : "<p>No selected strategic candidate in latest orchestration trace.</p>";
 
   return `
     <section class="grid">
@@ -258,6 +285,22 @@ function renderDashboard(): string {
       <article class="card wide">
         <div class="muted">Package Governance Decisions</div>
         <ul class="list">${runtimePackageDecisions}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Strategic Intent Overview</div>
+        ${strategicOverview}
+      </article>
+      <article class="card wide">
+        <div class="muted">Domain Strategic Context</div>
+        <ul class="list">${strategicDomains}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Package Strategic Posture</div>
+        <ul class="list">${strategicPackages}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Selected Orchestration Strategic Rationale</div>
+        ${selectedStrategicCandidate}
       </article>
     </section>
   `;
@@ -418,6 +461,20 @@ function renderTimelineView(): string {
       </article>
     `
     : "";
+  const selectedCandidate = snapshot.replayTrace?.planning?.candidates.find((candidate) => candidate.selected)
+    ?? snapshot.replayTrace?.planning?.candidates[0];
+  const strategicRationale = selectedCandidate
+    ? `
+      <article class="card full">
+        <div class="muted">Strategic Orchestration Rationale</div>
+        <p>candidate=${escapeHtml(selectedCandidate.id)} | strategy=${escapeHtml(selectedCandidate.strategyType)} | alignment=${typeof selectedCandidate.strategicAlignment === "number" ? selectedCandidate.strategicAlignment.toFixed(4) : "n/a"}</p>
+        <p>domains=${escapeHtml((selectedCandidate.strategicDomains ?? []).join(", ") || "none")} | governanceIntensity=${escapeHtml(selectedCandidate.governanceIntensity ?? "n/a")}</p>
+        ${selectedCandidate.rolloutBias
+      ? `<p>rollout=${escapeHtml(selectedCandidate.rolloutBias.preferred)} stageSizing=${escapeHtml(selectedCandidate.rolloutBias.stageSizing)} rollback=${escapeHtml(selectedCandidate.rolloutBias.rollbackAggressiveness)} isolation=${escapeHtml(selectedCandidate.rolloutBias.dependencyIsolation)} reasons=${escapeHtml(selectedCandidate.rolloutBias.reasons.join(" | ") || "none")}</p>`
+      : "<p>No rollout bias reasoning captured for selected candidate.</p>"}
+      </article>
+    `
+    : "";
   const runtimeGovernance = snapshot.runtimeGovernance;
   const runtimeGovernanceBlock = runtimeGovernance
     ? `
@@ -425,6 +482,7 @@ function renderTimelineView(): string {
         <div class="muted">Runtime Governance Trace</div>
         <p>mode=${escapeHtml(runtimeGovernance.mode)} | capability=${escapeHtml(runtimeGovernance.capability)} | decision=${escapeHtml(runtimeGovernance.decision)} | reason=${escapeHtml(runtimeGovernance.reason)}</p>
         <p class="mono">governanceHash=${escapeHtml(runtimeGovernance.governanceHash)}</p>
+        <p>strategicDomains=${escapeHtml((runtimeGovernance.strategic?.domains ?? []).join(", ") || "none")} | governanceIntensity=${escapeHtml(runtimeGovernance.strategic?.governanceIntensity ?? "n/a")}</p>
       </article>
     `
     : "";
@@ -479,6 +537,7 @@ function renderTimelineView(): string {
       </article>
 
       ${replayTrace}
+      ${strategicRationale}
       ${runtimeGovernanceBlock}
     </section>
   `;

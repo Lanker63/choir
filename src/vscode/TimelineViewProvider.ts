@@ -12,6 +12,7 @@ type TimelineProjection = {
   stateDiff?: ProductSnapshot["stateDiff"];
   replayTrace?: ProductSnapshot["replayTrace"];
   runtimeGovernance?: ProductSnapshot["runtimeGovernance"];
+  strategicSummary?: ProductSnapshot["strategicSummary"];
 };
 
 type TimelineOutboundMessage =
@@ -140,6 +141,7 @@ export class TimelineViewProvider {
       ...(snapshot.stateDiff ? { stateDiff: snapshot.stateDiff } : {}),
       ...(snapshot.replayTrace ? { replayTrace: snapshot.replayTrace } : {}),
       ...(snapshot.runtimeGovernance ? { runtimeGovernance: snapshot.runtimeGovernance } : {}),
+      ...(snapshot.strategicSummary ? { strategicSummary: snapshot.strategicSummary } : {}),
     };
   }
 
@@ -298,6 +300,8 @@ export class TimelineViewProvider {
       <pre id="trace"></pre>
       <h3>Runtime Governance</h3>
       <pre id="runtimeGovernance"></pre>
+      <h3>Strategic Context</h3>
+      <pre id="strategic"></pre>
     </section>
   </div>
   <script nonce="${nonce}">
@@ -309,6 +313,7 @@ export class TimelineViewProvider {
     const diff = document.getElementById('diff');
     const trace = document.getElementById('trace');
     const runtimeGovernance = document.getElementById('runtimeGovernance');
+    const strategic = document.getElementById('strategic');
     const statusLine = document.getElementById('statusLine');
 
     function post(message) { vscode.postMessage(message); }
@@ -338,6 +343,27 @@ export class TimelineViewProvider {
       diff.textContent = JSON.stringify(model.stateDiff ?? { patches: [] }, null, 2);
       trace.textContent = JSON.stringify(model.replayTrace ?? {}, null, 2);
       runtimeGovernance.textContent = JSON.stringify(model.runtimeGovernance ?? {}, null, 2);
+
+      const selectedCandidate = model.replayTrace?.planning?.candidates?.find((candidate) => candidate.selected)
+        ?? model.replayTrace?.planning?.candidates?.[0];
+      const strategicLines = [
+        model.strategicSummary?.global
+          ? 'global: governance=' + model.strategicSummary.global.governanceIntensity + ', risk=' + model.strategicSummary.global.riskTolerance + ', priorities=' + (model.strategicSummary.global.priorities.join(', ') || 'none')
+          : 'global: not configured',
+        model.strategicSummary && model.strategicSummary.domains.length > 0
+          ? 'domains: ' + model.strategicSummary.domains.map((domain) => domain.id + '(' + (domain.governanceIntensity || 'inherited') + ')').join(', ')
+          : 'domains: none',
+        model.strategicSummary && model.strategicSummary.packages.length > 0
+          ? 'packages: ' + model.strategicSummary.packages.map((pkg) => pkg.id + '->' + pkg.domain).join(', ')
+          : 'packages: none',
+        selectedCandidate
+          ? 'selected: ' + selectedCandidate.id + ' strategy=' + selectedCandidate.strategyType + ' alignment=' + (typeof selectedCandidate.strategicAlignment === 'number' ? selectedCandidate.strategicAlignment.toFixed(4) : 'n/a')
+          : 'selected: none',
+        selectedCandidate?.rolloutBias
+          ? 'rollout: ' + selectedCandidate.rolloutBias.preferred + ', stage=' + selectedCandidate.rolloutBias.stageSizing + ', rollback=' + selectedCandidate.rolloutBias.rollbackAggressiveness + ', isolation=' + selectedCandidate.rolloutBias.dependencyIsolation
+          : 'rollout: no rationale captured',
+      ];
+      strategic.textContent = strategicLines.join('\n');
     }
 
     document.getElementById('refreshBtn').addEventListener('click', () => post({ type: 'REQUEST_STATE' }));

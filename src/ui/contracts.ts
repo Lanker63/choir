@@ -175,6 +175,17 @@ export type TimelineReplayTrace = {
       id: string;
       strategyType: string;
       orchestrationDagHash: string;
+      strategicContextHash?: string;
+      strategicAlignment?: number;
+      strategicDomains?: string[];
+      governanceIntensity?: "strict" | "moderate" | "relaxed";
+      rolloutBias?: {
+        preferred: "canary" | "phased" | "all-at-once";
+        stageSizing: "slow" | "balanced" | "fast";
+        rollbackAggressiveness: "strict" | "normal" | "relaxed";
+        dependencyIsolation: "high" | "medium" | "low";
+        reasons: string[];
+      };
       rank?: number;
       selected?: boolean;
     }>;
@@ -194,6 +205,48 @@ export type RuntimeGovernanceView = {
     decision: "allow" | "deny" | "require-approval";
     reason: string;
   }>;
+  strategic?: {
+    governanceIntensity: "strict" | "moderate" | "relaxed";
+    domains: string[];
+  };
+};
+
+export type StrategicSummaryView = {
+  global?: {
+    mission?: string;
+    priorities: string[];
+    optimizationGoals: string[];
+    riskTolerance: string;
+    governanceIntensity: string;
+    rolloutPreferences: string[];
+  };
+  domains: Array<{
+    id: string;
+    mission?: string;
+    governanceIntensity?: string;
+    priorities: string[];
+    rolloutPreferences: string[];
+  }>;
+  packages: Array<{
+    id: string;
+    domain: string;
+    governanceIntensity?: string;
+    rolloutPreferences: string[];
+  }>;
+  selectedCandidate?: {
+    id: string;
+    strategyType: string;
+    strategicAlignment?: number;
+    governanceIntensity?: string;
+    strategicDomains?: string[];
+    rolloutBias?: {
+      preferred: string;
+      stageSizing: string;
+      rollbackAggressiveness: string;
+      dependencyIsolation: string;
+      reasons: string[];
+    };
+  };
 };
 
 export type WorkflowState = {
@@ -224,6 +277,7 @@ export type ProductSnapshot = {
   stateDiff?: StateDiff;
   replayTrace?: TimelineReplayTrace;
   runtimeGovernance?: RuntimeGovernanceView;
+  strategicSummary?: StrategicSummaryView;
 };
 
 export type ProductActionRequest =

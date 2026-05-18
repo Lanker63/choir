@@ -97,6 +97,13 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
   const runtimeDecision = typeof runtimeGovernance?.decision === "string" ? runtimeGovernance.decision : "unknown";
   const runtimeReason = typeof runtimeGovernance?.reason === "string" ? runtimeGovernance.reason : "unknown";
   const runtimeCapabilities = runtimeGovernance?.effectiveCapabilities as Record<string, unknown> | undefined;
+  const runtimeStrategic = runtimeGovernance?.strategic as Record<string, unknown> | undefined;
+  const runtimeStrategicIntensity = typeof runtimeStrategic?.governanceIntensity === "string"
+    ? runtimeStrategic.governanceIntensity
+    : "unknown";
+  const runtimeStrategicDomains = Array.isArray(runtimeStrategic?.domains)
+    ? (runtimeStrategic.domains as unknown[]).map((entry) => String(entry)).join(",")
+    : "none";
   const runtimeCapabilityRows = runtimeCapabilities
     ? Object.entries(runtimeCapabilities)
       .sort(([left], [right]) => left.localeCompare(right))
@@ -112,6 +119,8 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
     return `<tr>`
       + `<td>${escapeHtml(candidate.id ?? "")}${selectedBadge}</td>`
       + `<td>${escapeHtml(candidate.strategyType ?? "")}</td>`
+      + `<td>${escapeHtml(candidate.strategicAlignment ?? "")}</td>`
+      + `<td>${escapeHtml(candidate.governanceIntensity ?? "")}</td>`
       + `<td>${escapeHtml(candidate.riskScore ?? "")}</td>`
       + `<td>${escapeHtml(candidate.rollbackComplexity ?? "")}</td>`
       + `<td>${escapeHtml(candidate.blastRadius ?? "")}</td>`
@@ -132,7 +141,7 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
 
   const metadata = selected.metadata ? JSON.stringify(selected.metadata, null, 2) : "{}";
   const emptyStageRow = "<tr><td colspan=\"3\">No stage data recorded.</td></tr>";
-  const emptyCandidateRow = "<tr><td colspan=\"6\">No candidate plans recorded.</td></tr>";
+  const emptyCandidateRow = "<tr><td colspan=\"8\">No candidate plans recorded.</td></tr>";
   const emptyComparisonRow = "<tr><td colspan=\"5\">No plan comparisons recorded.</td></tr>";
 
   return `<div class="header">Generated ${escapeHtml(snapshot.generatedAt)} | Log ${escapeHtml(snapshot.logPath)}</div>`
@@ -142,6 +151,7 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
     + `<div>Timestamp: ${escapeHtml(selected.timestamp)}</div>`
     + "<div><strong>Runtime Governance</strong></div>"
     + `<div>mode=${escapeHtml(runtimeMode)} | capability=${escapeHtml(runtimeCapability)} | decision=${escapeHtml(runtimeDecision)} | reason=${escapeHtml(runtimeReason)}</div>`
+    + `<div>strategic governanceIntensity=${escapeHtml(runtimeStrategicIntensity)} | domains=${escapeHtml(runtimeStrategicDomains)}</div>`
     + "<table>"
     + "<thead><tr><th>Capability</th><th>Enabled</th></tr></thead>"
     + `<tbody>${runtimeCapabilityRows.length > 0 ? runtimeCapabilityRows : "<tr><td colspan=\"2\">No runtime capability map recorded.</td></tr>"}</tbody>`
@@ -152,7 +162,7 @@ function renderStaticDetails(snapshot: DiagnosticsProjection): string {
     + "</table>"
     + "<div><strong>Candidate Plans</strong></div>"
     + "<table>"
-    + "<thead><tr><th>Candidate</th><th>Strategy</th><th>Risk</th><th>Rollback</th><th>Blast Radius</th><th>DAG Stages</th></tr></thead>"
+    + "<thead><tr><th>Candidate</th><th>Strategy</th><th>Strategic Alignment</th><th>Governance</th><th>Risk</th><th>Rollback</th><th>Blast Radius</th><th>DAG Stages</th></tr></thead>"
     + `<tbody>${candidateRows.length > 0 ? candidateRows : emptyCandidateRow}</tbody>`
     + "</table>"
     + "<div><strong>Compare Plans</strong></div>"
@@ -613,6 +623,8 @@ export class PipelineDiagnosticsViewProvider {
         return '<tr>' +
           '<td>' + escapeHtml(candidate.id || '') + selectedBadge + '</td>' +
           '<td>' + escapeHtml(candidate.strategyType || '') + '</td>' +
+          '<td>' + escapeHtml(candidate.strategicAlignment || '') + '</td>' +
+          '<td>' + escapeHtml(candidate.governanceIntensity || '') + '</td>' +
           '<td>' + escapeHtml(candidate.riskScore || '') + '</td>' +
           '<td>' + escapeHtml(candidate.rollbackComplexity || '') + '</td>' +
           '<td>' + escapeHtml(candidate.blastRadius || '') + '</td>' +
@@ -633,7 +645,7 @@ export class PipelineDiagnosticsViewProvider {
 
       const metadata = selected.metadata ? JSON.stringify(selected.metadata, null, 2) : "{}";
       const emptyStageRow = '<tr><td colspan="3">No stage data recorded.</td></tr>';
-      const emptyCandidateRow = '<tr><td colspan="6">No candidate plans recorded.</td></tr>';
+      const emptyCandidateRow = '<tr><td colspan="8">No candidate plans recorded.</td></tr>';
       const emptyComparisonRow = '<tr><td colspan="5">No plan comparisons recorded.</td></tr>';
 
       detailsNode.innerHTML =
@@ -648,7 +660,7 @@ export class PipelineDiagnosticsViewProvider {
         '</table>' +
         '<div><strong>Candidate Plans</strong></div>' +
         '<table>' +
-          '<thead><tr><th>Candidate</th><th>Strategy</th><th>Risk</th><th>Rollback</th><th>Blast Radius</th><th>DAG Stages</th></tr></thead>' +
+          '<thead><tr><th>Candidate</th><th>Strategy</th><th>Strategic Alignment</th><th>Governance</th><th>Risk</th><th>Rollback</th><th>Blast Radius</th><th>DAG Stages</th></tr></thead>' +
           '<tbody>' + (candidateRows.length > 0 ? candidateRows : emptyCandidateRow) + '</tbody>' +
         '</table>' +
         '<div><strong>Compare Plans</strong></div>' +

@@ -66,6 +66,10 @@ export type ChoirConfig = {
   };
   capabilities?: ControlPlane["capabilities"];
   packageModes?: ControlPlane["packageModes"];
+  strategicIntent?: ControlPlane["strategicIntent"];
+  domains?: ControlPlane["domains"];
+  packages?: ControlPlane["packages"];
+  contexts?: ControlPlane["contexts"];
 };
 
 export type CompilationChange = {
@@ -312,6 +316,15 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
       },
     ] as const));
 
+  const domainEntries = Object.entries(config.domains ?? {})
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  const packageEntries = Object.entries(config.packages ?? {})
+    .sort(([left], [right]) => left.localeCompare(right));
+
+  const contextEntries = Object.entries(config.contexts ?? {})
+    .sort(([left], [right]) => left.localeCompare(right));
+
   return {
     version: config.version,
     mission: (config.mission ?? "").trim(),
@@ -344,6 +357,10 @@ export function canonicalizeConfig(config: ChoirConfig): ChoirConfig {
     ...(packageModeEntries.length > 0
       ? { packageModes: Object.fromEntries(packageModeEntries) }
       : {}),
+    ...(config.strategicIntent ? { strategicIntent: cloneJson(config.strategicIntent) } : {}),
+    ...(domainEntries.length > 0 ? { domains: Object.fromEntries(domainEntries) } : {}),
+    ...(packageEntries.length > 0 ? { packages: Object.fromEntries(packageEntries) } : {}),
+    ...(contextEntries.length > 0 ? { contexts: Object.fromEntries(contextEntries) } : {}),
   };
 }
 
@@ -369,6 +386,10 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     },
     ...(control.capabilities ? { capabilities: control.capabilities } : {}),
     ...(control.packageModes ? { packageModes: control.packageModes } : {}),
+    ...(control.strategicIntent ? { strategicIntent: control.strategicIntent } : {}),
+    ...(control.domains && Object.keys(control.domains).length > 0 ? { domains: control.domains } : {}),
+    ...(control.packages && Object.keys(control.packages).length > 0 ? { packages: control.packages } : {}),
+    ...(control.contexts && Object.keys(control.contexts).length > 0 ? { contexts: control.contexts } : {}),
   });
 }
 
@@ -395,6 +416,10 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     },
     ...(canonical.capabilities ? { capabilities: canonical.capabilities } : {}),
     ...(canonical.packageModes ? { packageModes: canonical.packageModes } : {}),
+    ...(canonical.strategicIntent ? { strategicIntent: canonical.strategicIntent } : {}),
+    ...(canonical.domains ? { domains: canonical.domains } : {}),
+    ...(canonical.packages ? { packages: canonical.packages } : {}),
+    ...(canonical.contexts ? { contexts: canonical.contexts } : {}),
   });
 }
 

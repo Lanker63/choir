@@ -58,6 +58,10 @@ export type RuntimeGovernanceEvaluation = {
     | "package-mode-requires-approval";
   effectiveCapabilities: RuntimeCapabilities;
   packageDecisions: PackageRuntimeDecision[];
+  strategic: {
+    governanceIntensity: "strict" | "moderate" | "relaxed";
+    domains: string[];
+  };
   governanceHash: string;
 };
 
@@ -252,6 +256,11 @@ export function evaluateRuntimeGovernance(input: {
   let finalDecision: RuntimeGovernanceEvaluation["decision"] = decision;
   let finalReason: RuntimeGovernanceEvaluation["reason"] = reason;
 
+  const strategicDomains = sortedUnique(packageNames
+    .map((packageName) => input.controlPlane.packages?.[packageName]?.domain)
+    .filter((entry): entry is string => typeof entry === "string"));
+  const strategicGovernanceIntensity = input.controlPlane.strategicIntent?.governanceIntensity ?? "moderate";
+
   if (packageDeny) {
     finalDecision = "deny";
     finalReason = "package-capability-disabled";
@@ -270,6 +279,10 @@ export function evaluateRuntimeGovernance(input: {
       decision: entry.decision,
       reason: entry.reason,
     })),
+    strategic: {
+      governanceIntensity: strategicGovernanceIntensity,
+      domains: strategicDomains,
+    },
     decision: finalDecision,
     reason: finalReason,
   });
@@ -281,6 +294,10 @@ export function evaluateRuntimeGovernance(input: {
     reason: finalReason,
     effectiveCapabilities,
     packageDecisions,
+    strategic: {
+      governanceIntensity: strategicGovernanceIntensity,
+      domains: strategicDomains,
+    },
     governanceHash,
   };
 }

@@ -19,6 +19,17 @@ export type PlanningTraceRecord = {
     id: string;
     strategyType: string;
     orchestrationDagHash: string;
+    strategicContextHash?: string;
+    strategicAlignment?: number;
+    strategicDomains?: string[];
+    governanceIntensity?: "strict" | "moderate" | "relaxed";
+    rolloutBias?: {
+      preferred: "canary" | "phased" | "all-at-once";
+      stageSizing: "slow" | "balanced" | "fast";
+      rollbackAggressiveness: "strict" | "normal" | "relaxed";
+      dependencyIsolation: "high" | "medium" | "low";
+      reasons: string[];
+    };
     rollbackComplexity: number;
     riskScore: number;
     estimatedCost: number;
@@ -114,6 +125,11 @@ export function writePlanningTrace(root: string, input: WritePlanningTraceInput)
       id: plan.id,
       strategyType: plan.strategyType,
       orchestrationDagHash: plan.orchestrationGraph.hash,
+      strategicContextHash: plan.strategicContextHash,
+      strategicAlignment: plan.strategicAlignment.score,
+      strategicDomains: plan.strategicDomains,
+      governanceIntensity: plan.strategicGovernanceIntensity,
+      rolloutBias: plan.strategicRolloutBias,
       rollbackComplexity: plan.rollbackScope.complexity,
       riskScore: plan.riskScore,
       estimatedCost: plan.estimatedCost,

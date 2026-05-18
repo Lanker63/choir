@@ -43,6 +43,13 @@ import {
   layeredStrategy,
   minimalStrategy,
 } from "./strategyPlanner.js";
+import {
+  deriveRolloutBias,
+  resolveStrategicContext,
+  strategicAlignmentForCandidate,
+  type RolloutBias,
+  type StrategicAlignment,
+} from "./strategicIntent.js";
 import { detectWorkspace, WorkspaceConfig } from "./workspaceDetection.js";
 import {
   readPlanningTrace,
@@ -145,6 +152,13 @@ export type CandidatePlan = {
   stages: OptimizationStage[];
   units: OptimizationUnit[];
   riskScore: number;
+  strategicContextHash: string;
+  strategicStatus: "resolved" | "failed";
+  strategicReason?: "ambiguous-domain-resolution" | "missing-domain-resolution";
+  strategicDomains: string[];
+  strategicInheritanceChain: string[];
+  strategicGovernanceIntensity: "strict" | "moderate" | "relaxed";
+  strategicRolloutBias: RolloutBias;
   estimatedCost: number;
   changeCount: number;
   synthesized: boolean;
@@ -159,6 +173,7 @@ export type RankedCandidate = CandidatePlan & {
   rollbackComplexity: number;
   executionCost: number;
   changeCount: number;
+  strategicAlignment: StrategicAlignment;
   previewHash: string;
   diffHash: string;
   requiresApproval: boolean;
@@ -170,6 +185,7 @@ export type OptimizedPlan = CandidatePlan;
 
 export type PlanDiff = {
   riskDelta: number;
+  strategicAlignmentDelta: number;
   rollbackDelta: number;
   graphDelta: number;
   blastRadiusDelta: number;
@@ -183,6 +199,12 @@ export type OptimizationUIModel = {
     candidateId: string;
     strategyType: ExecutionStrategy;
     rank: number;
+    strategicAlignment: number;
+    strategicStatus: "resolved" | "failed";
+    strategicReason?: "ambiguous-domain-resolution" | "missing-domain-resolution";
+    strategicDomains: string[];
+    governanceIntensity: "strict" | "moderate" | "relaxed";
+    rolloutBias: RolloutBias;
     riskScore: number;
     rollbackComplexity: number;
     blastRadius: number;
@@ -206,6 +228,9 @@ export type OptimizationUIModel = {
     selectedStrategyType: ExecutionStrategy;
     simulationHash: string;
     policyDecision: PolicyDecision;
+    strategicContextHash: string;
+    governanceIntensity: "strict" | "moderate" | "relaxed";
+    rolloutBias: RolloutBias;
   };
 };
 
@@ -602,13 +627,54 @@ function estimateCandidateRisk(plan: Plan, state: StatePlane, stages: Optimizati
   return dependencyRisk + stages.length + units.length + tasks;
 }
 
+function packageHintFromFile(file: string): string {
+  const normalized = normalizePath(file);
+  const parts = normalized.split("/").filter((part) => part.length > 0);
+  if (parts.length === 0) {
+    return ".";
+  }
+
+  if (parts[0] === "packages" && parts.length >= 2) {
+    return `packages/${parts[1] as string}`;
+  }
+
+  return parts[0] as string;
+}
+
+function candidatePackageNames(candidate: CandidateExecutionPlan, graph: WorkspaceGraph): string[] {
+  const available = new Set(graph.packages.map((entry) => normalizePath(entry)));
+  const hints = new Set<string>();
+
+  for (const task of candidate.plan.tasks) {
+    for (const file of task.scope?.files ?? []) {
+      hints.add(packageHintFromFile(file));
+    }
+  }
+
+  const selected = [...hints]
+    .map((hint) => normalizePath(hint))
+    .flatMap((hint) => {
+      if (available.has(hint)) {
+        return [hint];
+      }
+
+      const bySuffix = [...available].filter((entry) => entry.endsWith(`/${hint}`));
+      return bySuffix;
+    });
+
+  const resolved = sortedUnique(selected);
+  return resolved.length > 0 ? resolved : sortedUnique([...available]);
+}
+
 function rankingSort(left: RankedCandidate, right: RankedCandidate): number {
   return left.policyViolations - right.policyViolations
+    || right.strategicAlignment.score - left.strategicAlignment.score
+    || right.riskScore - left.riskScore
     || left.rollbackComplexity - right.rollbackComplexity
+    || left.changeCount - right.changeCount
+    || left.executionCost - right.executionCost
     || left.blastRadius - right.blastRadius
     || left.dependencyRisk - right.dependencyRisk
-    || left.executionCost - right.executionCost
-    || left.changeCount - right.changeCount
     || left.id.localeCompare(right.id);
 }
 
@@ -730,6 +796,43 @@ export function generateCandidatePlans(
       const estimatedCost = scorePlan(withId, graph.state).totalCost;
       const changeCount = withId.tasks.reduce((total, task) => total + (task.scope?.files?.length ?? 0), 0);
       const riskScore = estimateCandidateRisk(withId, graph.state, stages, units);
+      const packageNames = candidatePackageNames({
+        candidate: {
+          id: withId.id,
+          strategyType: strategy.strategyId,
+          strategyId: strategy.strategyId,
+          orchestrationGraph,
+          rollbackScope,
+          stages,
+          units,
+          riskScore,
+          strategicContextHash: "",
+          strategicStatus: "resolved",
+          strategicDomains: [],
+          strategicInheritanceChain: [],
+          strategicGovernanceIntensity: "moderate",
+          strategicRolloutBias: {
+            preferred: "all-at-once",
+            stageSizing: "balanced",
+            rollbackAggressiveness: "normal",
+            dependencyIsolation: "medium",
+            reasons: [],
+          },
+          estimatedCost,
+          changeCount,
+          synthesized: true,
+        },
+        plan: withId,
+        strategyId: strategy.strategyId,
+      }, graph);
+      const strategicContext = resolveStrategicContext({
+        controlPlane,
+        packageNames,
+      });
+      if (strategicContext.status !== "resolved") {
+        throw new Error(`strategic-intent: status=failed reason=${strategicContext.reason ?? "missing-domain-resolution"}`);
+      }
+      const rolloutBias = deriveRolloutBias(strategicContext.intent);
 
       candidates.push({
         candidate: {
@@ -741,6 +844,12 @@ export function generateCandidatePlans(
           stages,
           units,
           riskScore,
+          strategicContextHash: strategicContext.hash,
+          strategicStatus: strategicContext.status,
+          strategicDomains: strategicContext.domains,
+          strategicInheritanceChain: strategicContext.inheritanceChain,
+          strategicGovernanceIntensity: strategicContext.intent.governanceIntensity,
+          strategicRolloutBias: rolloutBias,
           estimatedCost,
           changeCount,
           synthesized: true,
@@ -813,6 +922,7 @@ export function diffPlans(left: RankedPlan, right: RankedPlan): PlanDiff {
 
   return {
     riskDelta: right.riskScore - left.riskScore,
+    strategicAlignmentDelta: right.strategicAlignment.score - left.strategicAlignment.score,
     rollbackDelta: right.rollbackComplexity - left.rollbackComplexity,
     graphDelta: (
       right.orchestrationGraph.nodes.length + right.orchestrationGraph.edges.length
@@ -866,6 +976,19 @@ async function evaluateCandidatePlan(
     + simulation.metrics.introducedErrors
     + simulation.metrics.remainingViolations
     + blastRadius;
+  const strategicContext = resolveStrategicContext({
+    controlPlane,
+    packageNames: candidatePackageNames(candidate, graph),
+  });
+  if (strategicContext.status !== "resolved") {
+    throw new Error(`strategic-intent: status=failed reason=${strategicContext.reason ?? "missing-domain-resolution"}`);
+  }
+  const strategicAlignment = strategicAlignmentForCandidate({
+    strategyType: candidate.strategyId,
+    intent: strategicContext.intent,
+    riskScore,
+    rollbackComplexity,
+  });
 
   return {
     ranked: {
@@ -882,6 +1005,7 @@ async function evaluateCandidatePlan(
       blastRadius,
       rollbackComplexity,
       executionCost: cost,
+      strategicAlignment,
       previewHash: simulation.previewHash,
       diffHash: hashDiff(diffs),
       requiresApproval: policyEvaluation.result.requiresApproval,
@@ -896,6 +1020,8 @@ function rankingFingerprint(rankedPlans: RankedPlan[]): string {
     strategyType: plan.strategyType,
     rank: plan.rank,
     policyViolations: plan.policyViolations,
+    strategicContextHash: plan.strategicContextHash,
+    strategicAlignmentScore: plan.strategicAlignment.score,
     rollbackComplexity: plan.rollbackComplexity,
     blastRadius: plan.blastRadius,
     dependencyRisk: plan.dependencyRisk,
@@ -918,6 +1044,12 @@ function buildUIModel(selected: RankedPlan, rankedPlans: RankedPlan[], workspace
       candidateId: plan.id,
       strategyType: plan.strategyType,
       rank: plan.rank,
+      strategicAlignment: plan.strategicAlignment.score,
+      strategicStatus: plan.strategicStatus,
+      ...(plan.strategicReason ? { strategicReason: plan.strategicReason } : {}),
+      strategicDomains: plan.strategicDomains,
+      governanceIntensity: plan.strategicGovernanceIntensity,
+      rolloutBias: plan.strategicRolloutBias,
       riskScore: plan.riskScore,
       rollbackComplexity: plan.rollbackComplexity,
       blastRadius: plan.blastRadius,
@@ -937,6 +1069,9 @@ function buildUIModel(selected: RankedPlan, rankedPlans: RankedPlan[], workspace
       selectedStrategyType: selected.strategyType,
       simulationHash: selected.previewHash,
       policyDecision: selected.policyDecision,
+      strategicContextHash: selected.strategicContextHash,
+      governanceIntensity: selected.strategicGovernanceIntensity,
+      rolloutBias: selected.strategicRolloutBias,
     },
   };
 }
@@ -953,6 +1088,8 @@ export async function synthesizeAndOptimizePlans(options: SynthesizeAndOptimizeP
   const fail = (stage: PlanningStageName, detail: string): never => {
     stageResults.push({ stage, status: "failure", detail });
 
+    const strategicFailureMatch = detail.match(/strategic-intent:\s*status=failed\s*reason=([a-z-]+)/i);
+
     appendPipelineDiagnosticsRecordIfPossible(options.root, {
       command: options.command,
       source: diagnosticsSource,
@@ -964,6 +1101,14 @@ export async function synthesizeAndOptimizePlans(options: SynthesizeAndOptimizeP
         failedStage: stage,
         synthesizedCandidates: synthesizedCandidates.length,
         rankedCandidates: rankedCandidates.length,
+        ...(strategicFailureMatch
+          ? {
+            "strategic-intent-resolution": {
+              status: "failed",
+              reason: strategicFailureMatch[1],
+            },
+          }
+          : {}),
       },
     });
 
@@ -1168,6 +1313,11 @@ export async function synthesizeAndOptimizePlans(options: SynthesizeAndOptimizeP
           id: plan.id,
           strategyType: plan.strategyType,
           orchestrationDagHash: plan.orchestrationGraph.hash,
+          strategicContextHash: plan.strategicContextHash,
+          strategicAlignment: plan.strategicAlignment.score,
+          strategicDomains: plan.strategicDomains,
+          governanceIntensity: plan.strategicGovernanceIntensity,
+          rolloutBias: plan.strategicRolloutBias,
           rollbackComplexity: plan.rollbackScope.complexity,
           riskScore: plan.riskScore,
           estimatedCost: plan.estimatedCost,
@@ -1196,6 +1346,11 @@ export async function synthesizeAndOptimizePlans(options: SynthesizeAndOptimizeP
           strategyType: plan.strategyType,
           rank: plan.rank,
           selected: plan.id === selectedPlan.id,
+          strategicContextHash: plan.strategicContextHash,
+          strategicAlignment: plan.strategicAlignment.score,
+          strategicDomains: plan.strategicDomains,
+          governanceIntensity: plan.strategicGovernanceIntensity,
+          rolloutBias: plan.strategicRolloutBias,
           riskScore: plan.riskScore,
           rollbackComplexity: plan.rollbackComplexity,
           blastRadius: plan.blastRadius,

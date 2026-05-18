@@ -56,6 +56,17 @@ intent:
   goals: []
   constraints: []
   non-goals: []
+strategicIntent:
+  priorities: []
+  optimizationGoals: []
+  riskTolerance: moderate
+  architecturalPosture: []
+  rolloutPreferences: []
+  stabilityProfile: adaptive
+  governanceIntensity: moderate
+domains: {}
+packages: {}
+contexts: {}
 policy:
   rules: []
 execution:
@@ -81,6 +92,17 @@ capabilities:
 Policy merge order is deterministic: org -> repo -> environment.
 Parent deny cannot be bypassed.
 Runtime governance order is deterministic: runtime -> policy -> approval -> execution.
+Strategic intent order is deterministic: global strategicIntent -> domain -> package -> context -> orchestration unit.
+
+## Intent Semantics
+
+| Concept | Meaning |
+| --- | --- |
+| Mission | Why this system/domain exists right now |
+| Vision | What this system/domain is ultimately trying to become |
+| Goal | Optimize toward this |
+| Constraint | Never violate this |
+| Non-goal | Do not spend optimization effort pursuing this |
 
 ## Main Commands
 
@@ -130,19 +152,19 @@ Additional commands:
   - choir audit log|query|report
 - Refactor (PASS 1):
   - choir refactor rename <symbol> <newName>
-        - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
-    - semantic rename resolves declaration identifiers (including exported declarations)
-      - rename fails closed when the symbol name maps to multiple declarations and lists deterministic candidate locations
-        - ambiguity is reported as a command failure (runtime validation), not a grammar parse error
+  - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
+  - semantic rename resolves declaration identifiers (including exported declarations)
+  - rename fails closed when the symbol name maps to multiple declarations and lists deterministic candidate locations
+  - ambiguity is reported as a command failure (runtime validation), not a grammar parse error
   - choir refactor inline <symbol>
-    - choir refactor move <symbol> <targetUnit>
-      - choir refactor move <symbol> --file "<workspace-relative-file>"
-      - MVP execution supports moving top-level exported function declarations between units with deterministic import rewrites to the target module path (clean move; no automatic source-file re-export)
-      - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
+  - choir refactor move <symbol> <targetUnit>
+  - choir refactor move <symbol> --file "<workspace-relative-file>"
+  - MVP execution supports moving top-level exported function declarations between units with deterministic import rewrites to the target module path (clean move; no automatic source-file re-export)
+  - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
   - choir refactor extract <symbol> <targetUnit>
-    - choir refactor extract <symbol> --file "<workspace-relative-file>"
-    - MVP execution supports extracting top-level exported non-default function declarations into the target unit while preserving source compatibility through a deterministic delegating wrapper
-    - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
+  - choir refactor extract <symbol> --file "<workspace-relative-file>"
+  - MVP execution supports extracting top-level exported non-default function declarations into the target unit while preserving source compatibility through a deterministic delegating wrapper
+  - rewritten import specifiers respect tsconfig module-resolution semantics (Node16/NodeNext keep explicit runtime file extensions such as .js)
 - Libraries:
   - choir import <lib>@<selector>
   - choir library list|install|update|lock
@@ -163,6 +185,7 @@ Additional commands:
   - npm run verify:simulation
   - npm run verify:execution
   - npm run verify:runtime-governance
+  - npm run verify:strategic-intent
   - npm run verify:full
   - npm run verify:libraries
 
@@ -248,6 +271,13 @@ packageModes:
 
 Runtime governance decisions are persisted in orchestration traces and diagnostics metadata under runtimeGovernance.
 
+Strategic intent answers what each domain/package optimizes for. Runtime governance answers what operations are allowed. These are separate layers and both are replay-validated.
+
+Control Center and Timeline now surface strategic runtime explainability directly from deterministic traces:
+- domain strategic context and package posture mappings
+- selected candidate strategic alignment and governance intensity
+- rollout bias rationale (preferred rollout, stage sizing, rollback posture, dependency isolation)
+
 In approval-required mode, each new preview invalidates any prior approval bound to that preview hash, so execute requires a fresh approval grant for the current preview cycle.
 
 When execute is blocked for approval, runtime emits both preview hash context and a pendingId; approve accepts either pending id or preview hash.
@@ -306,7 +336,7 @@ analyze -> validate -> synthesize -> generate -> apply -> verify -> commit
 
 - Deterministic planning and strategy selection
 - Strategy selection simulates all candidates before selection (no heuristic-only path)
-- Ranking order is deterministic: violations -> risk -> changes -> executionCost (lexical id tie-break)
+- Ranking order is deterministic: violations -> strategicAlignment -> risk -> rollbackComplexity -> changes -> executionCost (lexical id tie-break)
 - Violating strategies are excluded by default unless explicitly allowed
 - Rollout execution is staged and dependency-aware; each stage must validate before progression
 - Rollout supports deterministic canary/phased/batched expansion with threshold gates and failure isolation rollback
@@ -455,6 +485,10 @@ Webview synchronization contract:
 - Sync is push-based via typed event bus
 - No polling-based state sync
 
+Strategic UI projection contract:
+- Control Center dashboard must expose strategic overview, domain posture, package posture, and selected-candidate rationale.
+- Timeline view must expose strategic replay rationale alongside runtime governance trace metadata.
+
 From the main Choir activity bar, persistent toolbar icons on the Rules view header open:
 
 - Control Center panel
@@ -478,7 +512,7 @@ Command palette:
 - .choir/state.audit.jsonl
 - .choir/audit.log.jsonl
 - .choir/memory.json
-- .choir/lock.yaml
+- choir.lock
 - .choir/ci.yaml
 - .choir/abstractions.yaml
 - .choir/libraries/

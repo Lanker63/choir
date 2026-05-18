@@ -4,6 +4,7 @@ import type { ControlPlane, Plan, Task } from "../schema.js";
 import type { StatePlane } from "./state.js";
 import { detectWorkspace } from "./workspaceDetection.js";
 import { readLatestOrchestrationTrace } from "./orchestrationRuntimeTrace.js";
+import { deriveRolloutBias, resolveStrategicContext } from "./strategicIntent.js";
 
 export type DependencyGraph = {
   nodes: {
@@ -84,6 +85,18 @@ export type GraphSnapshot = {
     dependencies: string[];
   };
   hotspots: GraphHotspot[];
+  strategicOverlays?: {
+    unitProfiles: Array<{
+      nodeId: string;
+      packageName?: string;
+      status: "resolved" | "failed";
+      domains: string[];
+      governanceIntensity: "strict" | "moderate" | "relaxed";
+      rolloutBias: "canary" | "phased" | "all-at-once";
+      riskTolerance?: "low" | "moderate" | "high";
+      reason?: "ambiguous-domain-resolution" | "missing-domain-resolution";
+    }>;
+  };
   trace: GraphTrace;
 };
 
@@ -675,6 +688,16 @@ export function buildGraphSnapshot(input: {
 }): GraphSnapshot {
   const units = buildWorkspaceUnits(input.root);
   const unitIndex = buildUnitIndex(units);
+  const strategicByUnit = new Map<string, ReturnType<typeof resolveStrategicContext>>(
+    units.map((unit) => [
+      unit.id,
+      resolveStrategicContext({
+        controlPlane: input.control,
+        packageNames: [unit.relPath],
+        unitId: unit.id,
+      }),
+    ] as const)
+  );
   const dependencyGraph = buildDependencyGraph(units);
   const uiGraph = toUIGraph(dependencyGraph);
 
@@ -689,6 +712,37 @@ export function buildGraphSnapshot(input: {
               relPath: unit.relPath,
               packageName: unit.packageName,
               packageJsonPath: unit.relPath === "." ? "package.json" : `${unit.relPath}/package.json`,
+            }
+            : {}),
+          ...(unit
+            ? {
+              strategic: (() => {
+                const resolved = strategicByUnit.get(unit.id);
+                if (!resolved) {
+                  return {
+                    status: "failed",
+                    reason: "missing-domain-resolution",
+                    domains: [],
+                  };
+                }
+
+                if (resolved.status !== "resolved") {
+                  return {
+                    status: resolved.status,
+                    reason: resolved.reason,
+                    domains: resolved.domains,
+                  };
+                }
+
+                const rolloutBias = deriveRolloutBias(resolved.intent);
+                return {
+                  status: resolved.status,
+                  domains: resolved.domains,
+                  governanceIntensity: resolved.intent.governanceIntensity,
+                  riskTolerance: resolved.intent.riskTolerance,
+                  rolloutBias: rolloutBias.preferred,
+                };
+              })(),
             }
             : {}),
         },
@@ -733,6 +787,31 @@ export function buildGraphSnapshot(input: {
   const filteredViolationNodeIds = violationNodeIds.filter((nodeId) => projectedNodeIds.has(nodeId));
   const hotspots = calculateHotspots(projectedGraph, affectedNodeIds, filteredViolationNodeIds);
   const orchestrationTrace = readLatestOrchestrationTrace(input.root);
+  const strategicProfiles = units.map((unit) => {
+    const resolved = strategicByUnit.get(unit.id);
+    if (!resolved || resolved.status !== "resolved") {
+      return {
+        nodeId: unit.id,
+        packageName: unit.packageName,
+        status: "failed" as const,
+        domains: resolved?.domains ?? [],
+        governanceIntensity: "moderate" as const,
+        rolloutBias: "all-at-once" as const,
+        ...(resolved?.reason ? { reason: resolved.reason } : {}),
+      };
+    }
+
+    const rolloutBias = deriveRolloutBias(resolved.intent);
+    return {
+      nodeId: unit.id,
+      packageName: unit.packageName,
+      status: "resolved" as const,
+      domains: resolved.domains,
+      governanceIntensity: resolved.intent.governanceIntensity,
+      rolloutBias: rolloutBias.preferred,
+      riskTolerance: resolved.intent.riskTolerance,
+    };
+  }).sort((left, right) => left.nodeId.localeCompare(right.nodeId));
 
   return {
     generatedAt: new Date().toISOString(),
@@ -775,6 +854,9 @@ export function buildGraphSnapshot(input: {
         },
       }
       : {}),
+    strategicOverlays: {
+      unitProfiles: strategicProfiles,
+    },
     hotspots,
     trace: {
       sourceStateHash: input.state.stateHash,

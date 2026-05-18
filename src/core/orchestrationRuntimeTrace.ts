@@ -46,6 +46,17 @@ export type OrchestrationTraceRecord = {
     id: string;
     strategyType: string;
     orchestrationDagHash: string;
+    strategicContextHash?: string;
+    strategicAlignment?: number;
+    strategicDomains?: string[];
+    governanceIntensity?: "strict" | "moderate" | "relaxed";
+    rolloutBias?: {
+      preferred: "canary" | "phased" | "all-at-once";
+      stageSizing: "slow" | "balanced" | "fast";
+      rollbackAggressiveness: "strict" | "normal" | "relaxed";
+      dependencyIsolation: "high" | "medium" | "low";
+      reasons: string[];
+    };
     rank?: number;
     selected?: boolean;
     riskScore?: number;

@@ -348,13 +348,17 @@ export type EvaluatedStrategy = {
 
 export type StrategyMetrics = {
   violations: number;
+  strategicAlignment?: number;
   risk: number;
+  rollbackComplexity?: number;
   changes: number;
   executionCost: number;
 };
 
 export type ScoreWeights = {
+  strategicAlignment?: number;
   risk: number;
+  rollbackComplexity?: number;
   changes: number;
   executionCost: number;
 };
@@ -2523,7 +2527,9 @@ function defaultCostModel(): CostModel {
 
 function defaultScoreWeights(): ScoreWeights {
   return {
+    strategicAlignment: 4,
     risk: 5,
+    rollbackComplexity: 2,
     changes: 1,
     executionCost: 1,
   };
@@ -2537,10 +2543,16 @@ export function computeStrategyMetrics(
   const violations = result.violations.length;
   const risk = (changes * costModel.changeCost) + (violations * costModel.riskScore) + (result.success ? 0 : costModel.riskScore);
   const executionCost = changes + result.trace.stepsExecuted.length + result.trace.unitsAffected.length;
+  const rollbackComplexity = result.trace.unitsAffected.length;
+
+  // Deterministic strategic alignment heuristic derived only from simulation output.
+  const strategicAlignment = Math.max(0, 10 - Math.min(10, violations + rollbackComplexity));
 
   return {
     violations,
+    strategicAlignment,
     risk,
+    rollbackComplexity,
     changes,
     executionCost,
   };
@@ -2551,8 +2563,20 @@ export function compareStrategyMetricsLex(left: StrategyMetrics, right: Strategy
     return left.violations - right.violations;
   }
 
+  const leftAlignment = left.strategicAlignment ?? 0;
+  const rightAlignment = right.strategicAlignment ?? 0;
+  if (leftAlignment !== rightAlignment) {
+    return rightAlignment - leftAlignment;
+  }
+
   if (left.risk !== right.risk) {
     return left.risk - right.risk;
+  }
+
+  const leftRollback = left.rollbackComplexity ?? 0;
+  const rightRollback = right.rollbackComplexity ?? 0;
+  if (leftRollback !== rightRollback) {
+    return leftRollback - rightRollback;
   }
 
   if (left.changes !== right.changes) {
@@ -2563,8 +2587,15 @@ export function compareStrategyMetricsLex(left: StrategyMetrics, right: Strategy
 }
 
 export function computeStrategyScore(metrics: StrategyMetrics, weights: ScoreWeights): number {
+  const strategicAlignment = metrics.strategicAlignment ?? 0;
+  const rollbackComplexity = metrics.rollbackComplexity ?? 0;
+  const strategicAlignmentWeight = weights.strategicAlignment ?? 0;
+  const rollbackComplexityWeight = weights.rollbackComplexity ?? 0;
   return (
+    (strategicAlignment * strategicAlignmentWeight)
+    +
     (metrics.risk * weights.risk)
+    + (rollbackComplexity * rollbackComplexityWeight)
     + (metrics.changes * weights.changes)
     + (metrics.executionCost * weights.executionCost)
   );
@@ -2625,7 +2656,9 @@ export function rankStrategies(
 }
 
 function formatStrategyMetrics(metrics: StrategyMetrics): string {
-  return `violations=${metrics.violations}, risk=${metrics.risk}, changes=${metrics.changes}, executionCost=${metrics.executionCost}`;
+  const strategicAlignment = metrics.strategicAlignment ?? 0;
+  const rollbackComplexity = metrics.rollbackComplexity ?? 0;
+  return `violations=${metrics.violations}, strategicAlignment=${strategicAlignment}, risk=${metrics.risk}, rollbackComplexity=${rollbackComplexity}, changes=${metrics.changes}, executionCost=${metrics.executionCost}`;
 }
 
 function explainStrategyDecision(
@@ -2636,7 +2669,7 @@ function explainStrategyDecision(
 ): string {
   const lines: string[] = [
     `Selected ${selected.strategyId}`,
-    "- lexicographic priority: violations -> risk -> changes -> executionCost",
+    "- lexicographic priority: violations -> strategic alignment -> risk -> rollback complexity -> changes -> executionCost",
     `- selected metrics: ${formatStrategyMetrics(selected.metrics)}`,
   ];
 
@@ -2654,7 +2687,7 @@ function explainStrategyDecision(
       ...defaultScoreWeights(),
       ...config.weights,
     };
-    lines.push(`- weighted scoring enabled after lexicographic filtering: risk=${weights.risk}, changes=${weights.changes}, executionCost=${weights.executionCost}`);
+    lines.push(`- weighted scoring enabled after lexicographic filtering: strategicAlignment=${weights.strategicAlignment}, risk=${weights.risk}, rollbackComplexity=${weights.rollbackComplexity}, changes=${weights.changes}, executionCost=${weights.executionCost}`);
     if (selected.score !== null) {
       lines.push(`- selected weighted score: ${selected.score}`);
     }

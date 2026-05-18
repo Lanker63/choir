@@ -10,6 +10,9 @@ import { cloneJson } from "../utils/clone.js";
 export type ContextSignature = {
   goals: string[];
   constraints: string[];
+  strategicDomains?: string[];
+  strategicGovernanceIntensity?: string;
+  strategicRolloutPreferences?: string[];
   violationSummary: {
     ruleId: string;
     count: number;
@@ -144,6 +147,15 @@ function normalizeSignature(signature: ContextSignature): ContextSignature {
   return {
     goals: sortedUnique(signature.goals ?? []),
     constraints: sortedUnique(signature.constraints ?? []),
+    ...(signature.strategicDomains
+      ? { strategicDomains: sortedUnique(signature.strategicDomains) }
+      : {}),
+    ...(signature.strategicGovernanceIntensity
+      ? { strategicGovernanceIntensity: signature.strategicGovernanceIntensity }
+      : {}),
+    ...(signature.strategicRolloutPreferences
+      ? { strategicRolloutPreferences: sortedUnique(signature.strategicRolloutPreferences) }
+      : {}),
     violationSummary: [...(signature.violationSummary ?? [])]
       .map((entry) => ({ ruleId: entry.ruleId, count: entry.count }))
       .sort((left, right) => left.ruleId.localeCompare(right.ruleId) || left.count - right.count),
@@ -193,10 +205,22 @@ function extractModules(state: StatePlane): string[] {
 
 export function buildSignature(control: ControlPlane, state: StatePlane): ContextSignature {
   const modules = extractModules(state);
+  const packageDomains = sortedUnique(Object.values(control.packages ?? {}).map((entry) => entry.domain));
+  const strategicRolloutPreferences = sortedUnique([
+    ...(control.strategicIntent?.rolloutPreferences ?? []),
+    ...Object.values(control.domains ?? {}).flatMap((entry) => entry.strategicIntent?.rolloutPreferences ?? []),
+  ]);
 
   return {
     goals: sortedUnique(control.intent.goals ?? []),
     constraints: sortedUnique(control.intent.constraints ?? []),
+    ...(packageDomains.length > 0 ? { strategicDomains: packageDomains } : {}),
+    ...(control.strategicIntent?.governanceIntensity
+      ? { strategicGovernanceIntensity: control.strategicIntent.governanceIntensity }
+      : {}),
+    ...(strategicRolloutPreferences.length > 0
+      ? { strategicRolloutPreferences }
+      : {}),
     violationSummary: summarizeViolations(state),
     ...(modules.length > 0 ? { modules } : {}),
   };

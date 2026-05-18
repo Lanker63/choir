@@ -229,6 +229,17 @@ export type ExecutionIntegritySnapshot = {
 export type PipelineCandidateView = {
   id: string;
   strategyType: string;
+  strategicContextHash?: string;
+  strategicAlignment?: number;
+  strategicDomains?: string[];
+  governanceIntensity?: "strict" | "moderate" | "relaxed";
+  rolloutBias?: {
+    preferred: "canary" | "phased" | "all-at-once";
+    stageSizing: "slow" | "balanced" | "fast";
+    rollbackAggressiveness: "strict" | "normal" | "relaxed";
+    dependencyIsolation: "high" | "medium" | "low";
+    reasons: string[];
+  };
   rank: number;
   selected: boolean;
   riskScore: number;
@@ -2208,6 +2219,11 @@ export async function runOrchestrationPipeline(
         id: candidate.id,
         strategyType: candidate.strategyType,
         orchestrationDagHash: candidate.orchestrationDagHash,
+        strategicContextHash: candidate.strategicContextHash,
+        strategicAlignment: candidate.strategicAlignment,
+        strategicDomains: candidate.strategicDomains,
+        governanceIntensity: candidate.governanceIntensity,
+        rolloutBias: candidate.rolloutBias,
         rank: candidate.rank,
         selected: candidate.selected,
         riskScore: candidate.riskScore,
@@ -2229,6 +2245,7 @@ export async function runOrchestrationPipeline(
               governanceHash: runtimeGovernance.governanceHash,
               effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
               packageDecisions: runtimeGovernance.packageDecisions,
+              strategic: runtimeGovernance.strategic,
             },
           }
           : {}),
@@ -2288,6 +2305,7 @@ export async function runOrchestrationPipeline(
               governanceHash: runtimeGovernance.governanceHash,
               effectiveCapabilities: runtimeGovernance.effectiveCapabilities,
               packageDecisions: runtimeGovernance.packageDecisions,
+              strategic: runtimeGovernance.strategic,
             },
           }
           : {}),

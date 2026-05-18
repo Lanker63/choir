@@ -1,101 +1,125 @@
-const C={architect:["define-intent","approve","audit"],analyst:["audit"],conductor:["define-intent","plan","preview","approve","audit"],enforcer:["execute","audit"]},D={dashboard:"Dashboard",workspace:"Workspace","plan-view":"Plan View","timeline-view":"Time Travel","policy-view":"Policy View","audit-view":"Audit View","macro-library":"Macro/Abstraction"},M=window.vscode;if(!M)throw new Error("VSCode API not available in webview context.");const B=document.getElementById("roleSelect"),x=document.getElementById("dslInput"),S=document.getElementById("runDslBtn"),H=document.getElementById("refreshBtn"),I=document.getElementById("surfaceTabs"),y=document.getElementById("surfaceContainer"),k=document.getElementById("consoleOutput");if(!(B instanceof HTMLSelectElement)||!(x instanceof HTMLInputElement)||!(S instanceof HTMLButtonElement)||!(H instanceof HTMLButtonElement)||!(I instanceof HTMLElement)||!(y instanceof HTMLElement)||!(k instanceof HTMLElement))throw new Error("Choir Control Center webview is missing required elements.");let e=null,v="dashboard",g={},$;function d(){const t=B.value;return t==="architect"||t==="analyst"||t==="conductor"||t==="enforcer"?t:"conductor"}function n(t){return t.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;")}function L(t){const a=new Date().toISOString(),i=k.textContent??"";k.textContent=`[${a}] ${t}
-${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V(){if(!e?.timeline.playing){N();return}typeof $<"u"||($=window.setInterval(()=>{if(!e?.timeline.playing||!e.timeline.canStepForward){u({type:"replay-control",role:d(),control:"pause"});return}u({type:"replay-control",role:d(),control:"step-forward"})},900))}function u(t){M.postMessage({type:"action",payload:t})}function h(t,a){return C[t].includes(a)}function T(t){return t==="stable"||t==="allow"?`<span class="chip success">${n(t)}</span>`:t==="needs-attention"||t==="deny"?`<span class="chip danger">${n(t)}</span>`:`<span class="chip warn">${n(t)}</span>`}function A(){if(!e){I.innerHTML="";return}const t=e.availableSurfaces;t.includes(v)||(v=t[0]??"dashboard"),I.innerHTML=t.map(a=>`<button type="button" class="surface-tab ${a===v?"active":""}" data-surface="${a}">${D[a]}</button>`).join(""),I.querySelectorAll(".surface-tab").forEach(a=>{a.addEventListener("click",()=>{const i=a.dataset.surface;i&&i!==v&&(v=i,A(),R())})})}function F(){if(!e)return"";const t=e.dashboard.recommendations.length>0?e.dashboard.recommendations.map(s=>`<li>${n(s)}</li>`).join(""):"<li>No recommendations. System is aligned.</li>",a=e.dashboard.recentActions.length>0?e.dashboard.recentActions.map(s=>`<li><span class="mono">${n(s.timestamp)}</span> ${n(s.action)} (${n(s.result)})</li>`).join(""):"<li>No audit events yet.</li>",i=e.production?T(e.production.health.healthy?"stable":"needs-attention"):'<span class="chip warn">unavailable</span>',p=e.production&&e.production.alerts.length>0?e.production.alerts.map(s=>`<li><span class="mono">${n(s.severity)}</span> ${n(s.condition)}</li>`).join(""):"<li>No active production alerts.</li>",f=e.production&&e.production.slos.length>0?e.production.slos.map(s=>`<li>${n(s.name)}: ${s.actual.toFixed(2)} / ${s.target.toFixed(2)} (${s.met?"met":"miss"})</li>`).join(""):"<li>No SLO evaluation available.</li>",l=e.runtimeGovernance,b=l?Object.entries(l.effectiveCapabilities).sort(([s],[o])=>s.localeCompare(o)).map(([s,o])=>`<li>${n(s)}: ${o?"enabled":"disabled"}</li>`).join(""):"<li>No runtime governance trace available yet.</li>",m=l&&l.packageDecisions.length>0?l.packageDecisions.map(s=>`<li>${n(s.packageName)}: mode=${n(s.mode)} decision=${n(s.decision)}</li>`).join(""):"<li>No package-level governance decisions recorded.</li>";return`
+const R={architect:["define-intent","approve","audit"],analyst:["audit"],conductor:["define-intent","plan","preview","approve","audit"],enforcer:["execute","audit"]},D={dashboard:"Dashboard",workspace:"Workspace","plan-view":"Plan View","timeline-view":"Time Travel","policy-view":"Policy View","audit-view":"Audit View","macro-library":"Macro/Abstraction"},P=window.vscode;if(!P)throw new Error("VSCode API not available in webview context.");const k=document.getElementById("roleSelect"),x=document.getElementById("dslInput"),M=document.getElementById("runDslBtn"),A=document.getElementById("refreshBtn"),E=document.getElementById("surfaceTabs"),y=document.getElementById("surfaceContainer"),T=document.getElementById("consoleOutput");if(!(k instanceof HTMLSelectElement)||!(x instanceof HTMLInputElement)||!(M instanceof HTMLButtonElement)||!(A instanceof HTMLButtonElement)||!(E instanceof HTMLElement)||!(y instanceof HTMLElement)||!(T instanceof HTMLElement))throw new Error("Choir Control Center webview is missing required elements.");let t=null,f="dashboard",I={},B;function d(){const n=k.value;return n==="architect"||n==="analyst"||n==="conductor"||n==="enforcer"?n:"conductor"}function e(n){return n.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;")}function L(n){const l=new Date().toISOString(),a=T.textContent??"";T.textContent=`[${l}] ${n}
+${a}`}function N(){typeof B<"u"&&(window.clearInterval(B),B=void 0)}function F(){if(!t?.timeline.playing){N();return}typeof B<"u"||(B=window.setInterval(()=>{if(!t?.timeline.playing||!t.timeline.canStepForward){p({type:"replay-control",role:d(),control:"pause"});return}p({type:"replay-control",role:d(),control:"step-forward"})},900))}function p(n){P.postMessage({type:"action",payload:n})}function w(n,l){return R[n].includes(l)}function S(n){return n==="stable"||n==="allow"?`<span class="chip success">${e(n)}</span>`:n==="needs-attention"||n==="deny"?`<span class="chip danger">${e(n)}</span>`:`<span class="chip warn">${e(n)}</span>`}function C(){if(!t){E.innerHTML="";return}const n=t.availableSurfaces;n.includes(f)||(f=n[0]??"dashboard"),E.innerHTML=n.map(l=>`<button type="button" class="surface-tab ${l===f?"active":""}" data-surface="${l}">${D[l]}</button>`).join(""),E.querySelectorAll(".surface-tab").forEach(l=>{l.addEventListener("click",()=>{const a=l.dataset.surface;a&&a!==f&&(f=a,C(),j())})})}function V(){if(!t)return"";const n=t.dashboard.recommendations.length>0?t.dashboard.recommendations.map(i=>`<li>${e(i)}</li>`).join(""):"<li>No recommendations. System is aligned.</li>",l=t.dashboard.recentActions.length>0?t.dashboard.recentActions.map(i=>`<li><span class="mono">${e(i.timestamp)}</span> ${e(i.action)} (${e(i.result)})</li>`).join(""):"<li>No audit events yet.</li>",a=t.production?S(t.production.health.healthy?"stable":"needs-attention"):'<span class="chip warn">unavailable</span>',v=t.production&&t.production.alerts.length>0?t.production.alerts.map(i=>`<li><span class="mono">${e(i.severity)}</span> ${e(i.condition)}</li>`).join(""):"<li>No active production alerts.</li>",g=t.production&&t.production.slos.length>0?t.production.slos.map(i=>`<li>${e(i.name)}: ${i.actual.toFixed(2)} / ${i.target.toFixed(2)} (${i.met?"met":"miss"})</li>`).join(""):"<li>No SLO evaluation available.</li>",o=t.runtimeGovernance,$=o?Object.entries(o.effectiveCapabilities).sort(([i],[b])=>i.localeCompare(b)).map(([i,b])=>`<li>${e(i)}: ${b?"enabled":"disabled"}</li>`).join(""):"<li>No runtime governance trace available yet.</li>",u=o&&o.packageDecisions.length>0?o.packageDecisions.map(i=>`<li>${e(i.packageName)}: mode=${e(i.mode)} decision=${e(i.decision)}</li>`).join(""):"<li>No package-level governance decisions recorded.</li>",s=t.strategicSummary,m=s?.global?`
+      <p>governanceIntensity=${e(s.global.governanceIntensity)} | riskTolerance=${e(s.global.riskTolerance)}${s.global.mission?` | mission=${e(s.global.mission)}`:""}</p>
+      <p>priorities=${e(s.global.priorities.join(", ")||"none")} | optimizationGoals=${e(s.global.optimizationGoals.join(", ")||"none")}</p>
+      <p>rolloutPreferences=${e(s.global.rolloutPreferences.join(", ")||"none")}</p>
+    `:"<p>No global strategic intent configured.</p>",h=s&&s.domains.length>0?s.domains.map(i=>`<li>${e(i.id)}: governance=${e(i.governanceIntensity??"inherited")} priorities=${e(i.priorities.join(", ")||"none")} rollout=${e(i.rolloutPreferences.join(", ")||"none")}</li>`).join(""):"<li>No domain strategic contexts configured.</li>",c=s&&s.packages.length>0?s.packages.map(i=>`<li>${e(i.id)}: domain=${e(i.domain)} governance=${e(i.governanceIntensity??"inherited")} rollout=${e(i.rolloutPreferences.join(", ")||"none")}</li>`).join(""):"<li>No package strategic posture mappings configured.</li>",r=s?.selectedCandidate?`
+      <p>id=${e(s.selectedCandidate.id)} | strategy=${e(s.selectedCandidate.strategyType)} | alignment=${typeof s.selectedCandidate.strategicAlignment=="number"?s.selectedCandidate.strategicAlignment.toFixed(4):"n/a"}</p>
+      <p>governanceIntensity=${e(s.selectedCandidate.governanceIntensity??"n/a")} | domains=${e((s.selectedCandidate.strategicDomains??[]).join(", ")||"none")}</p>
+      ${s.selectedCandidate.rolloutBias?`<p>rolloutBias=${e(s.selectedCandidate.rolloutBias.preferred)} stageSizing=${e(s.selectedCandidate.rolloutBias.stageSizing)} rollback=${e(s.selectedCandidate.rolloutBias.rollbackAggressiveness)} isolation=${e(s.selectedCandidate.rolloutBias.dependencyIsolation)} reasons=${e(s.selectedCandidate.rolloutBias.reasons.join(" | ")||"none")}</p>`:"<p>No rollout bias reasoning on selected candidate.</p>"}
+    `:"<p>No selected strategic candidate in latest orchestration trace.</p>";return`
     <section class="grid">
       <article class="card">
         <div class="muted">System Health</div>
-        <div class="kpi">${T(e.dashboard.systemHealth)}</div>
+        <div class="kpi">${S(t.dashboard.systemHealth)}</div>
       </article>
       <article class="card">
         <div class="muted">Production Health</div>
-        <div class="kpi">${i}</div>
+        <div class="kpi">${a}</div>
       </article>
       <article class="card">
         <div class="muted">Active Plans</div>
-        <div class="kpi">${e.dashboard.activePlans}</div>
+        <div class="kpi">${t.dashboard.activePlans}</div>
       </article>
       <article class="card">
         <div class="muted">Policy Violations</div>
-        <div class="kpi">${e.dashboard.policyViolations}</div>
+        <div class="kpi">${t.dashboard.policyViolations}</div>
       </article>
       <article class="card wide">
         <div class="muted">Recommended Next Actions</div>
-        <ul class="list">${t}</ul>
+        <ul class="list">${n}</ul>
       </article>
       <article class="card wide">
         <div class="muted">Recent Actions</div>
-        <ul class="list">${a}</ul>
+        <ul class="list">${l}</ul>
       </article>
       <article class="card wide">
         <div class="muted">Production Alerts</div>
-        <ul class="list">${p}</ul>
+        <ul class="list">${v}</ul>
       </article>
       <article class="card wide">
         <div class="muted">Production SLOs</div>
-        <ul class="list">${f}</ul>
+        <ul class="list">${g}</ul>
       </article>
       <article class="card wide">
         <div class="muted">Runtime Governance</div>
-        ${l?`<p>mode=${n(l.mode)} | capability=${n(l.capability)} | decision=${n(l.decision)} | reason=${n(l.reason)}</p>`:"<p>No runtime governance record yet.</p>"}
-        <ul class="list">${b}</ul>
+        ${o?`<p>mode=${e(o.mode)} | capability=${e(o.capability)} | decision=${e(o.decision)} | reason=${e(o.reason)}</p>`:"<p>No runtime governance record yet.</p>"}
+        <ul class="list">${$}</ul>
       </article>
       <article class="card wide">
         <div class="muted">Package Governance Decisions</div>
-        <ul class="list">${m}</ul>
+        <ul class="list">${u}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Strategic Intent Overview</div>
+        ${m}
+      </article>
+      <article class="card wide">
+        <div class="muted">Domain Strategic Context</div>
+        <ul class="list">${h}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Package Strategic Posture</div>
+        <ul class="list">${c}</ul>
+      </article>
+      <article class="card wide">
+        <div class="muted">Selected Orchestration Strategic Rationale</div>
+        ${r}
       </article>
     </section>
-  `}function O(){if(!e)return"";const t=d();return`
+  `}function O(){if(!t)return"";const n=d();return`
     <article class="card full">
       <div class="muted">Guided Workflow</div>
-      <div class="workflow">${["define-intent","plan","preview","approve","execute","audit"].map(i=>{const p=i,f=e?.workflow.current===p,l=e?.workflow.completed.includes(p);return`<span class="step ${f?"current":""} ${l?"done":""}">${n(i)}</span>`}).join("")}</div>
-      <p class="muted">Current step: ${n(e.workflow.current)}</p>
+      <div class="workflow">${["define-intent","plan","preview","approve","execute","audit"].map(a=>{const v=a,g=t?.workflow.current===v,o=t?.workflow.completed.includes(v);return`<span class="step ${g?"current":""} ${o?"done":""}">${e(a)}</span>`}).join("")}</div>
+      <p class="muted">Current step: ${e(t.workflow.current)}</p>
       <div class="grid">
         <div class="card">
           <label for="intentInput">Define Intent</label>
           <input id="intentInput" type="text" placeholder="create safer service boundaries" />
           <div style="display:flex;gap:8px;margin-top:8px;">
-            <button id="runDefineBtn" ${h(t,"define-intent")?"":"disabled"}>Run</button>
+            <button id="runDefineBtn" ${w(n,"define-intent")?"":"disabled"}>Run</button>
           </div>
         </div>
         <div class="card">
           <label for="planGoalInput">Generate Plan</label>
           <input id="planGoalInput" type="text" placeholder="optional goal override" />
-          <button id="runPlanBtn" style="margin-top:8px;" ${h(t,"plan")?"":"disabled"}>Run</button>
+          <button id="runPlanBtn" style="margin-top:8px;" ${w(n,"plan")?"":"disabled"}>Run</button>
         </div>
         <div class="card">
           <label for="previewPlanInput">Preview Plan ID (optional)</label>
           <input id="previewPlanInput" type="text" placeholder="plan-abc123" />
-          <button id="runPreviewBtn" style="margin-top:8px;" ${h(t,"preview")?"":"disabled"}>Run</button>
+          <button id="runPreviewBtn" style="margin-top:8px;" ${w(n,"preview")?"":"disabled"}>Run</button>
         </div>
         <div class="card">
           <label for="approveInput">Approve Diff ID or Plan ID</label>
           <input id="approveInput" type="text" placeholder="diff-... or plan-..." />
-          <button id="runApproveBtn" style="margin-top:8px;" ${h(t,"approve")?"":"disabled"}>Run</button>
+          <button id="runApproveBtn" style="margin-top:8px;" ${w(n,"approve")?"":"disabled"}>Run</button>
         </div>
         <div class="card">
           <label for="executePlanInput">Execute Plan ID (optional)</label>
           <input id="executePlanInput" type="text" placeholder="plan-abc123" />
-          <button id="runExecuteBtn" style="margin-top:8px;" ${h(t,"execute")?"":"disabled"}>Run</button>
+          <button id="runExecuteBtn" style="margin-top:8px;" ${w(n,"execute")?"":"disabled"}>Run</button>
         </div>
         <div class="card">
           <label>Audit</label>
           <p class="muted">Fetch current immutable audit timeline.</p>
-          <button id="runAuditBtn" ${h(t,"audit")?"":"disabled"}>Run</button>
+          <button id="runAuditBtn" ${w(n,"audit")?"":"disabled"}>Run</button>
         </div>
       </div>
     </article>
-  `}function U(){if(!e)return"";const t=e.planView.length>0?e.planView.map(i=>`
+  `}function G(){if(!t)return"";const n=t.planView.length>0?t.planView.map(a=>`
       <tr>
-        <td class="mono">${n(i.planId)}</td>
-        <td>${n(i.tasks.join(", "))}</td>
-        <td class="mono">${n(i.affectedFiles.join(", "))}</td>
-        <td>${i.estimatedImpact}</td>
+        <td class="mono">${e(a.planId)}</td>
+        <td>${e(a.tasks.join(", "))}</td>
+        <td class="mono">${e(a.affectedFiles.join(", "))}</td>
+        <td>${a.estimatedImpact}</td>
       </tr>
-    `).join(""):'<tr><td colspan="4" class="muted">No plans yet.</td></tr>',a=e.diffView.length>0?e.diffView.map(i=>`
+    `).join(""):'<tr><td colspan="4" class="muted">No plans yet.</td></tr>',l=t.diffView.length>0?t.diffView.map(a=>`
         <article class="card full">
-          <div class="mono">${n(i.file)}</div>
+          <div class="mono">${e(a.file)}</div>
           <div class="diff">
-            <pre>${n(i.before)}</pre>
-            <pre>${n(i.after)}</pre>
+            <pre>${e(a.before)}</pre>
+            <pre>${e(a.after)}</pre>
           </div>
         </article>
       `).join(""):'<article class="card full"><div class="muted">No preview diff loaded yet. Run Preview.</div></article>';return`
@@ -112,65 +136,73 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
               <th>Impact</th>
             </tr>
           </thead>
-          <tbody>${t}</tbody>
+          <tbody>${n}</tbody>
         </table>
       </article>
-      ${a}
+      ${l}
     </section>
-  `}function G(){if(!e)return"";const t=e.timeline.states,a=t.length>0?t.map(o=>`
+  `}function U(){if(!t)return"";const n=t.timeline.states,l=n.length>0?n.map(c=>`
         <button
           type="button"
-          class="timeline-node ${o.index===e?.timeline.currentIndex?"current":""}"
-          data-timeline-index="${o.index}"
-          title="${n(o.action)}">
-          <span class="timeline-label">${n(o.label)}</span>
-          <span class="timeline-action">${n(o.action)}</span>
+          class="timeline-node ${c.index===t?.timeline.currentIndex?"current":""}"
+          data-timeline-index="${c.index}"
+          title="${e(c.action)}">
+          <span class="timeline-label">${e(c.label)}</span>
+          <span class="timeline-action">${e(c.action)}</span>
         </button>
-      `).join(""):'<div class="muted">No transitions recorded yet.</div>',i=e.stateInspector,p=i.why.length>0?i.why.map(o=>`<li>${n(o)}</li>`).join(""):"<li>No transition explanation available.</li>",f=i.dependencyChain.length>0?i.dependencyChain.map(o=>`<li class="mono">${n(o)}</li>`).join(""):"<li>No dependency chain captured.</li>",l=e.stateDiff&&e.stateDiff.patches.length>0?e.stateDiff.patches.map(o=>`
+      `).join(""):'<div class="muted">No transitions recorded yet.</div>',a=t.stateInspector,v=a.why.length>0?a.why.map(c=>`<li>${e(c)}</li>`).join(""):"<li>No transition explanation available.</li>",g=a.dependencyChain.length>0?a.dependencyChain.map(c=>`<li class="mono">${e(c)}</li>`).join(""):"<li>No dependency chain captured.</li>",o=t.stateDiff&&t.stateDiff.patches.length>0?t.stateDiff.patches.map(c=>`
       <tr>
-        <td class="mono">${n(o.path)}</td>
-        <td>${n(o.op)}</td>
-        <td><pre class="mono compact">${n(JSON.stringify(o.before,null,2)??"null")}</pre></td>
-        <td><pre class="mono compact">${n(JSON.stringify(o.after,null,2)??"null")}</pre></td>
+        <td class="mono">${e(c.path)}</td>
+        <td>${e(c.op)}</td>
+        <td><pre class="mono compact">${e(JSON.stringify(c.before,null,2)??"null")}</pre></td>
+        <td><pre class="mono compact">${e(JSON.stringify(c.after,null,2)??"null")}</pre></td>
       </tr>
-    `).join(""):'<tr><td colspan="4" class="muted">No diff patches for current state.</td></tr>',b=e.replayTrace?`
+    `).join(""):'<tr><td colspan="4" class="muted">No diff patches for current state.</td></tr>',$=t.replayTrace?`
       <article class="card full">
         <div class="muted">Replay Trace</div>
-        <p class="mono">visited=${e.replayTrace.visitedStates.length} · replayTime=${e.replayTrace.replayTime}ms · consistency=${e.replayTrace.consistencyCheck} · fallback=${e.replayTrace.fallbackUsed}</p>
+        <p class="mono">visited=${t.replayTrace.visitedStates.length} · replayTime=${t.replayTrace.replayTime}ms · consistency=${t.replayTrace.consistencyCheck} · fallback=${t.replayTrace.fallbackUsed}</p>
       </article>
-    `:"",m=e.runtimeGovernance,s=m?`
+    `:"",u=t.replayTrace?.planning?.candidates.find(c=>c.selected)??t.replayTrace?.planning?.candidates[0],s=u?`
+      <article class="card full">
+        <div class="muted">Strategic Orchestration Rationale</div>
+        <p>candidate=${e(u.id)} | strategy=${e(u.strategyType)} | alignment=${typeof u.strategicAlignment=="number"?u.strategicAlignment.toFixed(4):"n/a"}</p>
+        <p>domains=${e((u.strategicDomains??[]).join(", ")||"none")} | governanceIntensity=${e(u.governanceIntensity??"n/a")}</p>
+        ${u.rolloutBias?`<p>rollout=${e(u.rolloutBias.preferred)} stageSizing=${e(u.rolloutBias.stageSizing)} rollback=${e(u.rolloutBias.rollbackAggressiveness)} isolation=${e(u.rolloutBias.dependencyIsolation)} reasons=${e(u.rolloutBias.reasons.join(" | ")||"none")}</p>`:"<p>No rollout bias reasoning captured for selected candidate.</p>"}
+      </article>
+    `:"",m=t.runtimeGovernance,h=m?`
       <article class="card full">
         <div class="muted">Runtime Governance Trace</div>
-        <p>mode=${n(m.mode)} | capability=${n(m.capability)} | decision=${n(m.decision)} | reason=${n(m.reason)}</p>
-        <p class="mono">governanceHash=${n(m.governanceHash)}</p>
+        <p>mode=${e(m.mode)} | capability=${e(m.capability)} | decision=${e(m.decision)} | reason=${e(m.reason)}</p>
+        <p class="mono">governanceHash=${e(m.governanceHash)}</p>
+        <p>strategicDomains=${e((m.strategic?.domains??[]).join(", ")||"none")} | governanceIntensity=${e(m.strategic?.governanceIntensity??"n/a")}</p>
       </article>
     `:"";return`
     <section class="grid">
       <article class="card full">
         <div class="muted">Time Navigation</div>
         <div class="timeline-controls">
-          <button id="timelinePlayBtn" ${e.timeline.playing?"disabled":""}>Play</button>
-          <button id="timelinePauseBtn" class="ghost" ${e.timeline.playing?"":"disabled"}>Pause</button>
-          <button id="timelineStepBackBtn" class="secondary" ${e.timeline.canStepBackward?"":"disabled"}>Step Back</button>
-          <button id="timelineStepForwardBtn" class="secondary" ${e.timeline.canStepForward?"":"disabled"}>Step Forward</button>
-          <span class="mono">Current Index: ${e.timeline.currentIndex}</span>
+          <button id="timelinePlayBtn" ${t.timeline.playing?"disabled":""}>Play</button>
+          <button id="timelinePauseBtn" class="ghost" ${t.timeline.playing?"":"disabled"}>Pause</button>
+          <button id="timelineStepBackBtn" class="secondary" ${t.timeline.canStepBackward?"":"disabled"}>Step Back</button>
+          <button id="timelineStepForwardBtn" class="secondary" ${t.timeline.canStepForward?"":"disabled"}>Step Forward</button>
+          <span class="mono">Current Index: ${t.timeline.currentIndex}</span>
         </div>
-        <div class="timeline-track">${a}</div>
+        <div class="timeline-track">${l}</div>
       </article>
 
       <article class="card wide">
         <div class="muted">Why Did This Happen?</div>
-        <ul class="list">${p}</ul>
+        <ul class="list">${v}</ul>
       </article>
 
       <article class="card">
         <div class="muted">Dependency Chain</div>
-        <ul class="list">${f}</ul>
+        <ul class="list">${g}</ul>
       </article>
 
       <article class="card full">
         <div class="muted">State Inspector (Exact Replay State)</div>
-        <pre class="mono">${n(JSON.stringify({intent:i.intent,ast:i.ast,violations:i.violations,plans:i.plans},null,2))}</pre>
+        <pre class="mono">${e(JSON.stringify({intent:a.intent,ast:a.ast,violations:a.violations,plans:a.plans},null,2))}</pre>
       </article>
 
       <article class="card full">
@@ -184,20 +216,21 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
               <th>After</th>
             </tr>
           </thead>
-          <tbody>${l}</tbody>
+          <tbody>${o}</tbody>
         </table>
       </article>
 
-      ${b}
+      ${$}
       ${s}
+      ${h}
     </section>
-  `}function W(){if(!e)return"";const t=e.policyView.map(i=>`
+  `}function W(){if(!t)return"";const n=t.policyView.map(a=>`
     <tr>
-      <td>${T(i.decision)}</td>
-      <td>${n(i.rulesMatched.join(", "))||"none"}</td>
-      <td>${n(i.source)}</td>
+      <td>${S(a.decision)}</td>
+      <td>${e(a.rulesMatched.join(", "))||"none"}</td>
+      <td>${e(a.source)}</td>
     </tr>
-  `).join(""),a=e.pendingApprovals.length>0?e.pendingApprovals.map(i=>`<li><span class="mono">${n(i.id)}</span> ${n(i.command)}</li>`).join(""):"<li>No pending approvals.</li>";return`
+  `).join(""),l=t.pendingApprovals.length>0?t.pendingApprovals.map(a=>`<li><span class="mono">${e(a.id)}</span> ${e(a.command)}</li>`).join(""):"<li>No pending approvals.</li>";return`
     <section class="grid">
       <article class="card full">
         <div class="muted">Policy Decision Trace</div>
@@ -209,20 +242,20 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
               <th>Source Layer</th>
             </tr>
           </thead>
-          <tbody>${t}</tbody>
+          <tbody>${n}</tbody>
         </table>
       </article>
       <article class="card full">
         <div class="muted">Pending Approvals</div>
-        <ul class="list">${a}</ul>
+        <ul class="list">${l}</ul>
       </article>
     </section>
-  `}function q(){if(!e)return"";const t=e.auditView.events.length>0?e.auditView.events.map(a=>`
+  `}function z(){if(!t)return"";const n=t.auditView.events.length>0?t.auditView.events.map(l=>`
       <tr>
-        <td class="mono">${n(a.timestamp)}</td>
-        <td>${n(a.actor.role)}</td>
-        <td>${n(a.action)}</td>
-        <td>${n(a.result)}</td>
+        <td class="mono">${e(l.timestamp)}</td>
+        <td>${e(l.actor.role)}</td>
+        <td>${e(l.action)}</td>
+        <td>${e(l.result)}</td>
       </tr>
     `).join(""):'<tr><td colspan="4" class="muted">No events for current filters.</td></tr>';return`
     <section class="grid">
@@ -230,11 +263,11 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
         <div style="display:flex;gap:8px;align-items:end;">
           <div>
             <label for="auditRoleFilter">Role Filter</label>
-            <input id="auditRoleFilter" type="text" placeholder="architect|analyst|conductor|enforcer" value="${n(g.role??"")}" />
+            <input id="auditRoleFilter" type="text" placeholder="architect|analyst|conductor|enforcer" value="${e(I.role??"")}" />
           </div>
           <div>
             <label for="auditEnvFilter">Environment Filter</label>
-            <input id="auditEnvFilter" type="text" placeholder="local|ci|staging|production" value="${n(g.environment??"")}" />
+            <input id="auditEnvFilter" type="text" placeholder="local|ci|staging|production" value="${e(I.environment??"")}" />
           </div>
           <button id="applyAuditFilterBtn" class="ghost">Apply</button>
         </div>
@@ -250,31 +283,31 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
               <th>Result</th>
             </tr>
           </thead>
-          <tbody>${t}</tbody>
+          <tbody>${n}</tbody>
         </table>
       </article>
     </section>
-  `}function J(){if(!e)return"";const t=e.macroUI.libraries.length>0?e.macroUI.libraries.map(l=>`<li>${n(l)}</li>`).join(""):"<li>No libraries installed.</li>",a=e.macroUI.macros.length>0?e.macroUI.macros.map(l=>`<li class="mono">${n(l)}</li>`).join(""):"<li>No macros discovered.</li>",i=(e.macroUI.lockedVersions??[]).length>0?(e.macroUI.lockedVersions??[]).map(l=>`<li class="mono">${n(l)}</li>`).join(""):"<li>No lock entries.</li>",p=(e.macroUI.transitiveDependencies??[]).length>0?(e.macroUI.transitiveDependencies??[]).map(l=>`<li class="mono">${n(l)}</li>`).join(""):"<li>No dependency edges recorded.</li>",f=e.macroUI.abstractions.length>0?e.macroUI.abstractions.map(l=>`<li class="mono">${n(l)}</li>`).join(""):"<li>No abstractions discovered.</li>";return`
+  `}function q(){if(!t)return"";const n=t.macroUI.libraries.length>0?t.macroUI.libraries.map(o=>`<li>${e(o)}</li>`).join(""):"<li>No libraries installed.</li>",l=t.macroUI.macros.length>0?t.macroUI.macros.map(o=>`<li class="mono">${e(o)}</li>`).join(""):"<li>No macros discovered.</li>",a=(t.macroUI.lockedVersions??[]).length>0?(t.macroUI.lockedVersions??[]).map(o=>`<li class="mono">${e(o)}</li>`).join(""):"<li>No lock entries.</li>",v=(t.macroUI.transitiveDependencies??[]).length>0?(t.macroUI.transitiveDependencies??[]).map(o=>`<li class="mono">${e(o)}</li>`).join(""):"<li>No dependency edges recorded.</li>",g=t.macroUI.abstractions.length>0?t.macroUI.abstractions.map(o=>`<li class="mono">${e(o)}</li>`).join(""):"<li>No abstractions discovered.</li>";return`
     <section class="grid">
       <article class="card">
         <div class="muted">Libraries</div>
-        <ul class="list">${t}</ul>
+        <ul class="list">${n}</ul>
       </article>
       <article class="card">
         <div class="muted">Macros</div>
-        <ul class="list">${a}</ul>
+        <ul class="list">${l}</ul>
       </article>
       <article class="card">
         <div class="muted">Locked Versions</div>
-        <ul class="list">${i}</ul>
+        <ul class="list">${a}</ul>
       </article>
       <article class="card">
         <div class="muted">Abstractions</div>
-        <ul class="list">${f}</ul>
+        <ul class="list">${g}</ul>
       </article>
       <article class="card full">
         <div class="muted">Transitive Dependencies</div>
-        <ul class="list">${p}</ul>
+        <ul class="list">${v}</ul>
       </article>
       <article class="card full">
         <label for="macroCommandInput">Macro/Abstraction Command</label>
@@ -284,10 +317,10 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
         </div>
       </article>
     </section>
-  `}function _(){if(!e)return"";const t=e.traces.slice(0,8).map(a=>`
+  `}function J(){if(!t)return"";const n=t.traces.slice(0,8).map(l=>`
       <tr>
-        <td>${n(a.action)}</td>
-        <td class="mono">${n(a.resultingDSL)}</td>
+        <td>${e(l.action)}</td>
+        <td class="mono">${e(l.resultingDSL)}</td>
       </tr>
     `).join("");return`
     <section class="grid">
@@ -301,16 +334,16 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
             </tr>
           </thead>
           <tbody>
-            <tr><td>architect</td><td>${e.roleView.architect.join(", ")}</td></tr>
-            <tr><td>analyst</td><td>${e.roleView.analyst.join(", ")}</td></tr>
-            <tr><td>conductor</td><td>${e.roleView.conductor.join(", ")}</td></tr>
-            <tr><td>enforcer</td><td>${e.roleView.enforcer.join(", ")}</td></tr>
+            <tr><td>architect</td><td>${t.roleView.architect.join(", ")}</td></tr>
+            <tr><td>analyst</td><td>${t.roleView.analyst.join(", ")}</td></tr>
+            <tr><td>conductor</td><td>${t.roleView.conductor.join(", ")}</td></tr>
+            <tr><td>enforcer</td><td>${t.roleView.enforcer.join(", ")}</td></tr>
           </tbody>
         </table>
       </article>
       <article class="card full">
         <div class="muted">Current Control Plane (Canonical Projection)</div>
-        <pre class="mono">${n(JSON.stringify(e.controlPlane,null,2))}</pre>
+        <pre class="mono">${e(JSON.stringify(t.controlPlane,null,2))}</pre>
       </article>
       <article class="card full">
         <div class="muted">Recent UI Traceability</div>
@@ -322,9 +355,9 @@ ${i}`}function N(){typeof $<"u"&&(window.clearInterval($),$=void 0)}function V()
             </tr>
           </thead>
           <tbody>
-            ${t||'<tr><td colspan="2" class="muted">No UI traces yet.</td></tr>'}
+            ${n||'<tr><td colspan="2" class="muted">No UI traces yet.</td></tr>'}
           </tbody>
         </table>
       </article>
     </section>
-  `}function K(){const t=document.getElementById("runDefineBtn"),a=document.getElementById("runPlanBtn"),i=document.getElementById("runPreviewBtn"),p=document.getElementById("runApproveBtn"),f=document.getElementById("runExecuteBtn"),l=document.getElementById("runAuditBtn"),b=document.getElementById("applyAuditFilterBtn"),m=document.getElementById("runMacroCommandBtn"),s=document.getElementById("timelinePlayBtn"),o=document.getElementById("timelinePauseBtn"),E=document.getElementById("timelineStepBackBtn"),P=document.getElementById("timelineStepForwardBtn");t instanceof HTMLButtonElement&&t.addEventListener("click",()=>{const c=document.getElementById("intentInput"),r=c instanceof HTMLInputElement?c.value.trim():"";u({type:"run-workflow",role:d(),step:"define-intent",payload:{intent:r}})}),a instanceof HTMLButtonElement&&a.addEventListener("click",()=>{const c=document.getElementById("planGoalInput"),r=c instanceof HTMLInputElement?c.value.trim():"";u({type:"run-workflow",role:d(),step:"plan",payload:r.length>0?{goal:r}:{}})}),i instanceof HTMLButtonElement&&i.addEventListener("click",()=>{const c=document.getElementById("previewPlanInput"),r=c instanceof HTMLInputElement?c.value.trim():"";u({type:"run-workflow",role:d(),step:"preview",payload:r.length>0?{planId:r}:{}})}),p instanceof HTMLButtonElement&&p.addEventListener("click",()=>{const c=document.getElementById("approveInput"),r=c instanceof HTMLInputElement?c.value.trim():"";if(!r){L("Approve requires diff id or plan id.");return}const w=r.startsWith("diff-")?{diffId:r}:{planId:r};u({type:"run-workflow",role:d(),step:"approve",payload:w})}),f instanceof HTMLButtonElement&&f.addEventListener("click",()=>{const c=document.getElementById("executePlanInput"),r=c instanceof HTMLInputElement?c.value.trim():"";u({type:"run-workflow",role:d(),step:"execute",payload:r.length>0?{planId:r}:{}})}),l instanceof HTMLButtonElement&&l.addEventListener("click",()=>{u({type:"run-workflow",role:d(),step:"audit"})}),b instanceof HTMLButtonElement&&b.addEventListener("click",()=>{const c=document.getElementById("auditRoleFilter"),r=document.getElementById("auditEnvFilter");g={...c instanceof HTMLInputElement&&c.value.trim().length>0?{role:c.value.trim()}:{},...r instanceof HTMLInputElement&&r.value.trim().length>0?{environment:r.value.trim()}:{}},u({type:"refresh",role:d(),filters:g})}),m instanceof HTMLButtonElement&&m.addEventListener("click",()=>{const c=document.getElementById("macroCommandInput");if(!(c instanceof HTMLInputElement))return;const r=c.value.trim();r.length!==0&&u({type:"run-dsl",role:d(),dsl:r})}),s instanceof HTMLButtonElement&&s.addEventListener("click",()=>{u({type:"replay-control",role:d(),control:"play"})}),o instanceof HTMLButtonElement&&o.addEventListener("click",()=>{u({type:"replay-control",role:d(),control:"pause"})}),E instanceof HTMLButtonElement&&E.addEventListener("click",()=>{u({type:"replay-control",role:d(),control:"step-backward"})}),P instanceof HTMLButtonElement&&P.addEventListener("click",()=>{u({type:"replay-control",role:d(),control:"step-forward"})}),document.querySelectorAll(".timeline-node[data-timeline-index]").forEach(c=>{c.addEventListener("click",()=>{const r=c.dataset.timelineIndex;if(!r)return;const w=Number.parseInt(r,10);Number.isFinite(w)&&u({type:"replay-control",role:d(),control:"jump",index:w})})})}function R(){if(!e){y.innerHTML="";return}v==="dashboard"?y.innerHTML=F():v==="workspace"?y.innerHTML=_():v==="plan-view"?y.innerHTML=U():v==="timeline-view"?y.innerHTML=G():v==="policy-view"?y.innerHTML=W():v==="audit-view"?y.innerHTML=q():y.innerHTML=J(),K()}function j(t){e=t,B.value=t.activeRole,A(),R(),V()}function z(t){t.ok?L(t.message):L(t.error?`${t.error.source}: ${t.error.message}`:t.message),j(t.snapshot)}window.addEventListener("message",t=>{const a=t.data;if(a.type==="snapshot"){j(a.payload);return}a.type==="action-result"&&z(a.payload)});S.addEventListener("click",()=>{const t=x.value.trim();t.length!==0&&u({type:"run-dsl",role:d(),dsl:t})});H.addEventListener("click",()=>{u({type:"refresh",role:d(),filters:g})});B.addEventListener("change",()=>{u({type:"refresh",role:d(),filters:g})});M.postMessage({type:"ready"});
+  `}function _(){const n=document.getElementById("runDefineBtn"),l=document.getElementById("runPlanBtn"),a=document.getElementById("runPreviewBtn"),v=document.getElementById("runApproveBtn"),g=document.getElementById("runExecuteBtn"),o=document.getElementById("runAuditBtn"),$=document.getElementById("applyAuditFilterBtn"),u=document.getElementById("runMacroCommandBtn"),s=document.getElementById("timelinePlayBtn"),m=document.getElementById("timelinePauseBtn"),h=document.getElementById("timelineStepBackBtn"),c=document.getElementById("timelineStepForwardBtn");n instanceof HTMLButtonElement&&n.addEventListener("click",()=>{const r=document.getElementById("intentInput"),i=r instanceof HTMLInputElement?r.value.trim():"";p({type:"run-workflow",role:d(),step:"define-intent",payload:{intent:i}})}),l instanceof HTMLButtonElement&&l.addEventListener("click",()=>{const r=document.getElementById("planGoalInput"),i=r instanceof HTMLInputElement?r.value.trim():"";p({type:"run-workflow",role:d(),step:"plan",payload:i.length>0?{goal:i}:{}})}),a instanceof HTMLButtonElement&&a.addEventListener("click",()=>{const r=document.getElementById("previewPlanInput"),i=r instanceof HTMLInputElement?r.value.trim():"";p({type:"run-workflow",role:d(),step:"preview",payload:i.length>0?{planId:i}:{}})}),v instanceof HTMLButtonElement&&v.addEventListener("click",()=>{const r=document.getElementById("approveInput"),i=r instanceof HTMLInputElement?r.value.trim():"";if(!i){L("Approve requires diff id or plan id.");return}const b=i.startsWith("diff-")?{diffId:i}:{planId:i};p({type:"run-workflow",role:d(),step:"approve",payload:b})}),g instanceof HTMLButtonElement&&g.addEventListener("click",()=>{const r=document.getElementById("executePlanInput"),i=r instanceof HTMLInputElement?r.value.trim():"";p({type:"run-workflow",role:d(),step:"execute",payload:i.length>0?{planId:i}:{}})}),o instanceof HTMLButtonElement&&o.addEventListener("click",()=>{p({type:"run-workflow",role:d(),step:"audit"})}),$ instanceof HTMLButtonElement&&$.addEventListener("click",()=>{const r=document.getElementById("auditRoleFilter"),i=document.getElementById("auditEnvFilter");I={...r instanceof HTMLInputElement&&r.value.trim().length>0?{role:r.value.trim()}:{},...i instanceof HTMLInputElement&&i.value.trim().length>0?{environment:i.value.trim()}:{}},p({type:"refresh",role:d(),filters:I})}),u instanceof HTMLButtonElement&&u.addEventListener("click",()=>{const r=document.getElementById("macroCommandInput");if(!(r instanceof HTMLInputElement))return;const i=r.value.trim();i.length!==0&&p({type:"run-dsl",role:d(),dsl:i})}),s instanceof HTMLButtonElement&&s.addEventListener("click",()=>{p({type:"replay-control",role:d(),control:"play"})}),m instanceof HTMLButtonElement&&m.addEventListener("click",()=>{p({type:"replay-control",role:d(),control:"pause"})}),h instanceof HTMLButtonElement&&h.addEventListener("click",()=>{p({type:"replay-control",role:d(),control:"step-backward"})}),c instanceof HTMLButtonElement&&c.addEventListener("click",()=>{p({type:"replay-control",role:d(),control:"step-forward"})}),document.querySelectorAll(".timeline-node[data-timeline-index]").forEach(r=>{r.addEventListener("click",()=>{const i=r.dataset.timelineIndex;if(!i)return;const b=Number.parseInt(i,10);Number.isFinite(b)&&p({type:"replay-control",role:d(),control:"jump",index:b})})})}function j(){if(!t){y.innerHTML="";return}f==="dashboard"?y.innerHTML=V():f==="workspace"?y.innerHTML=J():f==="plan-view"?y.innerHTML=G():f==="timeline-view"?y.innerHTML=U():f==="policy-view"?y.innerHTML=W():f==="audit-view"?y.innerHTML=z():y.innerHTML=q(),_()}function H(n){t=n,k.value=n.activeRole,C(),j(),F()}function K(n){n.ok?L(n.message):L(n.error?`${n.error.source}: ${n.error.message}`:n.message),H(n.snapshot)}window.addEventListener("message",n=>{const l=n.data;if(l.type==="snapshot"){H(l.payload);return}l.type==="action-result"&&K(l.payload)});M.addEventListener("click",()=>{const n=x.value.trim();n.length!==0&&p({type:"run-dsl",role:d(),dsl:n})});A.addEventListener("click",()=>{p({type:"refresh",role:d(),filters:I})});k.addEventListener("change",()=>{p({type:"refresh",role:d(),filters:I})});P.postMessage({type:"ready"});
