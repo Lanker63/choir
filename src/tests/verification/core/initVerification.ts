@@ -7,6 +7,7 @@ import { ControlPlaneSchema } from "../../../schema.js";
 import {
   calibrateStrategicOrchestration,
   discoverStrategicDomains,
+  seedStrategicDomainPromptDefaults,
   synthesizeStrategicControlPlane,
   type StrategicDomainModel,
 } from "../../../core/strategicInit.js";
@@ -193,6 +194,51 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
         ? `runtime=${runtimeMode}`
         : `runtime=${runtimeMode} expected=${calibrationA.governanceModeRecommendation}`,
     });
+
+    const domainForPrompt = firstDiscovery.domains[0];
+    assert.ok(domainForPrompt, "expected at least one discovered domain for prompt defaults test");
+
+    if (domainForPrompt) {
+      const fallbackDefaults = seedStrategicDomainPromptDefaults(domainForPrompt, control);
+      checks.push({
+        name: "domain-prompt-defaults-fallback-deterministic",
+        passed: fallbackDefaults.mission === `Owns ${domainForPrompt.id} outcomes across ${domainForPrompt.packages.length} package(s).`
+          && stableStringify(fallbackDefaults.priorities) === stableStringify([...domainForPrompt.inferred.priorities].sort((a, b) => a.localeCompare(b)))
+          && fallbackDefaults.riskTolerance === domainForPrompt.inferred.riskTolerance,
+        detail: `domain=${domainForPrompt.id}`,
+      });
+
+      const customizedControl = ControlPlaneSchema.parse({
+        ...control,
+        domains: {
+          ...(control.domains ?? {}),
+          [domainForPrompt.id]: {
+            mission: "Existing domain mission",
+            strategicIntent: {
+              priorities: ["stability", "correctness"],
+              optimizationGoals: ["dependency-isolation"],
+              riskTolerance: "low",
+              rolloutPreferences: ["canary-required"],
+              stabilityProfile: "stable",
+              governanceIntensity: "strict",
+            },
+          },
+        },
+      });
+
+      const seededDefaults = seedStrategicDomainPromptDefaults(domainForPrompt, customizedControl);
+      checks.push({
+        name: "domain-prompt-defaults-seeded-from-control-plane",
+        passed: seededDefaults.mission === "Existing domain mission"
+          && stableStringify(seededDefaults.priorities) === stableStringify(["correctness", "stability"])
+          && stableStringify(seededDefaults.optimizationGoals) === stableStringify(["dependency-isolation"])
+          && seededDefaults.riskTolerance === "low"
+          && stableStringify(seededDefaults.rolloutPreferences) === stableStringify(["canary-required"])
+          && seededDefaults.stabilityProfile === "stable"
+          && seededDefaults.governanceIntensity === "strict",
+        detail: `domain=${domainForPrompt.id}`,
+      });
+    }
 
     assert.ok(firstDiscovery.domains.length > 0, "expected discovered strategic domains");
     assert.ok(Object.keys(synthA.controlPlane.domains ?? {}).length > 0, "expected modeled domains");

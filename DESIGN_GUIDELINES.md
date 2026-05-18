@@ -174,6 +174,8 @@ Strategic init contract:
 - Workspace discovery precedence must match workspace detection contract (nx -> turbo -> pnpm-workspace -> package.json workspaces -> fallback).
 - Domain IDs must be topology-derived from discovered package paths (no keyword-guessed domain naming during init) and require explicit user confirmation before write.
 - Heuristics may suggest default strategic posture values, but may not override topology-derived domain identity.
+- In merge mode, scalar root fields (`mission`, `vision`) must be pre-populated from the current control plane before prompting.
+- In merge mode after root prompts, domain re-init must be operator-driven with a domain picker loop (select domain -> model domain -> return to picker), with an explicit finish option.
 - Runtime governance mode selection occurs only after strategic domain modeling and calibration.
 - Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
 - Init diagnostics must persist pipeline stage outcomes in `.choir/pipeline.diagnostics.jsonl`.

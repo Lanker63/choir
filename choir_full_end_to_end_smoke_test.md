@@ -32,7 +32,9 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm the mission, vision, goals, constraints, and non-goals in `.choir/choir.config.yaml` match exactly what was entered.
    - Confirm the YAML file parses without schema errors.
    - Confirm strategic domain discovery prompts are shown after baseline mission/vision/intent prompts.
-   - Confirm inferred domains are explicitly confirmed/modelled before init completes (no silent implicit acceptance).
+   - Confirm domain IDs are topology-derived from discovered package paths (not keyword-guessed domain names).
+   - Confirm each strategic domain prompt includes detected package(s) and domain-derivation basis.
+   - Confirm discovered domains are explicitly confirmed/modelled before init completes (no silent implicit acceptance).
    - Confirm `.choir/init-strategic-state.json` is created.
    - Confirm `.choir/pipeline.diagnostics.jsonl` contains an init diagnostics record with stages for workspace-discovery, domain-classification, strategic-modeling, governance-modeling, orchestration-calibration, and control-plane-generation.
 
@@ -45,6 +47,25 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 
    - Confirm strategic defaults are seeded for experimentation/velocity posture.
    - Confirm initialization remains deterministic and replayable (re-run with unchanged workspace and verify equivalent topology/strategic hashes in diagnostics metadata when surfaced).
+
+1.3 In an already initialized workspace, run `@choir init` again and choose `Merge`.
+
+   - Confirm mission and vision prompts are pre-populated with current control-plane values (editable, not blank).
+   - Confirm existing root intent lists (goals, constraints, non-goals) are preserved/seeded and can be incrementally updated.
+   - After root prompts complete (through non-goals), confirm a merge-mode domain picker appears.
+   - Confirm domain picker entries reflect currently discovered candidate domains from workspace topology (including newly added packages/folders since last init, when discoverable).
+   - Confirm the picker includes an explicit finish option (for example, `Finish merge re-init`) to stop strategic domain re-initialization.
+   - Confirm selecting a domain opens domain modeling prompts for that domain and, when completed, returns to the domain picker.
+   - Confirm domain re-init prompts are pre-populated from current domain values in `.choir/choir.config.yaml` when present (for example domain mission, priorities, optimization goals, risk tolerance, rollout posture, stability profile, governance intensity).
+   - Confirm for fields with no existing domain value, prompts fall back to deterministic suggested defaults (not blank/undefined states).
+   - Confirm this loop supports re-initializing multiple domains in one run (select domain -> model -> return -> repeat -> finish).
+   - Confirm if finish is chosen immediately (no domain selected), root-level updates still apply and existing strategic domain/package mappings remain unchanged.
+   - Confirm when one or more domains are selected, only selected domain/package strategic sections are updated; unselected strategic sections remain unchanged.
+
+1.4 In an already initialized workspace, run `@choir init` and choose `Overwrite`.
+
+   - Confirm init proceeds as full re-initialization (not incremental merge behavior).
+   - Confirm merge-specific domain picker loop is not used in overwrite path.
 
 2. In chat, enter `@choir status`.
 
@@ -86,6 +107,7 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 
    - Run `@choir init --expand-domain` after adding a new package/module in the workspace.
    - Confirm newly discovered package/domain mappings are added without wiping existing strategic domain modeling.
+   - Confirm discovered domain identity follows topology-derived naming from package paths.
    - Run `@choir init --reclassify` with unchanged workspace.
    - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
    - Run `@choir init --recalibrate` after adjusting domain risk/governance posture.

@@ -113,6 +113,8 @@ Core flow:
 - define, analyze, plan, simulate, preview, execute, status
 - strategic initialization pipeline: `@choir init` now runs deterministic discovery -> topology-derived domain mapping -> strategic modeling -> governance modeling -> orchestration calibration -> control-plane synthesis
 - strategic init does not guess domain IDs from keywords; domain IDs are derived from workspace topology/package paths and then confirmed by the user
+- merge-mode init pre-populates mission/vision prompts from current control-plane values
+- merge-mode strategic re-init is domain-by-domain: choose a candidate domain, re-initialize it, return to the domain list, then finish when ready
 - strategic init rerun modes: `@choir init --expand-domain`, `@choir init --reclassify`, `@choir init --recalibrate`
 - strategic init templates: `backend`, `frontend`, `fintech-platform`, `saas-product`, `enterprise-monolith`, `internal-tooling`, `experimentation-platform`, `distributed-platform`
 - analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text

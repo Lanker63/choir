@@ -1501,13 +1501,23 @@ const pass2: TestPass = {
         const control = makeControlPlane();
         const withoutPlan = compileDSL("choir execute", control);
         assert.strictEqual(withoutPlan.changed, false);
-        assert.deepStrictEqual(withoutPlan.updatedControlPlane, control);
+        assert.deepStrictEqual(withoutPlan.updatedControlPlane, {
+          ...control,
+          runtime: {
+            mode: "execution-enabled",
+          },
+        });
 
         const withPlan = makeControlPlane();
         withPlan.execution.plans = [makePlan("plan-alpha", [makeTask("analyze", "analysis")])];
         const compiled = compileDSL("choir execute", withPlan);
         assert.strictEqual(compiled.changed, false);
-        assert.deepStrictEqual(compiled.updatedControlPlane, withPlan);
+        assert.deepStrictEqual(compiled.updatedControlPlane, {
+          ...withPlan,
+          runtime: {
+            mode: "execution-enabled",
+          },
+        });
       },
     },
     {
@@ -1966,6 +1976,25 @@ const pass2: TestPass = {
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
+      },
+    },
+    {
+      id: "2.30aa",
+      name: "init wizard seeded state pre-populates merge values deterministically",
+      run: async () => {
+        const seeded = createWizardState(undefined, {
+          mission: "  Merge mission  ",
+          vision: " Merge vision ",
+          goals: ["enforce boundaries", "enforce boundaries"],
+          constraints: ["no direct db access"],
+          nonGoals: ["distributed app"],
+        });
+
+        assert.strictEqual(seeded.data.mission, "Merge mission");
+        assert.strictEqual(seeded.data.vision, "Merge vision");
+        assert.deepStrictEqual(seeded.data.goals, ["enforce boundaries"]);
+        assert.deepStrictEqual(seeded.data.constraints, ["no direct db access"]);
+        assert.deepStrictEqual(seeded.data.nonGoals, ["distributed app"]);
       },
     },
     {

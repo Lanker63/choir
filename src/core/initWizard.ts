@@ -24,6 +24,8 @@ export type WizardState = {
   };
 };
 
+type WizardSeedData = Partial<WizardState["data"]>;
+
 export type InitApplyMode = "overwrite" | "merge";
 
 export type InitWizardSession = {
@@ -142,16 +144,44 @@ function previousStep(step: WizardStep): WizardStep {
   return ALL_STEPS[index - 1] as WizardStep;
 }
 
-export function createWizardState(template?: InitTemplateName): WizardState {
+export function createWizardState(template?: InitTemplateName, seed?: WizardSeedData): WizardState {
   const defaults = template ? INIT_TEMPLATES[template] : { goals: [], constraints: [], nonGoals: [] };
+
+  const mission = typeof seed?.mission === "string" ? normalizeText(seed.mission) : "";
+  const vision = typeof seed?.vision === "string" ? normalizeText(seed.vision) : "";
+
+  const goals = [...defaults.goals];
+  for (const value of seed?.goals ?? []) {
+    const normalized = normalizeText(value);
+    if (normalized.length > 0 && !listIncludesNormalized(goals, normalized)) {
+      goals.push(normalized);
+    }
+  }
+
+  const constraints = [...defaults.constraints];
+  for (const value of seed?.constraints ?? []) {
+    const normalized = normalizeText(value);
+    if (normalized.length > 0 && !listIncludesNormalized(constraints, normalized)) {
+      constraints.push(normalized);
+    }
+  }
+
+  const nonGoals = [...defaults.nonGoals];
+  for (const value of seed?.nonGoals ?? []) {
+    const normalized = normalizeText(value);
+    if (normalized.length > 0 && !listIncludesNormalized(nonGoals, normalized)) {
+      nonGoals.push(normalized);
+    }
+  }
+
   return {
     currentStep: "mission",
     data: {
-      mission: "",
-      vision: "",
-      goals: [...defaults.goals],
-      constraints: [...defaults.constraints],
-      nonGoals: [...defaults.nonGoals],
+      mission,
+      vision,
+      goals,
+      constraints,
+      nonGoals,
     },
   };
 }

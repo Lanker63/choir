@@ -95,6 +95,16 @@ export type StrategicDomainModel = {
   governanceIntensity: GovernanceIntensity;
 };
 
+export type StrategicDomainPromptDefaults = {
+  mission: string;
+  priorities: StrategicPriority[];
+  optimizationGoals: OptimizationGoal[];
+  riskTolerance: RiskTolerance;
+  rolloutPreferences: RolloutPreference[];
+  stabilityProfile: StabilityProfile;
+  governanceIntensity: GovernanceIntensity;
+};
+
 export type StrategicCalibration = {
   selectedStrategyType: "rollback-minimized" | "parallel-optimized" | "balanced-default";
   rolloutDefault: "canary" | "phased" | "all-at-once";
@@ -722,6 +732,40 @@ function toPackageMode(model: StrategicDomainModel): NonNullable<ControlPlane["p
 
 function mergeUniqueSorted(left: string[] | undefined, right: string[] | undefined): string[] {
   return [...new Set([...(left ?? []), ...(right ?? [])])].sort((a, b) => a.localeCompare(b));
+}
+
+export function seedStrategicDomainPromptDefaults(
+  domain: StrategicDomainDraft,
+  currentControl?: ControlPlane
+): StrategicDomainPromptDefaults {
+  const currentDomain = currentControl?.domains?.[domain.id];
+  const currentIntent = currentDomain?.strategicIntent;
+
+  const mission = (typeof currentDomain?.mission === "string" && currentDomain.mission.trim().length > 0)
+    ? currentDomain.mission.trim()
+    : `Owns ${domain.id} outcomes across ${domain.packages.length} package(s).`;
+
+  const priorities = (currentIntent?.priorities && currentIntent.priorities.length > 0)
+    ? [...currentIntent.priorities]
+    : [...domain.inferred.priorities];
+
+  const optimizationGoals = (currentIntent?.optimizationGoals && currentIntent.optimizationGoals.length > 0)
+    ? [...currentIntent.optimizationGoals]
+    : [...domain.inferred.optimizationGoals];
+
+  const rolloutPreferences = (currentIntent?.rolloutPreferences && currentIntent.rolloutPreferences.length > 0)
+    ? [...currentIntent.rolloutPreferences]
+    : [...domain.inferred.rolloutPreferences];
+
+  return {
+    mission,
+    priorities: priorities.sort((left, right) => left.localeCompare(right)),
+    optimizationGoals: optimizationGoals.sort((left, right) => left.localeCompare(right)),
+    riskTolerance: currentIntent?.riskTolerance ?? domain.inferred.riskTolerance,
+    rolloutPreferences: rolloutPreferences.sort((left, right) => left.localeCompare(right)),
+    stabilityProfile: currentIntent?.stabilityProfile ?? domain.inferred.stabilityProfile,
+    governanceIntensity: currentIntent?.governanceIntensity ?? domain.inferred.governanceIntensity,
+  };
 }
 
 export function synthesizeStrategicControlPlane(

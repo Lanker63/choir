@@ -98,6 +98,7 @@ import {
     calibrateStrategicOrchestration,
     discoverStrategicDomains,
     readStrategicInitState,
+    seedStrategicDomainPromptDefaults,
     strategicTemplateDefaults,
     synthesizeStrategicControlPlane,
     type GovernanceIntensity,
@@ -117,7 +118,7 @@ import {
     normalizeCliPackageSpec,
     validateCliPackageSpec,
 } from "./core/cliInstall.js";
-import { Plan, Task } from "./schema.js";
+import { ControlPlane, Plan, Task } from "./schema.js";
 import {
     createEmptyStatePlane,
     persistStatePlane,
@@ -465,128 +466,272 @@ async function modelStrategicDomainsInteractively(
     const models: StrategicDomainModel[] = [];
 
     for (const domain of discovery.domains) {
-        const packageSummary = domain.packages.join(", ");
-        const reasonSummary = domain.reasons.join("; ");
-        const mission = await vscode.window.showInputBox({
-            title: `Strategic Domain: ${domain.id}`,
-            prompt: [
-                `Detected package(s): ${packageSummary}`,
-                `Domain derivation: ${reasonSummary}`,
-                `Confirm or edit what this topology-derived domain is responsible for (${domain.packages.length} package(s)).`,
-            ].join("\n"),
-            value: `Owns ${domain.id} outcomes across ${domain.packages.length} package(s).`,
-            ignoreFocusOut: true,
-        });
-
-        if (mission === undefined) {
+        const model = await modelSingleStrategicDomain(domain);
+        if (!model) {
             return null;
         }
-
-        const prioritiesPick = await vscode.window.showQuickPick(
-            STRATEGIC_PRIORITIES.map((priority) => ({
-                label: priority,
-                picked: domain.inferred.priorities.includes(priority),
-            })),
-            {
-                title: `Strategic Priorities: ${domain.id}`,
-                placeHolder: "Select one or more priorities",
-                canPickMany: true,
-                ignoreFocusOut: true,
-            }
-        );
-
-        if (!prioritiesPick) {
-            return null;
-        }
-
-        const goalsPick = await vscode.window.showQuickPick(
-            OPTIMIZATION_GOALS.map((goal) => ({
-                label: goal,
-                picked: domain.inferred.optimizationGoals.includes(goal),
-            })),
-            {
-                title: `Optimization Goals: ${domain.id}`,
-                placeHolder: "Select one or more optimization goals",
-                canPickMany: true,
-                ignoreFocusOut: true,
-            }
-        );
-
-        if (!goalsPick) {
-            return null;
-        }
-
-        const riskPick = await vscode.window.showQuickPick([
-            { label: "low" as RiskTolerance },
-            { label: "moderate" as RiskTolerance },
-            { label: "high" as RiskTolerance },
-        ], {
-            title: `Risk Tolerance: ${domain.id}`,
-            placeHolder: `Suggested: ${domain.inferred.riskTolerance}`,
-            ignoreFocusOut: true,
-        });
-        if (!riskPick) {
-            return null;
-        }
-        const risk = riskPick.label;
-
-        const rollout = await vscode.window.showQuickPick(
-            ROLLOUT_PREFERENCES.map((entry) => ({
-                label: entry,
-                picked: domain.inferred.rolloutPreferences.includes(entry),
-            })),
-            {
-                title: `Rollout Posture: ${domain.id}`,
-                placeHolder: "Select one or more rollout preferences",
-                canPickMany: true,
-                ignoreFocusOut: true,
-            }
-        );
-        if (!rollout) {
-            return null;
-        }
-
-        const stabilityPick = await vscode.window.showQuickPick([
-            { label: "stable" as StabilityProfile },
-            { label: "adaptive" as StabilityProfile },
-            { label: "experimental" as StabilityProfile },
-        ], {
-            title: `Stability Profile: ${domain.id}`,
-            placeHolder: `Suggested: ${domain.inferred.stabilityProfile}`,
-            ignoreFocusOut: true,
-        });
-        if (!stabilityPick) {
-            return null;
-        }
-        const stability = stabilityPick.label;
-
-        const governancePick = await vscode.window.showQuickPick([
-            { label: "strict" as GovernanceIntensity },
-            { label: "moderate" as GovernanceIntensity },
-            { label: "relaxed" as GovernanceIntensity },
-        ], {
-            title: `Governance Intensity: ${domain.id}`,
-            placeHolder: `Suggested: ${domain.inferred.governanceIntensity}`,
-            ignoreFocusOut: true,
-        });
-        if (!governancePick) {
-            return null;
-        }
-        const governance = governancePick.label;
-
-        models.push({
-            id: domain.id,
-            mission: mission.trim(),
-            priorities: prioritiesPick.map((entry) => entry.label as StrategicPriority).sort((left, right) => left.localeCompare(right)),
-            optimizationGoals: goalsPick.map((entry) => entry.label as OptimizationGoal).sort((left, right) => left.localeCompare(right)),
-            riskTolerance: risk,
-            rolloutPreferences: rollout.map((entry) => entry.label as RolloutPreference).sort((left, right) => left.localeCompare(right)),
-            stabilityProfile: stability,
-            governanceIntensity: governance,
-        });
+        models.push(model);
     }
 
     return models.sort((left, right) => left.id.localeCompare(right.id));
+}
+
+async function modelSingleStrategicDomain(
+    domain: ReturnType<typeof discoverStrategicDomains>["domains"][number],
+    currentControl?: ControlPlane
+): Promise<StrategicDomainModel | null> {
+    const defaults = seedStrategicDomainPromptDefaults(domain, currentControl);
+    const packageSummary = domain.packages.join(", ");
+    const reasonSummary = domain.reasons.join("; ");
+    const mission = await vscode.window.showInputBox({
+        title: `Strategic Domain: ${domain.id}`,
+        prompt: [
+            `Detected package(s): ${packageSummary}`,
+            `Domain derivation: ${reasonSummary}`,
+            `Confirm or edit what this topology-derived domain is responsible for (${domain.packages.length} package(s)).`,
+        ].join("\n"),
+        value: defaults.mission,
+        ignoreFocusOut: true,
+    });
+
+    if (mission === undefined) {
+        return null;
+    }
+
+    const prioritiesPick = await vscode.window.showQuickPick(
+        STRATEGIC_PRIORITIES.map((priority) => ({
+            label: priority,
+            picked: defaults.priorities.includes(priority),
+        })),
+        {
+            title: `Strategic Priorities: ${domain.id}`,
+            placeHolder: "Select one or more priorities",
+            canPickMany: true,
+            ignoreFocusOut: true,
+        }
+    );
+
+    if (!prioritiesPick) {
+        return null;
+    }
+
+    const goalsPick = await vscode.window.showQuickPick(
+        OPTIMIZATION_GOALS.map((goal) => ({
+            label: goal,
+            picked: defaults.optimizationGoals.includes(goal),
+        })),
+        {
+            title: `Optimization Goals: ${domain.id}`,
+            placeHolder: "Select one or more optimization goals",
+            canPickMany: true,
+            ignoreFocusOut: true,
+        }
+    );
+
+    if (!goalsPick) {
+        return null;
+    }
+
+    const riskPick = await vscode.window.showQuickPick([
+        { label: "low" as RiskTolerance },
+        { label: "moderate" as RiskTolerance },
+        { label: "high" as RiskTolerance },
+    ], {
+        title: `Risk Tolerance: ${domain.id}`,
+        placeHolder: `Suggested: ${defaults.riskTolerance}`,
+        ignoreFocusOut: true,
+    });
+    if (!riskPick) {
+        return null;
+    }
+    const risk = riskPick.label;
+
+    const rollout = await vscode.window.showQuickPick(
+        ROLLOUT_PREFERENCES.map((entry) => ({
+            label: entry,
+            picked: defaults.rolloutPreferences.includes(entry),
+        })),
+        {
+            title: `Rollout Posture: ${domain.id}`,
+            placeHolder: "Select one or more rollout preferences",
+            canPickMany: true,
+            ignoreFocusOut: true,
+        }
+    );
+    if (!rollout) {
+        return null;
+    }
+
+    const stabilityPick = await vscode.window.showQuickPick([
+        { label: "stable" as StabilityProfile },
+        { label: "adaptive" as StabilityProfile },
+        { label: "experimental" as StabilityProfile },
+    ], {
+        title: `Stability Profile: ${domain.id}`,
+        placeHolder: `Suggested: ${defaults.stabilityProfile}`,
+        ignoreFocusOut: true,
+    });
+    if (!stabilityPick) {
+        return null;
+    }
+    const stability = stabilityPick.label;
+
+    const governancePick = await vscode.window.showQuickPick([
+        { label: "strict" as GovernanceIntensity },
+        { label: "moderate" as GovernanceIntensity },
+        { label: "relaxed" as GovernanceIntensity },
+    ], {
+        title: `Governance Intensity: ${domain.id}`,
+        placeHolder: `Suggested: ${defaults.governanceIntensity}`,
+        ignoreFocusOut: true,
+    });
+    if (!governancePick) {
+        return null;
+    }
+    const governance = governancePick.label;
+
+    return {
+        id: domain.id,
+        mission: mission.trim(),
+        priorities: prioritiesPick.map((entry) => entry.label as StrategicPriority).sort((left, right) => left.localeCompare(right)),
+        optimizationGoals: goalsPick.map((entry) => entry.label as OptimizationGoal).sort((left, right) => left.localeCompare(right)),
+        riskTolerance: risk,
+        rolloutPreferences: rollout.map((entry) => entry.label as RolloutPreference).sort((left, right) => left.localeCompare(right)),
+        stabilityProfile: stability,
+        governanceIntensity: governance,
+    };
+}
+
+type MergeDomainSelectionResult = {
+    models: StrategicDomainModel[];
+    selectedDomainIds: string[];
+    selectedPackagePaths: string[];
+};
+
+async function modelStrategicDomainsForMerge(
+    discovery: ReturnType<typeof discoverStrategicDomains>,
+    currentControl: ControlPlane
+): Promise<MergeDomainSelectionResult | null> {
+    const modelsById = new Map<string, StrategicDomainModel>();
+    const selectedPackagePaths = new Set<string>();
+
+    while (true) {
+        const picks: Array<(vscode.QuickPickItem & { domainId?: string; finish?: boolean })> = [
+            ...discovery.domains.map((domain) => ({
+                label: domain.id,
+                description: `${domain.packages.length} package(s)`,
+                detail: `packages: ${domain.packages.join(", ")}`,
+                domainId: domain.id,
+            })),
+            {
+                label: "Finish merge re-init",
+                description: "Stop strategic domain re-initialization and complete now",
+                finish: true,
+            },
+        ];
+
+        const pick = await vscode.window.showQuickPick(picks, {
+            title: "Merge Strategic Domains",
+            placeHolder: "Select a domain to re-initialize, or finish merge re-init",
+            ignoreFocusOut: true,
+        });
+
+        if (!pick) {
+            return null;
+        }
+
+        if (pick.finish) {
+            break;
+        }
+
+        const selectedDomain = discovery.domains.find((domain) => domain.id === pick.domainId);
+        if (!selectedDomain) {
+            continue;
+        }
+
+        const model = await modelSingleStrategicDomain(selectedDomain, currentControl);
+        if (!model) {
+            return null;
+        }
+
+        modelsById.set(selectedDomain.id, model);
+        for (const packagePath of selectedDomain.packages) {
+            selectedPackagePaths.add(packagePath);
+        }
+    }
+
+    return {
+        models: [...modelsById.values()].sort((left, right) => left.id.localeCompare(right.id)),
+        selectedDomainIds: [...modelsById.keys()].sort((left, right) => left.localeCompare(right)),
+        selectedPackagePaths: [...selectedPackagePaths].sort((left, right) => left.localeCompare(right)),
+    };
+}
+
+function selectDiscoveryForDomains(
+    discovery: ReturnType<typeof discoverStrategicDomains>,
+    selectedDomainIds: string[]
+): ReturnType<typeof discoverStrategicDomains> {
+    const selectedDomainIdSet = new Set(selectedDomainIds);
+    const selectedDomains = discovery.domains.filter((domain) => selectedDomainIdSet.has(domain.id));
+    const selectedPackageSet = new Set(selectedDomains.flatMap((domain) => domain.packages));
+
+    return {
+        workspace: discovery.workspace,
+        packages: discovery.packages.filter((pkg) => selectedPackageSet.has(pkg.packagePath)),
+        domains: selectedDomains,
+    };
+}
+
+function mergeSelectedStrategicDomainsIntoControl(
+    currentControl: ControlPlane,
+    synthesizedControl: ControlPlane,
+    selectedDomainIds: string[],
+    selectedPackagePaths: string[],
+    allDiscoveredPackagePaths: string[]
+): ControlPlane {
+    const nextDomains = {
+        ...(currentControl.domains ?? {}),
+        ...(Object.fromEntries(
+            selectedDomainIds
+                .map((domainId) => [domainId, synthesizedControl.domains?.[domainId]] as const)
+                .filter((entry): entry is [string, NonNullable<ControlPlane["domains"]>[string]] => entry[1] !== undefined)
+        )),
+    };
+
+    const nextPackages = {
+        ...(currentControl.packages ?? {}),
+        ...(Object.fromEntries(
+            selectedPackagePaths
+                .map((packagePath) => [packagePath, synthesizedControl.packages?.[packagePath]] as const)
+                .filter((entry): entry is [string, NonNullable<ControlPlane["packages"]>[string]] => entry[1] !== undefined)
+        )),
+    };
+
+    const nextPackageModes = {
+        ...(currentControl.packageModes ?? {}),
+        ...(Object.fromEntries(
+            selectedPackagePaths
+                .map((packagePath) => [packagePath, synthesizedControl.packageModes?.[packagePath]] as const)
+                .filter((entry): entry is [string, NonNullable<ControlPlane["packageModes"]>[string]] => entry[1] !== undefined)
+        )),
+    };
+
+    const existingWorkspacePackages = currentControl.contexts?.["workspace:root"]?.packages ?? [];
+    const mergedWorkspacePackages = sortedUnique([...existingWorkspacePackages, ...allDiscoveredPackagePaths]);
+
+    return {
+        ...currentControl,
+        domains: nextDomains,
+        packages: nextPackages,
+        contexts: {
+            ...(currentControl.contexts ?? {}),
+            "workspace:root": {
+                ...(currentControl.contexts?.["workspace:root"] ?? {}),
+                packages: mergedWorkspacePackages,
+            },
+        },
+        packageModes: nextPackageModes,
+    };
 }
 
 async function chooseRuntimeMode(
@@ -600,8 +745,8 @@ async function chooseRuntimeMode(
         { label: "execution-enabled" as RuntimeMode },
         { label: "distributed-control" as RuntimeMode },
     ], {
-        title: "Runtime Governance Mode",
-        placeHolder: `Suggested: ${suggested} | ${calibrationSummary}`,
+        title: "Global Runtime Governance Mode",
+        placeHolder: `Suggested global mode: ${suggested} | ${calibrationSummary} | domain/package-level governance is applied separately via packageModes`,
         ignoreFocusOut: true,
     });
 
@@ -747,10 +892,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ? strategicTemplate
                             : undefined;
 
+                        const seededWizardState = mode === "merge"
+                            ? createWizardState(legacyTemplate, {
+                                mission: currentControl.mission,
+                                vision: currentControl.vision,
+                                goals: currentControl.intent.goals,
+                                constraints: currentControl.intent.constraints,
+                                nonGoals: currentControl.intent["non-goals"],
+                            })
+                            : createWizardState(legacyTemplate);
+
                         session = {
                             version: 1,
                             mode,
-                            state: createWizardState(legacyTemplate),
+                            state: seededWizardState,
                         };
                         saveInitSession(workspaceRoot, session);
                     }
@@ -807,6 +962,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                                 title: progress,
                                 prompt: `${renderPrompt(wizard.state)} Type back to edit previous step or cancel to exit.`,
                                 placeHolder: "enter value",
+                                value: step === "mission"
+                                    ? (wizard.state.data.mission ?? "")
+                                    : (step === "vision" ? (wizard.state.data.vision ?? "") : undefined),
                                 ignoreFocusOut: true,
                             });
 
@@ -939,7 +1097,24 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         detail: `inferred ${discovery.domains.length} domains from ${discovery.packages.length} packages`,
                     });
 
-                    const models = await modelStrategicDomainsInteractively(discovery);
+                    const isMergeDomainLoop = strategicMode === "full" && initApplyMode === "merge";
+                    const mergeSelection = isMergeDomainLoop
+                        ? await modelStrategicDomainsForMerge(discovery, currentControl)
+                        : null;
+
+                    if (isMergeDomainLoop && !mergeSelection) {
+                        stream.markdown("Choir init cancelled during strategic domain modeling.");
+                        return;
+                    }
+
+                    const modelingDiscovery = mergeSelection
+                        ? selectDiscoveryForDomains(discovery, mergeSelection.selectedDomainIds)
+                        : discovery;
+
+                    const models = mergeSelection
+                        ? mergeSelection.models
+                        : await modelStrategicDomainsInteractively(discovery);
+
                     if (!models) {
                         stream.markdown("Choir init cancelled during strategic domain modeling.");
                         return;
@@ -948,10 +1123,41 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     diagnosticsStages.push({
                         stage: "strategic-modeling",
                         status: "success",
-                        detail: `confirmed strategic posture for ${models.length} domains`,
+                        detail: mergeSelection
+                            ? `confirmed strategic posture for ${models.length} selected domains`
+                            : `confirmed strategic posture for ${models.length} domains`,
                     });
 
-                    const calibration = calibrateStrategicOrchestration(discovery, models);
+                    if (mergeSelection && models.length === 0) {
+                        appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                            command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                            source: "chat",
+                            category: "pipeline",
+                            result: "success",
+                            summary: "Merge init completed with root-level updates only (no strategic domains selected).",
+                            stages: diagnosticsStages,
+                            metadata: {
+                                strategicInit: {
+                                    mode: strategicMode,
+                                    template: strategicTemplate ?? "none",
+                                    workspaceType: discovery.workspace.type,
+                                    packageCount: discovery.packages.length,
+                                    domainCount: 0,
+                                    initApplyMode,
+                                    commandsApplied,
+                                },
+                            },
+                        });
+
+                        stream.markdown([
+                            "Choir merge init completed.",
+                            "- root-level mission/vision/intent updates applied",
+                            "- no strategic domains selected",
+                        ].join("\n"));
+                        return;
+                    }
+
+                    const calibration = calibrateStrategicOrchestration(modelingDiscovery, models);
                     diagnosticsStages.push({
                         stage: "orchestration-calibration",
                         status: "success",
@@ -974,19 +1180,33 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         detail: `runtime mode selected: ${runtimeMode}`,
                     });
 
+                    const runtimeModeForSynthesis = mergeSelection
+                        ? (currentControl.runtime?.mode ?? calibration.governanceModeRecommendation)
+                        : runtimeMode;
+
                     const synthesis = synthesizeStrategicControlPlane(currentControl, {
                         mode: strategicMode,
                         mission: missionForSynthesis,
                         vision: visionForSynthesis,
-                        runtimeMode,
-                        discovery,
+                        runtimeMode: runtimeModeForSynthesis,
+                        discovery: modelingDiscovery,
                         models,
                         calibration,
                     });
 
-                    writeControlPlane(synthesis.controlPlane);
+                    const nextControl = mergeSelection
+                        ? mergeSelectedStrategicDomainsIntoControl(
+                            currentControl,
+                            synthesis.controlPlane,
+                            mergeSelection.selectedDomainIds,
+                            mergeSelection.selectedPackagePaths,
+                            discovery.packages.map((pkg) => pkg.packagePath)
+                        )
+                        : synthesis.controlPlane;
+
+                    writeControlPlane(nextControl);
                     writeStrategicInitState(workspaceRoot, {
-                        discovery,
+                        discovery: modelingDiscovery,
                         models,
                         synthesis: synthesis.report,
                         previous: readStrategicInitState(workspaceRoot),
@@ -1003,7 +1223,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         source: "chat",
                         category: "pipeline",
                         result: "success",
-                        summary: `Strategic init completed: ${discovery.domains.length} domains, mode=${strategicMode}, runtime=${runtimeMode}`,
+                        summary: `Strategic init completed: ${modelingDiscovery.domains.length} domains, mode=${strategicMode}, runtime=${runtimeModeForSynthesis}`,
                         stages: diagnosticsStages,
                         metadata: {
                             strategicInit: {
@@ -1011,8 +1231,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                                 template: strategicTemplate ?? "none",
                                 workspaceType: discovery.workspace.type,
                                 packageCount: discovery.packages.length,
-                                domainCount: discovery.domains.length,
-                                runtimeMode,
+                                domainCount: modelingDiscovery.domains.length,
+                                runtimeMode: runtimeModeForSynthesis,
                                 calibration,
                                 report: synthesis.report,
                                 initApplyMode,
@@ -1027,10 +1247,10 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         `- template: ${strategicTemplate ?? "none"}`,
                         `- workspace: ${discovery.workspace.type}`,
                         `- packages: ${discovery.packages.length}`,
-                        `- domains: ${discovery.domains.length}`,
+                        `- domains: ${modelingDiscovery.domains.length}`,
                         `- selectedStrategy: ${calibration.selectedStrategyType}`,
                         `- rolloutDefault: ${calibration.rolloutDefault}`,
-                        `- runtimeMode: ${runtimeMode}`,
+                        `- runtimeMode: ${runtimeModeForSynthesis}`,
                         `- blastRadiusEstimate: ${calibration.estimatedBlastRadius}`,
                         `- topologyHash: ${synthesis.report.topologyHash}`,
                         `- strategicHash: ${synthesis.report.strategicHash}`,
