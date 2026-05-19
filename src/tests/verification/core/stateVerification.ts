@@ -229,7 +229,7 @@ export async function runStateVerification(): Promise<StateVerificationReport> {
       intent: {
         goals: [],
         constraints: [],
-        "non-goals": [],
+        "nonGoals": [],
       },
       policy: {
         rules: [],

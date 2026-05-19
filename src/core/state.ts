@@ -1271,7 +1271,7 @@ export function buildState(input: BuildStateInput): StatePlane {
     ? normalizeStateIntent({
       goals: input.yaml.intent.goals,
       constraints: input.yaml.intent.constraints,
-      nonGoals: input.yaml.intent["non-goals"],
+      nonGoals: input.yaml.intent["nonGoals"],
     })
     : normalizeStateIntent(previous.intent);
 
@@ -1366,7 +1366,7 @@ export function validateConsistency(input: ConsistencyInput): ValidationResult {
     const yamlIntent = normalizeStateIntent({
       goals: input.yaml.intent.goals,
       constraints: input.yaml.intent.constraints,
-      nonGoals: input.yaml.intent["non-goals"],
+      nonGoals: input.yaml.intent["nonGoals"],
     });
 
     if (!valuesEqual(yamlIntent, state.intent)) {

@@ -798,7 +798,7 @@ async function verifyMemoryValidity(ctx: InvariantContext): Promise<boolean> {
       intent: {
         goals: ["property-test"],
         constraints: [],
-        "non-goals": [],
+        "nonGoals": [],
       },
       policy: {
         rules: [],

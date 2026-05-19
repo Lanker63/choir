@@ -420,7 +420,7 @@ function countCompletedInitSteps(step: string): number {
             return 2;
         case "constraints":
             return 3;
-        case "non-goals":
+        case "nonGoals":
             return 4;
         case "review":
             return 5;
@@ -922,7 +922,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                                 vision: currentControl.vision,
                                 goals: currentControl.intent.goals,
                                 constraints: currentControl.intent.constraints,
-                                nonGoals: currentControl.intent["non-goals"],
+                                nonGoals: currentControl.intent["nonGoals"],
                             })
                             : createWizardState(legacyTemplate);
 
@@ -2617,7 +2617,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         `- vision: ${vision.length > 0 ? vision : "(empty)"}`,
                         `- goals: ${control.intent.goals.length}`,
                         `- constraints: ${control.intent.constraints.length}`,
-                        `- non-goals: ${control.intent["non-goals"].length}`,
+                        `- nonGoals: ${control.intent["nonGoals"].length}`,
                         `- policyRules: ${control.policy.rules.length}`,
                         `- plans: ${plans.length} (approved=${approvedPlans}, draft=${draftPlans})`,
                         "",

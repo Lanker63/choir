@@ -45,8 +45,8 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
       ...control,
       intent: {
         ...control.intent,
-        "non-goals": withUniqueItems([
-          ...(control.intent["non-goals"] ?? []),
+        "nonGoals": withUniqueItems([
+          ...(control.intent["nonGoals"] ?? []),
           ...parseCommaDelimitedItems(addNonGoals),
         ]),
       },
@@ -59,7 +59,7 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
       ...control,
       intent: {
         ...control.intent,
-        "non-goals": withUniqueItems([...(control.intent["non-goals"] ?? []), addNonGoal]),
+        "nonGoals": withUniqueItems([...(control.intent["nonGoals"] ?? []), addNonGoal]),
       },
     };
   }
@@ -71,7 +71,7 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
       ...control,
       intent: {
         ...control.intent,
-        "non-goals": (control.intent["non-goals"] ?? []).filter((nonGoal) => !toRemove.has(nonGoal)),
+        "nonGoals": (control.intent["nonGoals"] ?? []).filter((nonGoal) => !toRemove.has(nonGoal)),
       },
     };
   }
@@ -82,7 +82,7 @@ export function applyChatToControlPlane(chatInput: string, control: ControlPlane
       ...control,
       intent: {
         ...control.intent,
-        "non-goals": (control.intent["non-goals"] ?? []).filter((nonGoal) => nonGoal !== removeNonGoal),
+        "nonGoals": (control.intent["nonGoals"] ?? []).filter((nonGoal) => nonGoal !== removeNonGoal),
       },
     };
   }

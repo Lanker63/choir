@@ -7,7 +7,7 @@ intent:
   constraints:
     - no eval
     - no direct db access
-  non-goals:
+  nonGoals:
     - "Do not fully automate remediation of all violations"
 policy:
   rules:

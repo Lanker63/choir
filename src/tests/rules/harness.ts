@@ -29,7 +29,7 @@ function makeControlPlaneFixture(): ControlPlane {
     intent: {
       goals: ["secure"],
       constraints: ["no direct db access", "no eval"],
-      "non-goals": ["Automate all architecture decisions"],
+      "nonGoals": ["Automate all architecture decisions"],
     },
     policy: {
       rules: [

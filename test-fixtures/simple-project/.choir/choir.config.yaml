@@ -5,7 +5,7 @@ intent:
   goals:
     - baseline security
   constraints: []
-  non-goals:
+  nonGoals:
     - "Do not model every architecture decision as a DSL rule"
 policy:
   rules:

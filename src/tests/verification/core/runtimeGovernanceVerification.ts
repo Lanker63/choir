@@ -32,7 +32,7 @@ function fixtureControlPlane(overrides?: Partial<ControlPlane>): ControlPlane {
     intent: {
       goals: ["verify runtime gating"],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],

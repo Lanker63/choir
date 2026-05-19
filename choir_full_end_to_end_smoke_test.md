@@ -25,11 +25,11 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 
 ## Topic 1: Initialization and Control-Plane Authoring
 
-1. In chat, enter `@choir init` and respond to all prompts with a mission, vision, two goals, two constraints, and two non-goals.
+1. In chat, enter `@choir init` and respond to all prompts with a mission, vision, two goals, two constraints, and two nonGoals.
 
    - Confirm `.choir/choir.config.yaml` is created.
    - Confirm `.choir/state.json` is created.
-   - Confirm the mission, vision, goals, constraints, and non-goals in `.choir/choir.config.yaml` match exactly what was entered.
+   - Confirm the mission, vision, goals, constraints, and nonGoals in `.choir/choir.config.yaml` match exactly what was entered.
    - Confirm the YAML file parses without schema errors.
    - Confirm strategic domain discovery prompts are shown after baseline mission/vision/intent prompts.
    - Confirm domain IDs are topology-derived from discovered package paths (not keyword-guessed domain names).
@@ -55,8 +55,8 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 1.3 In an already initialized workspace, run `@choir init` again and choose `Merge`.
 
    - Confirm mission and vision prompts are pre-populated with current control-plane values (editable, not blank).
-   - Confirm existing root intent lists (goals, constraints, non-goals) are preserved/seeded and can be incrementally updated.
-   - After root prompts complete (through non-goals), confirm a merge-mode domain picker appears.
+   - Confirm existing root intent lists (goals, constraints, nonGoals) are preserved/seeded and can be incrementally updated.
+   - After root prompts complete (through nonGoals), confirm a merge-mode domain picker appears.
    - Confirm domain picker entries reflect currently discovered candidate domains from workspace topology (including newly added packages/folders since last init, when discoverable).
    - Confirm the picker includes an explicit finish option (for example, `Finish merge re-init`) to stop strategic domain re-initialization.
    - Confirm selecting a domain opens domain modeling prompts for that domain and, when completed, returns to the domain picker.
@@ -107,7 +107,7 @@ Scope assumption: this manual smoke test is executed in a target repository usin
 
 7. In chat, enter `@choir define non-goal "<non-goal-1>"` and then `@choir define non-goal "<non-goal-2>"`.
 
-   - Confirm both non-goals are persisted.
+   - Confirm both nonGoals are persisted.
    - Confirm `.choir/choir.config.yaml` remains valid YAML after all define operations.
 
 8. Optional (multi-package workspaces only): Edit `.choir/choir.config.yaml` and add strategic hierarchy configuration for explicit mapping checks.

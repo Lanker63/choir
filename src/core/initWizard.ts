@@ -10,7 +10,7 @@ export type WizardStep =
   | "vision"
   | "goals"
   | "constraints"
-  | "non-goals"
+  | "nonGoals"
   | "review"
   | "confirm";
 
@@ -46,7 +46,7 @@ const PROGRESS_STEPS: WizardStep[] = [
   "vision",
   "goals",
   "constraints",
-  "non-goals",
+  "nonGoals",
   "review",
 ];
 
@@ -263,7 +263,7 @@ export class InitWizard {
 
     if (this.state.currentStep === "constraints") {
       if (keyword === "done") {
-        this.state.currentStep = "non-goals";
+        this.state.currentStep = "nonGoals";
         return {
           state: cloneState(this.state),
           status: "active",
@@ -288,7 +288,7 @@ export class InitWizard {
       };
     }
 
-    if (this.state.currentStep === "non-goals") {
+    if (this.state.currentStep === "nonGoals") {
       if (keyword === "done") {
         this.state.currentStep = "review";
         return {
@@ -443,7 +443,7 @@ export function renderPrompt(state: WizardState): string {
       return "Enter a goal (type done to continue):";
     case "constraints":
       return "Enter a constraint (type done to continue):";
-    case "non-goals":
+    case "nonGoals":
       return "Enter a non-goal (type done to continue):";
     case "review":
       return "Review complete. Apply this configuration? (yes/no/back/cancel)";
@@ -457,7 +457,7 @@ export function renderProgress(step: WizardStep): string {
   const total = PROGRESS_STEPS.length;
 
   if (index >= 0) {
-    const label = PROGRESS_STEPS[index] === "non-goals"
+    const label = PROGRESS_STEPS[index] === "nonGoals"
       ? "Non-Goals"
       : PROGRESS_STEPS[index].charAt(0).toUpperCase() + PROGRESS_STEPS[index].slice(1);
 

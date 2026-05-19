@@ -1092,7 +1092,7 @@ async function runFullSystemUAT(mode: FullSystemVerificationMode, workspaceRoot:
       "intent:",
       "  goals: []",
       "  constraints: []",
-      "  non-goals: []",
+      "  nonGoals: []",
       "policy:",
       "  rules: []",
       "execution:",

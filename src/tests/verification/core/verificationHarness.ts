@@ -369,7 +369,7 @@ function buildVerificationControlPlane(plan: Plan): ControlPlane {
     intent: {
       goals: ["verification"],
       constraints: ["deterministic execution", "rollback safety"],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],

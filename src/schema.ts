@@ -271,7 +271,7 @@ export const ControlPlaneSchema = z.object({
     intent: z.object({
         goals: z.array(z.string()).default([]),
         constraints: z.array(z.string()).default([]),
-        "non-goals": z.array(z.string()).default([])
+        "nonGoals": z.array(z.string()).default([])
     }).strict(),
     domains: z.record(z.string().min(1), DomainStrategicSchema).optional(),
     packages: z.record(z.string().min(1), PackageStrategicSchema).optional(),

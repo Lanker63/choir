@@ -40,7 +40,7 @@ function fixtureControlPlane(): ControlPlane {
     intent: {
       goals: ["stabilize unified orchestration"],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],

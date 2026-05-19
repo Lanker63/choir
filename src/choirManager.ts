@@ -123,13 +123,13 @@ function normalizeControlPlane(input: unknown): ControlPlane {
     const normalizedBase: UnknownRecord = { ...base };
 
     const intent = isRecord(base.intent) ? { ...base.intent } : {};
-    const intentNonGoals = Array.isArray(intent["non-goals"])
-        ? (intent["non-goals"] as unknown[]).filter((item): item is string => typeof item === "string")
+    const intentNonGoals = Array.isArray(intent["nonGoals"])
+        ? (intent["nonGoals"] as unknown[]).filter((item): item is string => typeof item === "string")
         : [];
 
     normalizedBase.intent = {
         ...intent,
-        "non-goals": intentNonGoals,
+        "nonGoals": intentNonGoals,
     };
 
     return ControlPlaneSchema.parse({
@@ -217,7 +217,7 @@ export function createDefaultControlPlane(): ControlPlane {
         intent: {
             goals: [],
             constraints: [],
-            "non-goals": []
+            "nonGoals": []
         },
         domains: {},
         packages: {},

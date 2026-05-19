@@ -856,7 +856,7 @@ export class ChoirProductService {
     const pending = policyStatus(root).pending;
     const plans = [...control.execution.plans].sort((left, right) => left.id.localeCompare(right.id));
 
-    const hasIntent = control.intent.goals.length > 0 || control.intent.constraints.length > 0 || control.intent["non-goals"].length > 0;
+    const hasIntent = control.intent.goals.length > 0 || control.intent.constraints.length > 0 || control.intent["nonGoals"].length > 0;
     const hasPlans = plans.length > 0;
     const hasApprovedPlan = plans.some((plan) => plan.status === "approved");
     const hasPreview = typeof state.execution.lastPreview?.hash === "string" && state.execution.lastPreview.hash.length > 0;
@@ -1282,7 +1282,7 @@ export class ChoirProductService {
           `- vision: ${vision.length > 0 ? vision : "(empty)"}`,
           `- goals: ${control.intent.goals.length}`,
           `- constraints: ${control.intent.constraints.length}`,
-          `- non-goals: ${control.intent["non-goals"].length}`,
+          `- nonGoals: ${control.intent["nonGoals"].length}`,
           `- policyRules: ${control.policy.rules.length}`,
           `- plans: ${plans.length} (approved=${approvedPlans}, draft=${draftPlans})`,
           "",

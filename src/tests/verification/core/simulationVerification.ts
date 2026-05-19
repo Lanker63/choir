@@ -27,7 +27,7 @@ function fixtureControlPlane(): ControlPlane {
     intent: {
       goals: ["stabilize simulation"],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],

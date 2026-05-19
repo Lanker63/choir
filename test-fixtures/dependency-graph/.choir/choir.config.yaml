@@ -5,7 +5,7 @@ intent:
   goals:
     - maintain layering
   constraints: []
-  non-goals:
+  nonGoals:
     - "Do not replace dependency visualization tooling"
 policy:
   rules:

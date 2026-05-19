@@ -55,7 +55,7 @@ vision: ""
 intent:
   goals: []
   constraints: []
-  non-goals: []
+  nonGoals: []
 strategicIntent:
   priorities: []
   optimizationGoals: []

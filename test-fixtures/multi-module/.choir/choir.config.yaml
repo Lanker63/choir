@@ -6,7 +6,7 @@ intent:
     - secure services
   constraints:
     - no direct db access
-  non-goals:
+  nonGoals:
     - "Do not enforce naming conventions unrelated to architecture intent"
 policy:
   rules:

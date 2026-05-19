@@ -1,12 +1,12 @@
 # Control Plane Configuration Guide
 
-This document exists only to describe manual configuration of `.choir/choir.config.yaml` for human authors.
+This document exists only to describe manual configuration of .choir/choir.config.yaml for human authors.
 
-It is based on the authoritative runtime schema in `src/schema.ts` and related registry/runtime behavior.
+It is based on the authoritative runtime schema in src/schema.ts and related runtime behavior.
 
 ## 1. File Location
 
-- Expected path: `.choir/choir.config.yaml`
+- Expected path: .choir/choir.config.yaml
 - YAML must parse cleanly.
 - Unknown keys in strict objects are rejected.
 
@@ -14,193 +14,192 @@ It is based on the authoritative runtime schema in `src/schema.ts` and related r
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `version` | string | Yes | Current project constant is `1.0.0`. |
-| `registries` | string[] | No | Library registry sources. |
-| `mission` | string | No | Defaults to empty string when omitted. |
-| `vision` | string | No | Defaults to empty string when omitted. |
-| `intent` | object | Yes | Human intent contract. |
-| `strategicIntent` | object | No | Global strategic posture. Disallowed when `packageModes` is non-empty. |
-| `domains` | map | No | Named domain strategic blocks (optional manual catalog). |
-| `packages` | map | No | Package-level mapping/intent. |
-| `contexts` | map | No | Context-level package groupings/intent. |
-| `policy` | object | Yes | Rule list and optional priority overrides. |
-| `execution` | object | No | Defaults to `{ plans: [] }`. |
-| `runtime` | object | No | Global runtime mode. Disallowed when `packageModes` is non-empty. |
-| `capabilities` | object | No | Global capability overrides (may still be used as baseline with `packageModes`). |
-| `packageModes` | map | No | Per-package runtime/capability overrides. |
+| version | string | Yes | Current project constant is 1.0.0. |
+| registries | string[] | No | Library registry sources. |
+| mission | string | No | Defaults to empty string when omitted. |
+| vision | string | No | Defaults to empty string when omitted. |
+| intent | object | Yes | Human intent contract. |
+| domains | map | No | Named domain strategic blocks. |
+| packages | map | No | Package-level mapping and strategic intent. |
+| contexts | map | No | Context-level package groupings and strategic intent. |
+| policy | object | Yes | Rule list and optional priority overrides. |
+| execution | object | No | Defaults to plans: []. |
+| runtime | object | No | Global runtime mode. |
+| capabilities | object | No | Global capability overrides. |
+| packageModes | map | No | Per-package runtime and capability overrides. |
 
 Important scope note:
 
-- Strategic init persistence is scope-dependent. In rooted workspaces, init persists global `runtime` + `capabilities`. In rootless/package-governed workspaces, init persists `packageModes` and omits global `runtime`/`capabilities`.
-- Strategic init uses `packages` as canonical strategic persistence and does not persist a duplicate top-level `domains` catalog by default.
-- The schema still supports top-level `domains` and top-level `strategicIntent` for manual authoring scenarios that do not use `packageModes`.
+- Strategic intent is now modeled at domain, package, and context scopes.
+- Top-level strategicIntent is not part of the current control-plane schema.
+- Global runtime and packageModes are mutually exclusive.
 
-## 3. Enumerated Values
+## 3. Enumerated Values and Meanings
 
 ### 3.1 Runtime Modes
 
-```yaml
-observe-only
-simulation-only
-approval-required
-execution-enabled
-distributed-control
-```
+| Value | Meaning |
+|---|---|
+| observe-only | Read and simulate posture. Execution is denied by default capabilities. |
+| simulation-only | Similar to observe-only for capability defaults; intended for non-mutating evaluation flow. |
+| approval-required | Execution-capable posture where execute requires approval gating. |
+| execution-enabled | Execution-capable posture without mandatory runtime approval gate. |
+| distributed-control | Execution-capable posture intended for broader multi-unit or federated control scenarios. |
 
 ### 3.2 Capability Keys
 
-```yaml
-preview
-simulate
-execute
-optimize
-import
-install
-update
-```
+| Value | Meaning |
+|---|---|
+| preview | Controls whether preview pipeline operations are allowed. |
+| simulate | Controls whether simulation operations are allowed. |
+| execute | Controls whether execute operations are allowed. |
+| optimize | Controls whether planning optimization operations are allowed. |
+| import | Controls whether library import operations are allowed. |
+| install | Controls whether library install/materialization operations are allowed. |
+| update | Controls whether library update operations are allowed. |
 
 ### 3.3 Strategic Priority
 
-```yaml
-correctness
-auditability
-rollback-safety
-minimal-blast-radius
-deterministic-replay
-iteration-speed
-developer-autonomy
-dependency-safety
-stability
-```
+| Value | Meaning |
+|---|---|
+| correctness | Prefer semantically correct and safe outcomes over speed. |
+| auditability | Prefer traceable, reviewable, compliance-friendly changes. |
+| rollback-safety | Prefer changes that are easy and safe to roll back. |
+| minimal-blast-radius | Prefer smallest affected surface area per change. |
+| deterministic-replay | Prefer reproducible outcomes and stable replay lineage. |
+| iteration-speed | Prefer faster delivery loops. |
+| developer-autonomy | Prefer lower friction for independent engineering flow. |
+| dependency-safety | Prefer stable dependency boundaries and reduced coupling risk. |
+| stability | Prefer runtime and operational steadiness over aggressive change. |
 
 ### 3.4 Optimization Goal
 
-```yaml
-minimal-blast-radius
-deterministic-replay
-rapid-delivery
-low-governance-friction
-dependency-isolation
-rollback-minimized
-parallel-throughput
-```
+| Value | Meaning |
+|---|---|
+| minimal-blast-radius | Optimize for smallest changed footprint. |
+| deterministic-replay | Optimize for replay and reproducibility guarantees. |
+| rapid-delivery | Optimize for delivery speed and throughput. |
+| low-governance-friction | Optimize for reduced process overhead. |
+| dependency-isolation | Optimize for stronger isolation across dependency boundaries. |
+| rollback-minimized | Optimize to reduce rollback probability and rollback scope. |
+| parallel-throughput | Optimize for safe parallelism and multi-unit throughput. |
 
 ### 3.5 Risk Tolerance
 
-```yaml
-low
-moderate
-high
-```
+| Value | Meaning |
+|---|---|
+| low | Conservative risk posture. |
+| moderate | Balanced risk posture. |
+| high | Aggressive risk posture. |
 
 ### 3.6 Architectural Posture
 
-```yaml
-conservative
-highly-reviewed
-exploratory
-adaptive
-strict-boundaries
-performance-optimized
-```
+| Value | Meaning |
+|---|---|
+| conservative | Favor low-risk, conservative architectural change. |
+| highly-reviewed | Favor heavily reviewed and tightly governed change paths. |
+| exploratory | Favor experimentation and discovery-oriented architecture work. |
+| adaptive | Favor flexible architecture that can evolve incrementally. |
+| strict-boundaries | Favor strong boundaries between components and domains. |
+| performance-optimized | Favor architecture choices that prioritize performance characteristics. |
 
 ### 3.7 Rollout Preference
 
-```yaml
-canary-required
-phased-required
-phased-optional
-all-at-once-allowed
-parallel-optimized
-```
+| Value | Meaning |
+|---|---|
+| canary-required | Require canary rollout behavior for applicable changes. |
+| phased-required | Require phased/staged rollout behavior. |
+| phased-optional | Prefer phased rollout but do not strictly require it. |
+| all-at-once-allowed | Allow all-at-once rollout where policy/runtime permits. |
+| parallel-optimized | Prefer rollout patterns that maximize safe parallel progression. |
 
 ### 3.8 Stability Profile
 
-```yaml
-stable
-adaptive
-experimental
-```
+| Value | Meaning |
+|---|---|
+| stable | Favor stability-first operational posture. |
+| adaptive | Favor balanced stability with controlled adaptation. |
+| experimental | Favor experimentation-oriented operational posture. |
 
 ### 3.9 Governance Intensity
 
-```yaml
-strict
-moderate
-relaxed
-```
+| Value | Meaning |
+|---|---|
+| strict | High-governance and high-control posture. |
+| moderate | Balanced governance posture. |
+| relaxed | Lower-governance posture for faster iteration. |
 
 ### 3.10 Plan Fields
 
-`execution.plans[].derivedFrom`:
+execution.plans[].derivedFrom:
 
-```yaml
-goal
-constraint
-manual
-```
+| Value | Meaning |
+|---|---|
+| goal | Plan derived from one or more goals. |
+| constraint | Plan derived from constraint-driven remediation or safety needs. |
+| manual | Plan authored directly by operator intent. |
 
-`execution.plans[].status`:
+execution.plans[].status:
 
-```yaml
-draft
-approved
-```
+| Value | Meaning |
+|---|---|
+| draft | Candidate plan not yet approved for enforced execution flow. |
+| approved | Plan approved for execution path usage. |
 
 ### 3.11 Task Type
 
-```yaml
-analysis
-refactor
-create
-delete
-enforce
-generate-typescript-module
-generate-api-route
-generate-model
-generate-controller
-generate-tests
-generate-config
-apply-ast-patch
-create-directory
-create-project-structure
-```
+| Value | Meaning |
+|---|---|
+| analysis | Non-mutating analysis task. |
+| refactor | Refactor-oriented mutation task. |
+| create | File/unit creation task. |
+| delete | File/unit deletion task. |
+| enforce | Enforcement/remediation task. |
+| generate-typescript-module | Generate TypeScript module artifact. |
+| generate-api-route | Generate API route artifact. |
+| generate-model | Generate model artifact. |
+| generate-controller | Generate controller artifact. |
+| generate-tests | Generate test artifacts. |
+| generate-config | Generate configuration artifacts. |
+| apply-ast-patch | Apply AST-level patch operation. |
+| create-directory | Create directory structure node(s). |
+| create-project-structure | Create broader project scaffold structure. |
 
 ### 3.12 Policy Rule Fields
 
-`policy.rules[].constraint.type`:
+policy.rules[].constraint.type:
 
-```yaml
-forbid
-require
-```
+| Value | Meaning |
+|---|---|
+| forbid | Rule enforces disallowed pattern/behavior. |
+| require | Rule enforces required pattern/behavior. |
 
-`policy.rules[].severity`:
+policy.rules[].severity:
 
-```yaml
-error
-warning
-info
-hint
-```
+| Value | Meaning |
+|---|---|
+| error | Blocking/high-severity diagnostic. |
+| warning | Non-blocking warning-level diagnostic. |
+| info | Informational diagnostic. |
+| hint | Low-severity hint diagnostic. |
 
 ## 4. Field Shapes
 
-### 4.1 `intent`
+### 4.1 intent
 
 ```yaml
 intent:
   goals: []
   constraints: []
-  non-goals: []
+  nonGoals: []
 ```
 
 Notes:
 
-- `non-goals` uses a hyphen in the key name.
+- nonGoals uses a hyphen in the key name.
 - Each array item is a string.
 
-### 4.2 `strategicIntent`
+### 4.2 Strategic Intent Block (used under domains, packages, contexts)
 
 ```yaml
 strategicIntent:
@@ -214,9 +213,9 @@ strategicIntent:
   governanceIntensity: moderate
 ```
 
-All keys are optional inside `strategicIntent`, but values must match enums where applicable.
+All keys are optional inside strategicIntent, but values must match enums where applicable.
 
-### 4.3 `domains`
+### 4.3 domains
 
 ```yaml
 domains:
@@ -227,9 +226,9 @@ domains:
         - correctness
 ```
 
-Domain key is free-form non-empty string.
+Domain key is a free-form non-empty string.
 
-### 4.4 `packages`
+### 4.4 packages
 
 ```yaml
 packages:
@@ -242,10 +241,10 @@ packages:
 Notes:
 
 - Package key is a non-empty string (typically workspace-relative package path/id).
-- `domain` is optional.
-- `strategicIntent` is optional.
+- domain is optional.
+- strategicIntent is optional.
 
-### 4.5 `contexts`
+### 4.5 contexts
 
 ```yaml
 contexts:
@@ -259,7 +258,7 @@ contexts:
         - canary-required
 ```
 
-### 4.6 `policy`
+### 4.6 policy
 
 ```yaml
 policy:
@@ -289,9 +288,9 @@ policy:
     pattern: 70
 ```
 
-`priorityOverrides` is optional and each value must be a finite number.
+priorityOverrides is optional and each value must be a finite number.
 
-### 4.7 `execution`
+### 4.7 execution
 
 ```yaml
 execution:
@@ -320,10 +319,10 @@ execution:
 
 Task requirements:
 
-- `id`, `title`, `type`, `successCriteria` are required.
-- `successCriteria` must have at least one string.
+- id, title, type, successCriteria are required.
+- successCriteria must have at least one string.
 
-### 4.8 `runtime` and `capabilities`
+### 4.8 runtime and capabilities
 
 ```yaml
 runtime:
@@ -387,7 +386,7 @@ distributed-control:
   update: true
 ```
 
-### 4.9 `packageModes`
+### 4.9 packageModes
 
 ```yaml
 packageModes:
@@ -402,12 +401,12 @@ packageModes:
 
 Per-package entry must define at least one of:
 
-- `mode`
-- `capabilities`
+- mode
+- capabilities
 
-## 5. Registry Configuration (`registries`)
+## 5. Registry Configuration (registries)
 
-`registries` is an ordered list that is normalized deterministically.
+registries is an ordered list that is normalized deterministically.
 
 Supported entry styles:
 
@@ -422,41 +421,41 @@ registries:
 
 Resolution behavior:
 
-- `local` and `org` map to `.choir/registry/local` and `.choir/registry/org`.
-- `file:<path>` supports absolute or workspace-relative path.
+- local and org map to .choir/registry/local and .choir/registry/org.
+- file:<path> supports absolute or workspace-relative path.
 - Any other entry is treated as path (absolute or workspace-relative).
-- If omitted or empty, runtime defaults to `local`.
+- If omitted or empty, runtime defaults to local.
 
 ## 6. Cross-Field Validation Rules
 
-### 6.1 Runtime/Package Mode Exclusivity
+### 6.1 Runtime and Package Mode Exclusivity
 
 Invalid:
 
-- `runtime` with non-empty `packageModes`
+- runtime with non-empty packageModes
 
-### 6.2 Strategic Intent/Package Mode Exclusivity
+### 6.2 Domain References
+
+If domains is non-empty:
+
+- packages.*.domain must reference an existing key in domains.
+- contexts.*.domain must reference an existing key in domains.
+
+### 6.3 Context Package References
+
+- Every package listed in contexts.*.packages must exist in top-level packages.
+
+### 6.4 packageModes Entry Shape
 
 Invalid:
 
-- global `strategicIntent` with non-empty `packageModes`
-
-### 6.3 Domain References
-
-If `domains` is non-empty:
-
-- `packages.*.domain` must reference an existing key in `domains`.
-- `contexts.*.domain` must reference an existing key in `domains`.
-
-### 6.4 Context Package References
-
-- Every package listed in `contexts.*.packages` must exist in top-level `packages`.
+- packageModes.<pkg> entries that define neither mode nor capabilities.
 
 ### 6.5 Plan Integrity
 
 Invalid:
 
-- duplicate `execution.plans[].id`
+- duplicate execution.plans[].id
 - duplicate task id inside one plan
 - task depending on itself
 - task dependency on unknown task id
@@ -479,11 +478,20 @@ capabilities:
   update: true
 ```
 
-Do not set `packageModes` in the same file when using global runtime.
+Do not set packageModes in the same file when using global runtime.
 
 ### 7.2 Package-Governed Workspace
 
 ```yaml
+capabilities:
+  preview: true
+  simulate: true
+  execute: true
+  optimize: true
+  import: true
+  install: true
+  update: true
+
 packageModes:
   packages/payments:
     mode: approval-required
@@ -491,8 +499,8 @@ packageModes:
     mode: execution-enabled
 ```
 
-When using `packageModes`, do not define global `runtime` and do not define global `strategicIntent`.
-Global `capabilities` remains allowed and acts as a baseline capability override.
+When using packageModes, do not define global runtime.
+Global capabilities remain allowed and act as baseline capability overrides.
 
 ## 8. Full Exhaustive Example
 
@@ -510,29 +518,14 @@ intent:
     - "Minimize rollback risk"
   constraints:
     - "No uncontrolled production changes"
-  non-goals:
+  nonGoals:
     - "Prioritize speed over safety"
-
-strategicIntent:
-  mission: "Global platform guardrails"
-  priorities:
-    - correctness
-    - dependency-safety
-  optimizationGoals:
-    - deterministic-replay
-  riskTolerance: low
-  architecturalPosture:
-    - conservative
-    - highly-reviewed
-  rolloutPreferences:
-    - canary-required
-  stabilityProfile: stable
-  governanceIntensity: strict
 
 domains:
   payments:
     mission: "Financial correctness"
     strategicIntent:
+      mission: "High-assurance payment domain"
       priorities:
         - correctness
       riskTolerance: low
@@ -600,4 +593,4 @@ capabilities:
   update: true
 ```
 
-Note: The exhaustive example above uses global runtime mode. If you switch to `packageModes`, remove global `runtime` and global `strategicIntent` to remain schema-valid.
+Note: The exhaustive example above uses global runtime mode. If you switch to packageModes, remove global runtime to remain schema-valid.

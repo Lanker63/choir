@@ -148,7 +148,7 @@
   },
   "scripts": {
     "vscode:prepublish": "npm run build",
-    "build": "npm run clean:tmp && npm run build:extension && npm run build:webview",
+    "build": "npm run build:extension && npm run build:webview",
     "build:cli:package": "npm run build:extension && node packages/choir-cli/scripts/prepare-dist.mjs",
     "pack:cli": "npm run build:cli:package && npm pack ./packages/choir-cli",
     "publish:cli": "npm run build:cli:package && npm publish ./packages/choir-cli --access public",
@@ -185,7 +185,7 @@
     "verify:chaos:full": "CHOIR_CHAOS_ITERATIONS=120 node --loader ts-node/esm src/tests/verification/propertyChaosHarness.ts chaos extreme",
     "test:rules": "node --loader ts-node/esm src/tests/rules/harness.ts",
     "test:architecture": "node --loader ts-node/esm src/tests/architecture/suite.ts",
-    "test": "npm run test:rules && npm run test:architecture"
+    "test": "set +e; npm run test:rules && npm run test:architecture; exit_code=$?; npm run clean:tmp; exit $exit_code"
   },
   "devDependencies": {
     "@types/glob": "^8.1.0",

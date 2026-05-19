@@ -263,7 +263,7 @@ export async function runStrategicIntentVerification(): Promise<StrategicIntentV
       version: "1.0.0",
       mission: "",
       vision: "",
-      intent: { goals: [], constraints: [], "non-goals": [] },
+      intent: { goals: [], constraints: [], "nonGoals": [] },
       strategicIntent: {
         priorities: ["correctness"],
         optimizationGoals: ["deterministic-replay"],

@@ -729,7 +729,7 @@ export async function analyzeWorkspace(root: string, controlPlane: ControlPlane)
     intent: {
       goals: [...controlPlane.intent.goals],
       constraints: [...controlPlane.intent.constraints],
-      nonGoals: [...controlPlane.intent["non-goals"]],
+      nonGoals: [...controlPlane.intent["nonGoals"]],
     },
     dependencyGraph: normalizedDependencyGraph,
     violations: [...pipeline.diagnostics],

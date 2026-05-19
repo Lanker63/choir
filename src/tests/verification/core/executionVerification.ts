@@ -35,7 +35,7 @@ function fixtureControlPlane(): ControlPlane {
     intent: {
       goals: ["execute from intent"],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],

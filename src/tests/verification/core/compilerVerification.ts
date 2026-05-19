@@ -26,7 +26,7 @@ function baseControlPlane(): ControlPlane {
     intent: {
       goals: [],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],
@@ -71,7 +71,7 @@ export async function runCompilerVerification(): Promise<CompilerVerificationRep
   });
 
   const semanticControl = baseControlPlane();
-  semanticControl.intent["non-goals"] = ["no direct db access"];
+  semanticControl.intent["nonGoals"] = ["no direct db access"];
   let semanticRejected = false;
   try {
     compileInput('choir define constraint "no direct db access"', semanticControl);

@@ -149,7 +149,7 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
       intent: {
         goals: [],
         constraints: [],
-        "non-goals": [],
+        "nonGoals": [],
       },
       policy: {
         rules: [],

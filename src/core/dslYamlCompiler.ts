@@ -374,7 +374,7 @@ export function controlPlaneToChoirConfig(control: ControlPlane): ChoirConfig {
     intent: {
       goals: control.intent.goals,
       constraints: control.intent.constraints,
-      nonGoals: control.intent["non-goals"],
+      nonGoals: control.intent["nonGoals"],
     },
     policy: {
       rules: control.policy.rules,
@@ -401,7 +401,7 @@ export function choirConfigToControlPlane(config: ChoirConfig): ControlPlane {
     intent: {
       goals: canonical.intent.goals,
       constraints: canonical.intent.constraints,
-      "non-goals": canonical.intent.nonGoals,
+      "nonGoals": canonical.intent.nonGoals,
     },
     policy: {
       rules: canonical.policy.rules,
@@ -683,7 +683,7 @@ export function serializeYAML(config: ChoirConfig): string {
     intent: {
       goals: sortedUnique(control.intent.goals),
       constraints: sortedUnique(control.intent.constraints),
-      "non-goals": sortedUnique(control.intent["non-goals"]),
+      "nonGoals": sortedUnique(control.intent["nonGoals"]),
     },
     policy: {
       rules: [...control.policy.rules],

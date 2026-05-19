@@ -340,7 +340,7 @@ function makeControlPlane(overrides?: ControlPlane["policy"]["priorityOverrides"
     intent: {
       goals: [],
       constraints: [],
-      "non-goals": [],
+      "nonGoals": [],
     },
     policy: {
       rules: [],
@@ -498,7 +498,7 @@ const pass1: TestPass = {
           assert.strictEqual(typeof control.version, "string");
           assert.strictEqual(typeof control.mission, "string");
           assert.strictEqual(typeof control.vision, "string");
-          assert.ok(Array.isArray(control.intent["non-goals"]));
+          assert.ok(Array.isArray(control.intent["nonGoals"]));
           assert.ok(Array.isArray(control.intent.goals));
           assert.ok(Array.isArray(control.intent.constraints));
           assert.ok(Array.isArray(control.policy.rules));
@@ -743,14 +743,14 @@ const pass2: TestPass = {
       name: "plural chat directives split comma-delimited lists",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
-          harness.sendChat("add non-goals: Distributed app, authenticatoin, authorization");
+          harness.sendChat("add nonGoals: Distributed app, authenticatoin, authorization");
           harness.sendChat("add constraints: no database, no user adminitstration");
           const control = harness.loadControlPlane();
 
-          assert.ok(control.intent["non-goals"].includes("Distributed app"));
-          assert.ok(control.intent["non-goals"].includes("authenticatoin"));
-          assert.ok(control.intent["non-goals"].includes("authorization"));
-          assert.ok(!control.intent["non-goals"].includes("Distributed app, authenticatoin, authorization"));
+          assert.ok(control.intent["nonGoals"].includes("Distributed app"));
+          assert.ok(control.intent["nonGoals"].includes("authenticatoin"));
+          assert.ok(control.intent["nonGoals"].includes("authorization"));
+          assert.ok(!control.intent["nonGoals"].includes("Distributed app, authenticatoin, authorization"));
 
           assert.ok(control.intent.constraints.includes("no database"));
           assert.ok(control.intent.constraints.includes("no user adminitstration"));
@@ -1076,7 +1076,7 @@ const pass2: TestPass = {
       name: "ast semantic validation rejects duplicates and conflicts",
       run: async () => {
         const control = makeControlPlane();
-        control.intent["non-goals"] = ["no direct db access"];
+        control.intent["nonGoals"] = ["no direct db access"];
         control.intent.constraints = ["No new development"];
 
         const duplicateGoal = parseCommand('choir define goal "enforce boundaries" then define goal "enforce boundaries"').ast;
@@ -1576,7 +1576,7 @@ const pass2: TestPass = {
         assert.strictEqual(compiled.changed, true);
         assert.deepStrictEqual(compiled.updatedControlPlane.intent.goals, ["A"]);
         assert.deepStrictEqual(compiled.updatedControlPlane.intent.constraints, ["B"]);
-        assert.deepStrictEqual(compiled.updatedControlPlane.intent["non-goals"], ["C"]);
+        assert.deepStrictEqual(compiled.updatedControlPlane.intent["nonGoals"], ["C"]);
       },
     },
     {
@@ -1692,7 +1692,7 @@ const pass2: TestPass = {
         const control = makeControlPlane();
         control.intent.goals = ["B", "A"];
         control.intent.constraints = ["z", "a"];
-        control.intent["non-goals"] = ["n2", "n1"];
+        control.intent["nonGoals"] = ["n2", "n1"];
 
         const generated = generateDSL(controlPlaneToChoirConfig(control));
         const text = formatDSL(generated.script);
@@ -1714,7 +1714,7 @@ const pass2: TestPass = {
         const control = makeControlPlane();
         control.intent.goals = ["enforce boundaries"];
         control.intent.constraints = ["no direct db access"];
-        control.intent["non-goals"] = ["distributed app"];
+        control.intent["nonGoals"] = ["distributed app"];
 
         const roundTrip = validateRoundTrip(controlPlaneToChoirConfig(control));
         assert.strictEqual(roundTrip.stable, true);
@@ -2073,7 +2073,7 @@ const pass2: TestPass = {
 
         wizard.next("no direct db access");
         wizard.next("done");
-        assert.strictEqual(wizard.state.currentStep, "non-goals");
+        assert.strictEqual(wizard.state.currentStep, "nonGoals");
 
         wizard.next("distributed app");
         wizard.next("done");
@@ -2386,7 +2386,7 @@ const pass2: TestPass = {
             intent: {
               goals: [],
               constraints: [],
-              "non-goals": [],
+              "nonGoals": [],
             },
             policy: {
               rules: [],
@@ -2450,7 +2450,7 @@ const pass2: TestPass = {
             intent: {
               goals: [],
               constraints: [],
-              "non-goals": [],
+              "nonGoals": [],
             },
             policy: {
               rules: [],

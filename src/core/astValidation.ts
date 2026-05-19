@@ -331,7 +331,7 @@ function controlHasIntent(control: ControlPlane): boolean {
     || control.vision.trim().length > 0
     || control.intent.goals.length > 0
     || control.intent.constraints.length > 0
-    || control.intent["non-goals"].length > 0;
+    || control.intent["nonGoals"].length > 0;
 }
 
 function toActionPath(index: number): string {
@@ -638,7 +638,7 @@ export function validateSemantics(ast: AST, context: SystemContext): ValidationR
   const existingGoals = new Set<string>(context.controlPlane.intent.goals.map((item) => item.toLowerCase()));
   const existingConstraints = new Set<string>(context.controlPlane.intent.constraints.map((item) => item.toLowerCase()));
   const existingConstraintIntents = indexConstraintIntents(context.controlPlane.intent.constraints);
-  const existingNonGoals = new Set<string>(context.controlPlane.intent["non-goals"].map((item) => item.toLowerCase()));
+  const existingNonGoals = new Set<string>(context.controlPlane.intent["nonGoals"].map((item) => item.toLowerCase()));
   const existingMission = new Set<string>(context.controlPlane.mission.trim().length > 0 ? [context.controlPlane.mission.trim().toLowerCase()] : []);
   const existingVision = new Set<string>(context.controlPlane.vision.trim().length > 0 ? [context.controlPlane.vision.trim().toLowerCase()] : []);
 
