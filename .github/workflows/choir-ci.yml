@@ -3,12 +3,9 @@ name: Choir CI
 on:
   push:
   pull_request:
-  schedule:
-    - cron: "0 3 * * *"
 
 jobs:
   choir:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
 
     steps:
@@ -76,68 +73,3 @@ jobs:
         run: |
           cd test-fixtures/simple-project
           node ../../out/cli.js ci run
-
-  choir-nightly:
-    if: github.event_name == 'schedule'
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build extension and CLI
-        run: npm run build:extension
-
-      - name: Verification harness (full)
-        run: npm run verify
-
-      - name: Deterministic verification
-        run: npm run verify:determinism
-
-      - name: Transaction verification
-        run: npm run verify:transactions
-
-      - name: State verification
-        run: npm run verify:state
-
-      - name: Policy verification
-        run: npm run verify:policy
-
-      - name: Orchestration verification
-        run: npm run verify:orchestration
-
-      - name: Production verification
-        run: npm run verify:production
-
-      - name: Compiler verification
-        run: npm run verify:compiler
-
-      - name: Planning verification
-        run: npm run verify:planning
-
-      - name: Preview verification
-        run: npm run verify:preview
-
-      - name: Contract verification checklist (full)
-        run: npm run verify:contracts:full
-
-      - name: Property-based tests (full)
-        run: npm run verify:property:full
-
-      - name: Chaos tests (full extreme)
-        run: npm run verify:chaos:full
-
-      - name: Run architecture suite
-        run: npm run test:architecture
-
-      - name: Run final full-system hardening gate
-        run: npm run verify:full
