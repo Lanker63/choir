@@ -1307,7 +1307,11 @@ export async function runFullSystemVerification(options: RunFullSystemVerificati
     "Full Contract Coverage",
     contractCoverage.passed,
     `${contractCoverage.sectionsPassed}/${contractCoverage.sectionsTotal} contract sections passed`,
-    contractCoverage.passed ? [] : ["contract verification failed to satisfy 14/14 coverage"]
+    contractCoverage.passed
+      ? []
+      : [
+          `contract verification failed to satisfy ${contractCoverage.sectionsPassed}/${contractCoverage.sectionsTotal} coverage`,
+        ]
   );
   passes.push(pass1);
   if (!pass1.passed) {
@@ -1437,8 +1441,7 @@ export async function runFullSystemVerification(options: RunFullSystemVerificati
   }
 
   const finalGatePassed = passes.filter((entry) => entry.id >= 1 && entry.id <= 15).every((entry) => entry.passed)
-    && contractCoverage.sectionsPassed === 14
-    && contractCoverage.sectionsTotal === 14
+    && contractCoverage.passed
     && invariants.every((entry) => entry.passed)
     && chaos.report.failures === 0
     && !failures.some((entry) => entry.includes("nondeterminism"));
