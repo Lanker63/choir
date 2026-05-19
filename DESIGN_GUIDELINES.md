@@ -272,7 +272,7 @@ Hard constraints:
 - safety guards must include: deterministic performance validation, timeout wrapper, rate limiter, and circuit breaker
 - safety-guard state must not introduce nondeterministic outcomes across fixed-seed verification/property runs
 
-## Final Hardening Gate Contract (Phase 8)
+## Final Hardening Gate Contract
 
 - release gate command is `npm run verify:full`
 - merge/deploy is blocked unless:
@@ -322,7 +322,7 @@ execution(mode=simulation) == execution(mode=execution)
 - Pre-transaction integrity failures abort execution without opening a transaction.
 - Post-transaction runtime failures must rollback and preserve no partial writes.
 
-## Refactor Contract (PASS 1)
+## Refactor Contract
 
 - Refactor operations are AST/symbol-based. Raw string replacement refactors are forbidden.
 - Refactor flow is deterministic and must follow the same execution primitive:
@@ -334,8 +334,8 @@ intent -> impact -> plan -> preview -> simulate -> validate -> commit|rollback
 - Refactor preview must be deterministic and hash-stable for identical inputs.
 - Execution must snapshot impacted files and support deterministic rollback.
 - Unsupported refactor execution intents must fail closed (no writes).
-- PASS 1 executable intents: rename, inline.
-- PASS 1 parsed/planned intents (execution not yet enabled): move, extract.
+- Executable intents: rename, inline, move, extract.
+- move and extract MVP scope: top-level declarations only; no automatic source compatibility re-exports.
 
 ## Planning Contract
 
@@ -422,9 +422,13 @@ Workspace detection contract:
 ## Command and Language Surface
 
 - user surface: @choir only
-- DSL is strict grammar, no natural language parsing
+- DSL is strict grammar, no natural language parsing; canonical grammar is defined in `CHOIR_DSL_GRAMMAR` in `src/core/choirRouter.ts`
 - .choir language support is grammar-state driven (completions, hover, validation)
 - internal roles (architect, analyst, conductor, enforcer) are routing boundaries, not user-facing participants
+- command chaining: the DSL supports `choir <cmd> then <cmd>` sequences; `then` is a first-class grammar token parsed by `parseCommand()` in `src/core/choirRouter.ts`
+- command chaining is a chat/VS Code surface only; choir-cli does not support `then` sequences and must return a parse error when one is supplied
+- VS Code-only commands not available in choir-cli: `control`, `timeline`, `diagnostics`, `graph` (and its focus/dependencies/dependents subcommands); attempting to pass these to the CLI returns a JSON error envelope with message "VS Code-only chat shortcuts are not available in choir-cli."; the authoritative exclusion list is `CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS` in `src/core/cliSurface.ts`
+- every operation listed in `CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS` in `src/core/cliSurface.ts` must be implemented in choir-cli parser and executor paths
 - refactor DSL surface:
   - choir refactor rename <symbol> <newName>
   - optional disambiguation: choir refactor rename <symbol> <newName> --declaration "<file>" (when unique) or "<file:line:character>"
@@ -505,6 +509,11 @@ Workspace detection contract:
 - choir.lock
 - .choir/ci.yaml
 - .choir/abstractions.yaml
+- .choir/macros.yaml
 - .choir/libraries/
+- .choir/capability-graph.json
+- .choir/pipeline.diagnostics.jsonl
+- .choir/init-strategic-state.json
 - .choir/artifacts/ci/
+- .choir/artifacts/proofs/
 - .choir/reports/
