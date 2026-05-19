@@ -181,9 +181,16 @@ Strategic init contract:
 - Runtime governance persistence for init must be scope-exclusive: rooted workspaces persist global `runtime`/`capabilities` and omit `packageModes`; rootless workspaces persist `packageModes` and omit global `runtime`/`capabilities`.
 - Strategic intent persistence for init must align with governance scope: rooted workspaces may persist global `strategicIntent`; rootless workspaces using `packageModes` must omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`.
 - Rootless runtime omission must hold on all init exit paths, including merge-mode early finish with zero selected domains after root intent writes.
-- Init must persist default runtime `capabilities` correlated to selected mode at the applicable scope: global `runtime` when rooted, per-entry `packageModes.*` when rootless.
+- Init must persist runtime `capabilities` at the applicable scope from the authoritative source: template-defined capabilities from `config/init-templates.json` for `--template` runs, otherwise mode-derived defaults (`runtime` when rooted, per-entry `packageModes.*` when rootless).
 - Runtime governance mode selection occurs only after strategic domain modeling and calibration.
+- Template availability and template defaults for `@choir init --template` must be defined in the repository template catalog (`config/init-templates.json`), not duplicated as hard-coded lists across runtime modules.
+- Template catalog loading must be fail-closed with strict schema validation: malformed `config/init-templates.json` entries (invalid enums/shape/duplicates) must throw and block template resolution.
+- Strategic init single-select prompt surfaces must explicitly mark the current/default value (not only in placeholder text) for template-seeded init and re-init flows.
+- Strategic init template runtime defaults must propagate into domain prompt defaults: when a template defines runtimeMode and no existing package-level mode is uniquely resolved, seeded domain runtime mode must use the template runtimeMode.
+- Strategic intent persistence for rooted single-package synthesis must avoid duplicate scope blocks: persist package-level `packages.".".strategicIntent` as canonical and omit global `strategicIntent`.
+- Rooted single-package init must not prompt for an additional global runtime selection after domain modeling; global runtime must be derived from the sole domain runtime mode.
 - Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
+- `--expand-domain` interactive modeling must scope to domains impacted by newly discovered packages; unchanged domains are not re-prompted.
 - Init diagnostics must persist pipeline stage outcomes in `.choir/pipeline.diagnostics.jsonl`.
 - Strategic init replay artifact `.choir/init-strategic-state.json` is required for reviewable reruns and visualization.
 

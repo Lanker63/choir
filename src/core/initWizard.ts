@@ -1,8 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { cloneJson } from "../utils/clone.js";
+import { wizardTemplateDefaults } from "./initTemplateCatalog.js";
 
-export type InitTemplateName = "backend" | "frontend";
+export type InitTemplateName = string;
 
 export type WizardStep =
   | "mission"
@@ -53,19 +54,6 @@ const ALL_STEPS: WizardStep[] = [
   ...PROGRESS_STEPS,
   "confirm",
 ];
-
-const INIT_TEMPLATES: Record<InitTemplateName, Pick<WizardState["data"], "goals" | "constraints" | "nonGoals">> = {
-  backend: {
-    goals: ["scalable service architecture"],
-    constraints: ["no direct db access"],
-    nonGoals: [],
-  },
-  frontend: {
-    goals: ["accessible and responsive user experience"],
-    constraints: ["consistent component architecture"],
-    nonGoals: [],
-  },
-};
 
 function normalizeText(input: string): string {
   return input.trim().replace(/\s+/g, " ");
@@ -145,7 +133,7 @@ function previousStep(step: WizardStep): WizardStep {
 }
 
 export function createWizardState(template?: InitTemplateName, seed?: WizardSeedData): WizardState {
-  const defaults = template ? INIT_TEMPLATES[template] : { goals: [], constraints: [], nonGoals: [] };
+  const defaults = wizardTemplateDefaults(template) ?? { goals: [], constraints: [], nonGoals: [] };
 
   const mission = typeof seed?.mission === "string" ? normalizeText(seed.mission) : "";
   const vision = typeof seed?.vision === "string" ? normalizeText(seed.vision) : "";

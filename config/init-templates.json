@@ -1,0 +1,267 @@
+{
+  "templates": [
+    {
+      "id": "backend",
+      "wizardDefaults": {
+        "goals": [
+          "scalable service architecture"
+        ],
+        "constraints": [
+          "no direct db access"
+        ],
+        "nonGoals": []
+      },
+      "strategicDefaults": {
+        "priorities": [
+          "correctness",
+          "stability",
+          "auditability"
+        ],
+        "optimizationGoals": [
+          "deterministic-replay",
+          "rollback-minimized"
+        ],
+        "riskTolerance": "moderate",
+        "rolloutPreferences": [
+          "phased-required"
+        ],
+        "stabilityProfile": "adaptive",
+        "governanceIntensity": "moderate",
+        "runtimeMode": "execution-enabled",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "frontend",
+      "wizardDefaults": {
+        "goals": [
+          "accessible and responsive user experience"
+        ],
+        "constraints": [
+          "consistent component architecture"
+        ],
+        "nonGoals": []
+      },
+      "strategicDefaults": {
+        "priorities": [
+          "iteration-speed",
+          "stability"
+        ],
+        "optimizationGoals": [
+          "rapid-delivery",
+          "dependency-isolation"
+        ],
+        "riskTolerance": "moderate",
+        "rolloutPreferences": [
+          "phased-optional"
+        ],
+        "stabilityProfile": "adaptive",
+        "governanceIntensity": "moderate",
+        "runtimeMode": "execution-enabled",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "fintech-platform",
+      "strategicDefaults": {
+        "priorities": [
+          "correctness",
+          "auditability",
+          "rollback-safety"
+        ],
+        "optimizationGoals": [
+          "deterministic-replay",
+          "minimal-blast-radius",
+          "rollback-minimized"
+        ],
+        "riskTolerance": "low",
+        "rolloutPreferences": [
+          "canary-required",
+          "phased-required"
+        ],
+        "stabilityProfile": "stable",
+        "governanceIntensity": "strict",
+        "runtimeMode": "approval-required",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "saas-product",
+      "strategicDefaults": {
+        "priorities": [
+          "stability",
+          "iteration-speed",
+          "dependency-safety"
+        ],
+        "optimizationGoals": [
+          "rapid-delivery",
+          "dependency-isolation"
+        ],
+        "riskTolerance": "moderate",
+        "rolloutPreferences": [
+          "phased-required",
+          "phased-optional"
+        ],
+        "stabilityProfile": "adaptive",
+        "governanceIntensity": "moderate",
+        "runtimeMode": "execution-enabled",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "enterprise-monolith",
+      "strategicDefaults": {
+        "priorities": [
+          "stability",
+          "auditability",
+          "correctness"
+        ],
+        "optimizationGoals": [
+          "deterministic-replay",
+          "minimal-blast-radius"
+        ],
+        "riskTolerance": "low",
+        "rolloutPreferences": [
+          "phased-required"
+        ],
+        "stabilityProfile": "stable",
+        "governanceIntensity": "strict",
+        "runtimeMode": "approval-required",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "internal-tooling",
+      "strategicDefaults": {
+        "priorities": [
+          "developer-autonomy",
+          "iteration-speed"
+        ],
+        "optimizationGoals": [
+          "rapid-delivery",
+          "parallel-throughput"
+        ],
+        "riskTolerance": "high",
+        "rolloutPreferences": [
+          "all-at-once-allowed",
+          "parallel-optimized"
+        ],
+        "stabilityProfile": "experimental",
+        "governanceIntensity": "relaxed",
+        "runtimeMode": "execution-enabled",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    },
+    {
+      "id": "experimentation-platform",
+      "strategicDefaults": {
+        "priorities": [
+          "iteration-speed",
+          "developer-autonomy"
+        ],
+        "optimizationGoals": [
+          "rapid-delivery",
+          "parallel-throughput",
+          "low-governance-friction"
+        ],
+        "riskTolerance": "high",
+        "rolloutPreferences": [
+          "parallel-optimized",
+          "phased-optional"
+        ],
+        "stabilityProfile": "experimental",
+        "governanceIntensity": "relaxed",
+        "runtimeMode": "simulation-only",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": false,
+          "optimize": true,
+          "import": true,
+          "install": false,
+          "update": false
+        }
+      }
+    },
+    {
+      "id": "distributed-platform",
+      "strategicDefaults": {
+        "priorities": [
+          "dependency-safety",
+          "stability",
+          "deterministic-replay"
+        ],
+        "optimizationGoals": [
+          "dependency-isolation",
+          "minimal-blast-radius",
+          "deterministic-replay"
+        ],
+        "riskTolerance": "moderate",
+        "rolloutPreferences": [
+          "canary-required",
+          "phased-required"
+        ],
+        "stabilityProfile": "adaptive",
+        "governanceIntensity": "moderate",
+        "runtimeMode": "distributed-control",
+        "capabilities": {
+          "preview": true,
+          "simulate": true,
+          "execute": true,
+          "optimize": true,
+          "import": true,
+          "install": true,
+          "update": true
+        }
+      }
+    }
+  ]
+}

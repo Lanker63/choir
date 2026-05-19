@@ -1,5 +1,6 @@
 import { InitTemplateName } from "./initWizard.js";
 import type { StrategicInitMode, StrategicTemplateName } from "./strategicInit.js";
+import { isInitTemplateName } from "./initTemplateCatalog.js";
 
 export type AbstractionChatCommand =
   | { type: "list" }
@@ -167,16 +168,7 @@ export function parseInitChatCommand(input: string): InitChatCommand | null {
     };
   }
 
-  if (
-    templateValue === "backend"
-    || templateValue === "frontend"
-    || templateValue === "fintech-platform"
-    || templateValue === "saas-product"
-    || templateValue === "enterprise-monolith"
-    || templateValue === "internal-tooling"
-    || templateValue === "experimentation-platform"
-    || templateValue === "distributed-platform"
-  ) {
+  if (isInitTemplateName(templateValue)) {
     return {
       type: "init",
       template: templateValue,

@@ -163,6 +163,14 @@ import {
   loadInitSession,
   saveInitSession,
 } from "../../core/initWizard.js";
+import { strategicTemplateDefaults } from "../../core/strategicInit.js";
+import {
+  calibrateStrategicOrchestration,
+  discoverStrategicDomains,
+  selectExpandDomainModelingDiscovery,
+  seedStrategicDomainPromptDefaults,
+  synthesizeStrategicControlPlane,
+} from "../../core/strategicInit.js";
 import {
   normalizeChatDSLInput,
   parseCliInstallChatCommand,
@@ -171,6 +179,8 @@ import {
   parseInitChatCommand,
   parseVerifyChatCommand,
 } from "../../core/chatCommands.js";
+import { listInitTemplateNames } from "../../core/initTemplateCatalog.js";
+import { withSingleSelectDefault } from "../../core/quickPickDefaults.js";
 import {
   buildCliInstallCommand,
   normalizeCliPackageSpec,
@@ -2013,6 +2023,27 @@ const pass2: TestPass = {
       },
     },
     {
+      id: "2.28a",
+      name: "single-select quick-pick defaults mark the current value",
+      run: async () => {
+        const items = withSingleSelectDefault(["low", "moderate", "high"] as const, "moderate");
+        assert.strictEqual(items.length, 3);
+
+        const marked = items.filter((entry) => entry.picked === true);
+        assert.strictEqual(marked.length, 1);
+        assert.strictEqual(marked[0]?.label, "moderate");
+        assert.strictEqual(marked[0]?.description, "current");
+      },
+    },
+    {
+      id: "2.28b",
+      name: "single-select quick-pick defaults remain unmarked without a selected value",
+      run: async () => {
+        const items = withSingleSelectDefault(["low", "moderate", "high"] as const, undefined);
+        assert.strictEqual(items.some((entry) => entry.picked === true), false);
+      },
+    },
+    {
       id: "2.29",
       name: "init wizard enforces step flow validation and deterministic dsl output",
       run: async () => {
@@ -2054,6 +2085,46 @@ const pass2: TestPass = {
 
         const confirmed = wizard.next("yes");
         assert.strictEqual(confirmed.status, "confirmed");
+      },
+    },
+    {
+      id: "2.29a",
+      name: "init template catalog loader fails closed on malformed schema",
+      run: async () => {
+        const catalogPath = path.join(repoRoot, "config", "init-templates.json");
+        const original = fs.readFileSync(catalogPath, "utf-8");
+
+        try {
+          fs.writeFileSync(catalogPath, JSON.stringify({
+            templates: [
+              {
+                id: "bad-template",
+                strategicDefaults: {
+                  priorities: ["stability"],
+                  optimizationGoals: ["rapid-delivery"],
+                  riskTolerance: "not-a-valid-risk-level",
+                  rolloutPreferences: ["phased-required"],
+                  stabilityProfile: "adaptive",
+                  governanceIntensity: "moderate",
+                  runtimeMode: "execution-enabled",
+                  capabilities: {
+                    preview: true,
+                    simulate: true,
+                    execute: true,
+                    optimize: true,
+                    import: true,
+                    install: true,
+                    update: true,
+                  },
+                },
+              },
+            ],
+          }), "utf-8");
+
+          assert.throws(() => listInitTemplateNames(), /template catalog/i);
+        } finally {
+          fs.writeFileSync(catalogPath, original, "utf-8");
+        }
       },
     },
     {
@@ -2104,6 +2175,492 @@ const pass2: TestPass = {
       },
     },
     {
+      id: "2.30ab",
+      name: "init template catalog is authoritative for wizard defaults",
+      run: async () => {
+        const catalogPath = path.join(repoRoot, "config", "init-templates.json");
+        const catalogRaw = fs.readFileSync(catalogPath, "utf-8");
+        const catalog = JSON.parse(catalogRaw) as {
+          templates?: Array<{
+            id?: string;
+            wizardDefaults?: {
+              goals?: string[];
+              constraints?: string[];
+              nonGoals?: string[];
+            };
+          }>;
+        };
+
+        const templates = (catalog.templates ?? []).filter((entry) => typeof entry.id === "string");
+        assert.ok(templates.length > 0);
+
+        for (const template of templates) {
+          if (!template.id) {
+            continue;
+          }
+
+          const defaults = template.wizardDefaults;
+          if (!defaults) {
+            continue;
+          }
+
+          const state = createWizardState(template.id);
+          assert.deepStrictEqual(state.data.goals, defaults.goals ?? []);
+          assert.deepStrictEqual(state.data.constraints, defaults.constraints ?? []);
+          assert.deepStrictEqual(state.data.nonGoals, defaults.nonGoals ?? []);
+        }
+      },
+    },
+    {
+      id: "2.30ac",
+      name: "init template catalog is authoritative for strategic defaults",
+      run: async () => {
+        const catalogPath = path.join(repoRoot, "config", "init-templates.json");
+        const catalogRaw = fs.readFileSync(catalogPath, "utf-8");
+        const catalog = JSON.parse(catalogRaw) as {
+          templates?: Array<{
+            id?: string;
+            strategicDefaults?: {
+              priorities?: string[];
+              optimizationGoals?: string[];
+              riskTolerance?: string;
+              rolloutPreferences?: string[];
+              stabilityProfile?: string;
+              governanceIntensity?: string;
+              runtimeMode?: string;
+              capabilities?: {
+                preview?: boolean;
+                simulate?: boolean;
+                execute?: boolean;
+                optimize?: boolean;
+                import?: boolean;
+                install?: boolean;
+                update?: boolean;
+              };
+            };
+          }>;
+        };
+
+        const templates = (catalog.templates ?? []).filter((entry) => typeof entry.id === "string");
+        assert.ok(templates.length > 0);
+
+        for (const template of templates) {
+          if (!template.id) {
+            continue;
+          }
+
+          const defaults = template.strategicDefaults;
+          if (!defaults) {
+            continue;
+          }
+
+          const resolved = strategicTemplateDefaults(template.id);
+          assert.ok(resolved);
+          assert.deepStrictEqual(resolved?.priorities, defaults.priorities ?? []);
+          assert.deepStrictEqual(resolved?.optimizationGoals, defaults.optimizationGoals ?? []);
+          assert.strictEqual(resolved?.riskTolerance, defaults.riskTolerance);
+          assert.deepStrictEqual(resolved?.rolloutPreferences, defaults.rolloutPreferences ?? []);
+          assert.strictEqual(resolved?.stabilityProfile, defaults.stabilityProfile);
+          assert.strictEqual(resolved?.governanceIntensity, defaults.governanceIntensity);
+          assert.strictEqual(resolved?.runtimeMode, defaults.runtimeMode);
+          assert.deepStrictEqual(resolved?.capabilities, defaults.capabilities ?? {});
+        }
+      },
+    },
+    {
+      id: "2.30ad",
+      name: "template-seeded domain runtime defaults preserve template runtime mode",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-runtime-defaults-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "template-runtime-defaults",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, "experimentation-platform");
+          const domain = discovery.domains[0];
+          assert.ok(domain);
+          if (!domain) {
+            return;
+          }
+
+          const defaults = seedStrategicDomainPromptDefaults(domain);
+          assert.strictEqual(defaults.runtimeMode, "simulation-only");
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ada",
+      name: "rootless template synthesis applies template capabilities to packageModes",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-package-capabilities-"));
+        try {
+          const pkgDir = path.join(root, "service");
+          fs.mkdirSync(pkgDir, { recursive: true });
+          fs.writeFileSync(path.join(pkgDir, "package.json"), JSON.stringify({
+            name: "service",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, "experimentation-platform");
+          const defaults = strategicTemplateDefaults("experimentation-platform");
+          assert.ok(defaults?.capabilities);
+
+          const models = discovery.domains.map((domain) => ({
+            id: domain.id,
+            mission: `Owns ${domain.id}`,
+            priorities: [...domain.inferred.priorities],
+            optimizationGoals: [...domain.inferred.optimizationGoals],
+            riskTolerance: domain.inferred.riskTolerance,
+            rolloutPreferences: [...domain.inferred.rolloutPreferences],
+            stabilityProfile: domain.inferred.stabilityProfile,
+            governanceIntensity: domain.inferred.governanceIntensity,
+            runtimeMode: domain.inferred.runtimeMode,
+            runtimeCapabilities: domain.inferred.runtimeCapabilities,
+          }));
+
+          const calibration = calibrateStrategicOrchestration(discovery, models);
+          const synthesized = synthesizeStrategicControlPlane(makeControlPlane(), {
+            mode: "full",
+            mission: "Mission",
+            vision: "Vision",
+            runtimeMode: calibration.governanceModeRecommendation,
+            discovery,
+            models,
+            calibration,
+          }).controlPlane;
+
+          assert.strictEqual(synthesized.runtime, undefined);
+          assert.strictEqual(synthesized.capabilities, undefined);
+          assert.ok(synthesized.packageModes);
+
+          for (const packagePath of discovery.packages.map((pkg) => pkg.packagePath)) {
+            assert.deepStrictEqual(
+              synthesized.packageModes?.[packagePath]?.capabilities,
+              defaults?.capabilities,
+            );
+          }
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ae",
+      name: "rooted single-package synthesis avoids duplicating global and package strategicIntent",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-intent-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "single-package",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, "distributed-platform");
+          const models = discovery.domains.map((domain) => ({
+            id: domain.id,
+            mission: `Owns ${domain.id}`,
+            priorities: [...domain.inferred.priorities],
+            optimizationGoals: [...domain.inferred.optimizationGoals],
+            riskTolerance: domain.inferred.riskTolerance,
+            rolloutPreferences: [...domain.inferred.rolloutPreferences],
+            stabilityProfile: domain.inferred.stabilityProfile,
+            governanceIntensity: domain.inferred.governanceIntensity,
+            runtimeMode: domain.inferred.runtimeMode,
+          }));
+
+          const calibration = calibrateStrategicOrchestration(discovery, models);
+
+          const base = ControlPlaneSchema.parse({
+            version: CONTROL_PLANE_VERSION,
+            mission: "",
+            vision: "",
+            intent: {
+              goals: [],
+              constraints: [],
+              "non-goals": [],
+            },
+            policy: {
+              rules: [],
+            },
+            execution: {
+              plans: [],
+            },
+            runtime: {
+              mode: "execution-enabled",
+            },
+            strategicIntent: {
+              priorities: [],
+              optimizationGoals: [],
+              riskTolerance: "moderate",
+              architecturalPosture: [],
+              rolloutPreferences: [],
+              stabilityProfile: "adaptive",
+              governanceIntensity: "moderate",
+            },
+            domains: {},
+            packages: {},
+            contexts: {},
+          });
+
+          const synthesized = synthesizeStrategicControlPlane(base, {
+            mode: "full",
+            mission: "Mission",
+            vision: "Vision",
+            runtimeMode: calibration.governanceModeRecommendation,
+            discovery,
+            models,
+            calibration,
+          }).controlPlane;
+
+          assert.strictEqual(synthesized.strategicIntent, undefined);
+          assert.ok(synthesized.packages?.["."]?.strategicIntent);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30af",
+      name: "rooted single-package synthesis derives global runtime from sole domain runtime mode",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-runtime-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "single-package-runtime",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, "distributed-platform");
+          const models = discovery.domains.map((domain) => ({
+            id: domain.id,
+            mission: `Owns ${domain.id}`,
+            priorities: [...domain.inferred.priorities],
+            optimizationGoals: [...domain.inferred.optimizationGoals],
+            riskTolerance: domain.inferred.riskTolerance,
+            rolloutPreferences: [...domain.inferred.rolloutPreferences],
+            stabilityProfile: domain.inferred.stabilityProfile,
+            governanceIntensity: domain.inferred.governanceIntensity,
+            runtimeMode: "simulation-only" as const,
+          }));
+
+          const calibration = calibrateStrategicOrchestration(discovery, models);
+          const base = ControlPlaneSchema.parse({
+            version: CONTROL_PLANE_VERSION,
+            mission: "",
+            vision: "",
+            intent: {
+              goals: [],
+              constraints: [],
+              "non-goals": [],
+            },
+            policy: {
+              rules: [],
+            },
+            execution: {
+              plans: [],
+            },
+            runtime: {
+              mode: "execution-enabled",
+            },
+            strategicIntent: {
+              priorities: [],
+              optimizationGoals: [],
+              riskTolerance: "moderate",
+              architecturalPosture: [],
+              rolloutPreferences: [],
+              stabilityProfile: "adaptive",
+              governanceIntensity: "moderate",
+            },
+            domains: {},
+            packages: {},
+            contexts: {},
+          });
+
+          const synthesized = synthesizeStrategicControlPlane(base, {
+            mode: "full",
+            mission: "Mission",
+            vision: "Vision",
+            runtimeMode: calibration.governanceModeRecommendation,
+            discovery,
+            models,
+            calibration,
+          }).controlPlane;
+
+          assert.strictEqual(synthesized.runtime?.mode, "simulation-only");
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ag",
+      name: "expand-domain modeling selector scopes to domains touched by newly discovered packages",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-selector-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "expand-domain-selector",
+            private: true,
+          }, null, 2));
+
+          const packagePaths = [
+            "packages/payments",
+            "apps/payments",
+            "packages/search",
+          ];
+
+          for (const packagePath of packagePaths) {
+            const packageDir = path.join(root, packagePath);
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+              name: packagePath.replace(/\//g, "-"),
+              private: true,
+            }, null, 2));
+          }
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const control = makeControlPlane();
+          control.packages = {
+            "packages/payments": {
+              strategicIntent: {
+                priorities: ["correctness"],
+                optimizationGoals: ["deterministic-replay"],
+                riskTolerance: "low",
+                rolloutPreferences: ["canary-required"],
+                stabilityProfile: "stable",
+                governanceIntensity: "strict",
+              },
+            },
+            "packages/search": {
+              strategicIntent: {
+                priorities: ["stability"],
+                optimizationGoals: ["dependency-isolation"],
+                riskTolerance: "moderate",
+                rolloutPreferences: ["phased-optional"],
+                stabilityProfile: "adaptive",
+                governanceIntensity: "moderate",
+              },
+            },
+          };
+
+          const selected = selectExpandDomainModelingDiscovery(discovery, control);
+          assert.deepStrictEqual(selected.domains.map((domain) => domain.id), ["payments"]);
+          assert.deepStrictEqual(selected.packages.map((pkg) => pkg.packagePath), [
+            "apps/payments",
+            "packages/payments",
+          ]);
+
+          control.packages["apps/payments"] = {
+            strategicIntent: {
+              priorities: ["correctness"],
+              optimizationGoals: ["deterministic-replay"],
+              riskTolerance: "low",
+              rolloutPreferences: ["canary-required"],
+              stabilityProfile: "stable",
+              governanceIntensity: "strict",
+            },
+          };
+
+          const noNewPackages = selectExpandDomainModelingDiscovery(discovery, control);
+          assert.deepStrictEqual(noNewPackages.domains, []);
+          assert.deepStrictEqual(noNewPackages.packages, []);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah",
+      name: "rootless expand-domain synthesis preserves existing packageModes and adds new package modes only",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-rootless-modes-"));
+        try {
+          const existingPackagePath = "packages/payments";
+          const newPackagePath = "packages/orders";
+
+          for (const packagePath of [existingPackagePath, newPackagePath]) {
+            const packageDir = path.join(root, packagePath);
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+              name: packagePath.replace(/\//g, "-"),
+              private: true,
+            }, null, 2));
+          }
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const modelingDiscovery = selectExpandDomainModelingDiscovery(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              [existingPackagePath]: {},
+            },
+          });
+
+          const targetDomain = modelingDiscovery.domains.find((domain) => domain.packages.includes(newPackagePath));
+          assert.ok(targetDomain);
+          if (!targetDomain) {
+            return;
+          }
+
+          const models = [{
+            id: targetDomain.id,
+            mission: `Owns ${targetDomain.id}`,
+            priorities: [...targetDomain.inferred.priorities],
+            optimizationGoals: [...targetDomain.inferred.optimizationGoals],
+            riskTolerance: targetDomain.inferred.riskTolerance,
+            rolloutPreferences: [...targetDomain.inferred.rolloutPreferences],
+            stabilityProfile: targetDomain.inferred.stabilityProfile,
+            governanceIntensity: targetDomain.inferred.governanceIntensity,
+            runtimeMode: targetDomain.inferred.runtimeMode,
+            runtimeCapabilities: targetDomain.inferred.runtimeCapabilities,
+          }];
+
+          const calibration = calibrateStrategicOrchestration(modelingDiscovery, models);
+          const existingCapabilities = {
+            preview: true,
+            simulate: true,
+            execute: false,
+            optimize: true,
+            import: true,
+            install: false,
+            update: false,
+          };
+
+          const base = {
+            ...makeControlPlane(),
+            packages: {
+              [existingPackagePath]: {},
+            },
+            packageModes: {
+              [existingPackagePath]: {
+                mode: "observe-only" as const,
+                capabilities: existingCapabilities,
+              },
+            },
+          };
+
+          const synthesized = synthesizeStrategicControlPlane(base, {
+            mode: "expand-domain",
+            mission: "Mission",
+            vision: "Vision",
+            runtimeMode: "execution-enabled",
+            discovery,
+            models,
+            calibration,
+          }).controlPlane;
+
+          assert.strictEqual(synthesized.packageModes?.[existingPackagePath]?.mode, "observe-only");
+          assert.deepStrictEqual(synthesized.packageModes?.[existingPackagePath]?.capabilities, existingCapabilities);
+          assert.strictEqual(synthesized.packageModes?.[newPackagePath]?.mode, targetDomain.inferred.runtimeMode);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
       id: "2.30a",
       name: "init chat shortcut parser accepts prefixed and stripped participant input",
       run: async () => {
@@ -2127,6 +2684,13 @@ const pass2: TestPass = {
           type: "init",
           invalidTemplate: "invalid",
         });
+
+        for (const template of listInitTemplateNames()) {
+          assert.deepStrictEqual(parseInitChatCommand(`@choir init --template ${template}`), {
+            type: "init",
+            template,
+          });
+        }
 
         assert.strictEqual(parseInitChatCommand("choir init"), null);
       },

@@ -78,6 +78,8 @@ import {
     runOrchestrationPipeline,
 } from "./core/orchestrationRuntime.js";
 import { evaluateRuntimeGovernance, type Capability } from "./core/runtimeGovernance.js";
+import { listInitTemplateNames, listInitTemplateNamesDisplay } from "./core/initTemplateCatalog.js";
+import { withSingleSelectDefault } from "./core/quickPickDefaults.js";
 import { buildExecutionPlan } from "./core/scheduler.js";
 import { readLatestOrchestrationTrace } from "./core/orchestrationRuntimeTrace.js";
 import {
@@ -98,6 +100,7 @@ import {
     calibrateStrategicOrchestration,
     discoverStrategicDomains,
     readStrategicInitState,
+    selectExpandDomainModelingDiscovery,
     seedStrategicDomainPromptDefaults,
     scopeControlPlaneRuntimeForWorkspace,
     strategicTemplateDefaults,
@@ -326,6 +329,7 @@ function renderAnalyzeResult(stream: vscode.ChatResponseStream, target: AnalyzeT
 }
 
 function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
+    const templateExamples = listInitTemplateNames().map((template) => `- @choir init --template ${template}`);
     stream.markdown([
         "Choir DSL required.",
         "",
@@ -383,9 +387,7 @@ function renderGrammarHelp(stream: vscode.ChatResponseStream): void {
         "",
         "Abstraction shortcuts:",
         "- @choir init",
-        "- @choir init --template backend",
-        "- @choir init --template frontend",
-        "- @choir init --template fintech-platform",
+        ...templateExamples,
         "- @choir init --reclassify",
         "- @choir init --expand-domain",
         "- @choir init --recalibrate",
@@ -534,9 +536,7 @@ async function modelSingleStrategicDomain(
     }
 
     const riskPick = await vscode.window.showQuickPick([
-        { label: "low" as RiskTolerance },
-        { label: "moderate" as RiskTolerance },
-        { label: "high" as RiskTolerance },
+        ...withSingleSelectDefault<RiskTolerance>(["low", "moderate", "high"], defaults.riskTolerance),
     ], {
         title: `Risk Tolerance: ${domain.id}`,
         placeHolder: `Suggested: ${defaults.riskTolerance}`,
@@ -564,9 +564,7 @@ async function modelSingleStrategicDomain(
     }
 
     const stabilityPick = await vscode.window.showQuickPick([
-        { label: "stable" as StabilityProfile },
-        { label: "adaptive" as StabilityProfile },
-        { label: "experimental" as StabilityProfile },
+        ...withSingleSelectDefault<StabilityProfile>(["stable", "adaptive", "experimental"], defaults.stabilityProfile),
     ], {
         title: `Stability Profile: ${domain.id}`,
         placeHolder: `Suggested: ${defaults.stabilityProfile}`,
@@ -578,9 +576,7 @@ async function modelSingleStrategicDomain(
     const stability = stabilityPick.label;
 
     const governancePick = await vscode.window.showQuickPick([
-        { label: "strict" as GovernanceIntensity },
-        { label: "moderate" as GovernanceIntensity },
-        { label: "relaxed" as GovernanceIntensity },
+        ...withSingleSelectDefault<GovernanceIntensity>(["strict", "moderate", "relaxed"], defaults.governanceIntensity),
     ], {
         title: `Governance Intensity: ${domain.id}`,
         placeHolder: `Suggested: ${defaults.governanceIntensity}`,
@@ -592,11 +588,13 @@ async function modelSingleStrategicDomain(
     const governance = governancePick.label;
 
     const domainRuntimeModePick = await vscode.window.showQuickPick([
-        { label: "observe-only" as RuntimeMode },
-        { label: "simulation-only" as RuntimeMode },
-        { label: "approval-required" as RuntimeMode },
-        { label: "execution-enabled" as RuntimeMode },
-        { label: "distributed-control" as RuntimeMode },
+        ...withSingleSelectDefault<RuntimeMode>([
+            "observe-only",
+            "simulation-only",
+            "approval-required",
+            "execution-enabled",
+            "distributed-control",
+        ], defaults.runtimeMode),
     ], {
         title: `Domain Runtime Governance Mode: ${domain.id}`,
         placeHolder: `Suggested: ${defaults.runtimeMode} | applies to packages in this domain`,
@@ -618,6 +616,11 @@ async function modelSingleStrategicDomain(
         stabilityProfile: stability,
         governanceIntensity: governance,
         runtimeMode,
+        ...(domain.inferred.runtimeCapabilities
+            ? {
+                runtimeCapabilities: { ...domain.inferred.runtimeCapabilities },
+            }
+            : {}),
     };
 }
 
@@ -759,11 +762,13 @@ async function chooseRuntimeMode(
     calibrationSummary: string
 ): Promise<RuntimeMode | null> {
     const picked = await vscode.window.showQuickPick([
-        { label: "observe-only" as RuntimeMode },
-        { label: "simulation-only" as RuntimeMode },
-        { label: "approval-required" as RuntimeMode },
-        { label: "execution-enabled" as RuntimeMode },
-        { label: "distributed-control" as RuntimeMode },
+        ...withSingleSelectDefault<RuntimeMode>([
+            "observe-only",
+            "simulation-only",
+            "approval-required",
+            "execution-enabled",
+            "distributed-control",
+        ], suggested),
     ], {
         title: "Global Runtime Governance Mode",
         placeHolder: `Suggested global mode: ${suggested} | ${calibrationSummary} | domain/package-level governance is applied separately via packageModes`,
@@ -794,7 +799,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
             const exportChatCommand = parseExportChatCommand(raw);
             if (initChatCommand) {
                 if (initChatCommand.invalidTemplate) {
-                    stream.markdown("Unsupported template. Supported templates: backend, frontend, fintech-platform, saas-product, enterprise-monolith, internal-tooling, experimentation-platform, distributed-platform.");
+                    stream.markdown(`Unsupported template. Supported templates: ${listInitTemplateNamesDisplay()}.`);
                     return;
                 }
 
@@ -1136,13 +1141,17 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         return;
                     }
 
+                    const expandDomainModelingDiscovery = strategicMode === "expand-domain"
+                        ? selectExpandDomainModelingDiscovery(discovery, currentControl)
+                        : null;
+
                     const modelingDiscovery = mergeSelection
                         ? selectDiscoveryForDomains(discovery, mergeSelection.selectedDomainIds)
-                        : discovery;
+                        : (expandDomainModelingDiscovery ?? discovery);
 
                     const models = mergeSelection
                         ? mergeSelection.models
-                        : await modelStrategicDomainsInteractively(discovery);
+                        : await modelStrategicDomainsInteractively(modelingDiscovery);
 
                     if (!models) {
                         stream.markdown("Choir init cancelled during strategic domain modeling.");
@@ -1198,13 +1207,20 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         detail: `strategy=${calibration.selectedStrategyType} rollout=${calibration.rolloutDefault} blastRadius=${calibration.estimatedBlastRadius}`,
                     });
 
-                    const requiresGlobalRuntimePrompt = modelingDiscovery.domains.length <= 1;
-                    const runtimeMode = requiresGlobalRuntimePrompt
-                        ? await chooseRuntimeMode(
-                            calibration.governanceModeRecommendation,
-                            `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
-                        )
-                        : calibration.governanceModeRecommendation;
+                    const singlePackageRooted = hasRootPackage && modelingDiscovery.packages.length === 1 && models.length === 1;
+                    const requiresGlobalRuntimePrompt = strategicMode === "full"
+                        && modelingDiscovery.domains.length <= 1
+                        && !singlePackageRooted;
+                    const runtimeMode = strategicMode === "full"
+                        ? (requiresGlobalRuntimePrompt
+                            ? await chooseRuntimeMode(
+                                calibration.governanceModeRecommendation,
+                                `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
+                            )
+                            : (singlePackageRooted
+                                ? (models[0]?.runtimeMode ?? calibration.governanceModeRecommendation)
+                                : calibration.governanceModeRecommendation))
+                        : (currentControl.runtime?.mode ?? calibration.governanceModeRecommendation);
 
                     if (!runtimeMode) {
                         stream.markdown("Choir init cancelled during runtime governance modeling.");
@@ -1214,21 +1230,29 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     diagnosticsStages.push({
                         stage: "governance-modeling",
                         status: "success",
-                        detail: requiresGlobalRuntimePrompt
-                            ? `global runtime mode selected: ${runtimeMode}`
-                            : `global runtime mode baseline (auto): ${runtimeMode}; domain runtime modes captured per domain`,
+                        detail: strategicMode !== "full"
+                            ? `runtime mode retained for ${strategicMode}: ${runtimeMode}`
+                            : (requiresGlobalRuntimePrompt
+                                ? `global runtime mode selected: ${runtimeMode}`
+                                : (singlePackageRooted
+                                    ? `single-package rooted runtime derived from domain modeling: ${runtimeMode}`
+                                    : `global runtime mode baseline (auto): ${runtimeMode}; domain runtime modes captured per domain`)),
                     });
 
                     const runtimeModeForSynthesis = mergeSelection
                         ? (currentControl.runtime?.mode ?? calibration.governanceModeRecommendation)
                         : runtimeMode;
 
+                    const synthesisDiscovery = strategicMode === "expand-domain"
+                        ? discovery
+                        : modelingDiscovery;
+
                     const synthesis = synthesizeStrategicControlPlane(currentControl, {
                         mode: strategicMode,
                         mission: missionForSynthesis,
                         vision: visionForSynthesis,
                         runtimeMode: runtimeModeForSynthesis,
-                        discovery: modelingDiscovery,
+                        discovery: synthesisDiscovery,
                         models,
                         calibration,
                     });
@@ -1245,7 +1269,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     writeControlPlane(nextControl);
                     writeStrategicInitState(workspaceRoot, {
-                        discovery: modelingDiscovery,
+                        discovery: synthesisDiscovery,
                         models,
                         synthesis: synthesis.report,
                         previous: readStrategicInitState(workspaceRoot),

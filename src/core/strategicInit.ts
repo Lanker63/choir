@@ -4,19 +4,12 @@ import * as YAML from "yaml";
 import type { ControlPlane } from "../schema.js";
 import { stableStringify, deterministicId } from "./deterministicCore.js";
 import { defaultCapabilitiesForMode } from "./runtimeGovernance.js";
+import { strategicTemplateDefaultsFromCatalog } from "./initTemplateCatalog.js";
 import { detectWorkspace, type WorkspaceConfig } from "./workspaceDetection.js";
 
 export type StrategicInitMode = "full" | "expand-domain" | "reclassify" | "recalibrate";
 
-export type StrategicTemplateName =
-  | "backend"
-  | "frontend"
-  | "fintech-platform"
-  | "saas-product"
-  | "enterprise-monolith"
-  | "internal-tooling"
-  | "experimentation-platform"
-  | "distributed-platform";
+export type StrategicTemplateName = string;
 
 export type StrategicPriority =
   | "correctness"
@@ -69,6 +62,8 @@ export type StrategicDomainDraft = {
     rolloutPreferences: RolloutPreference[];
     stabilityProfile: StabilityProfile;
     governanceIntensity: GovernanceIntensity;
+    runtimeMode: RuntimeMode;
+    runtimeCapabilities?: ControlPlane["capabilities"];
   };
 };
 
@@ -95,6 +90,7 @@ export type StrategicDomainModel = {
   stabilityProfile: StabilityProfile;
   governanceIntensity: GovernanceIntensity;
   runtimeMode?: RuntimeMode;
+  runtimeCapabilities?: ControlPlane["capabilities"];
 };
 
 export type StrategicDomainPromptDefaults = {
@@ -151,81 +147,7 @@ type TemplateDefaults = {
   stabilityProfile: StabilityProfile;
   governanceIntensity: GovernanceIntensity;
   runtimeMode: RuntimeMode;
-};
-
-const TEMPLATE_DEFAULTS: Record<StrategicTemplateName, TemplateDefaults> = {
-  backend: {
-    priorities: ["correctness", "stability", "auditability"],
-    optimizationGoals: ["deterministic-replay", "rollback-minimized"],
-    riskTolerance: "moderate",
-    rolloutPreferences: ["phased-required"],
-    stabilityProfile: "adaptive",
-    governanceIntensity: "moderate",
-    runtimeMode: "execution-enabled",
-  },
-  frontend: {
-    priorities: ["iteration-speed", "stability"],
-    optimizationGoals: ["rapid-delivery", "dependency-isolation"],
-    riskTolerance: "moderate",
-    rolloutPreferences: ["phased-optional"],
-    stabilityProfile: "adaptive",
-    governanceIntensity: "moderate",
-    runtimeMode: "execution-enabled",
-  },
-  "fintech-platform": {
-    priorities: ["correctness", "auditability", "rollback-safety"],
-    optimizationGoals: ["deterministic-replay", "minimal-blast-radius", "rollback-minimized"],
-    riskTolerance: "low",
-    rolloutPreferences: ["canary-required", "phased-required"],
-    stabilityProfile: "stable",
-    governanceIntensity: "strict",
-    runtimeMode: "approval-required",
-  },
-  "saas-product": {
-    priorities: ["stability", "iteration-speed", "dependency-safety"],
-    optimizationGoals: ["rapid-delivery", "dependency-isolation"],
-    riskTolerance: "moderate",
-    rolloutPreferences: ["phased-required", "phased-optional"],
-    stabilityProfile: "adaptive",
-    governanceIntensity: "moderate",
-    runtimeMode: "execution-enabled",
-  },
-  "enterprise-monolith": {
-    priorities: ["stability", "auditability", "correctness"],
-    optimizationGoals: ["deterministic-replay", "minimal-blast-radius"],
-    riskTolerance: "low",
-    rolloutPreferences: ["phased-required"],
-    stabilityProfile: "stable",
-    governanceIntensity: "strict",
-    runtimeMode: "approval-required",
-  },
-  "internal-tooling": {
-    priorities: ["developer-autonomy", "iteration-speed"],
-    optimizationGoals: ["rapid-delivery", "parallel-throughput"],
-    riskTolerance: "high",
-    rolloutPreferences: ["all-at-once-allowed", "parallel-optimized"],
-    stabilityProfile: "experimental",
-    governanceIntensity: "relaxed",
-    runtimeMode: "execution-enabled",
-  },
-  "experimentation-platform": {
-    priorities: ["iteration-speed", "developer-autonomy"],
-    optimizationGoals: ["rapid-delivery", "parallel-throughput", "low-governance-friction"],
-    riskTolerance: "high",
-    rolloutPreferences: ["parallel-optimized", "phased-optional"],
-    stabilityProfile: "experimental",
-    governanceIntensity: "relaxed",
-    runtimeMode: "simulation-only",
-  },
-  "distributed-platform": {
-    priorities: ["dependency-safety", "stability", "deterministic-replay"],
-    optimizationGoals: ["dependency-isolation", "minimal-blast-radius", "deterministic-replay"],
-    riskTolerance: "moderate",
-    rolloutPreferences: ["canary-required", "phased-required"],
-    stabilityProfile: "adaptive",
-    governanceIntensity: "moderate",
-    runtimeMode: "distributed-control",
-  },
+  capabilities: ControlPlane["capabilities"];
 };
 
 function readCodeownersOwners(root: string, packagePath: string): string[] {
@@ -382,6 +304,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["canary-required", "phased-required"],
       stabilityProfile: "stable",
       governanceIntensity: "strict",
+      runtimeMode: "approval-required",
     },
   },
   {
@@ -394,6 +317,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["canary-required"],
       stabilityProfile: "stable",
       governanceIntensity: "strict",
+      runtimeMode: "approval-required",
     },
   },
   {
@@ -406,6 +330,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["parallel-optimized", "phased-optional"],
       stabilityProfile: "experimental",
       governanceIntensity: "relaxed",
+      runtimeMode: "simulation-only",
     },
   },
   {
@@ -418,6 +343,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["phased-optional"],
       stabilityProfile: "adaptive",
       governanceIntensity: "moderate",
+      runtimeMode: "execution-enabled",
     },
   },
   {
@@ -430,6 +356,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["phased-required"],
       stabilityProfile: "adaptive",
       governanceIntensity: "moderate",
+      runtimeMode: "execution-enabled",
     },
   },
   {
@@ -442,6 +369,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["canary-required"],
       stabilityProfile: "stable",
       governanceIntensity: "strict",
+      runtimeMode: "approval-required",
     },
   },
   {
@@ -454,6 +382,7 @@ const DOMAIN_KEYWORDS: Array<{ id: string; keywords: string[]; defaults: Strateg
       rolloutPreferences: ["all-at-once-allowed", "parallel-optimized"],
       stabilityProfile: "experimental",
       governanceIntensity: "relaxed",
+      runtimeMode: "simulation-only",
     },
   },
 ];
@@ -497,15 +426,26 @@ function fallbackDomainDefaults(domainId: string): StrategicDomainDraft["inferre
     rolloutPreferences: ["phased-optional"],
     stabilityProfile: "adaptive",
     governanceIntensity: "moderate",
+    runtimeMode: "execution-enabled",
   };
 }
 
 export function strategicTemplateDefaults(template: StrategicTemplateName | undefined): TemplateDefaults | undefined {
-  if (!template) {
+  const defaults = strategicTemplateDefaultsFromCatalog(template);
+  if (!defaults) {
     return undefined;
   }
 
-  return TEMPLATE_DEFAULTS[template];
+  return {
+    priorities: [...defaults.priorities] as StrategicPriority[],
+    optimizationGoals: [...defaults.optimizationGoals] as OptimizationGoal[],
+    riskTolerance: defaults.riskTolerance as RiskTolerance,
+    rolloutPreferences: [...defaults.rolloutPreferences] as RolloutPreference[],
+    stabilityProfile: defaults.stabilityProfile as StabilityProfile,
+    governanceIntensity: defaults.governanceIntensity as GovernanceIntensity,
+    runtimeMode: defaults.runtimeMode as RuntimeMode,
+    capabilities: { ...defaults.capabilities },
+  };
 }
 
 export function discoverStrategicDomains(root: string, template: StrategicTemplateName | undefined): StrategicDiscovery {
@@ -541,6 +481,8 @@ export function discoverStrategicDomains(root: string, template: StrategicTempla
         rolloutPreferences: [...templateDefaults.rolloutPreferences],
         stabilityProfile: templateDefaults.stabilityProfile,
         governanceIntensity: templateDefaults.governanceIntensity,
+        runtimeMode: templateDefaults.runtimeMode,
+        runtimeCapabilities: { ...templateDefaults.capabilities },
       }
       : defaults;
 
@@ -568,6 +510,34 @@ export function discoverStrategicDomains(root: string, template: StrategicTempla
     workspace,
     packages: packageInfos,
     domains,
+  };
+}
+
+export function selectExpandDomainModelingDiscovery(
+  discovery: StrategicDiscovery,
+  currentControl: ControlPlane
+): StrategicDiscovery {
+  const existingPackagePaths = new Set(Object.keys(currentControl.packages ?? {}));
+  const newlyDiscoveredPackagePaths = discovery.packages
+    .map((pkg) => pkg.packagePath)
+    .filter((packagePath) => !existingPackagePaths.has(packagePath));
+
+  if (newlyDiscoveredPackagePaths.length === 0) {
+    return {
+      workspace: discovery.workspace,
+      packages: [],
+      domains: [],
+    };
+  }
+
+  const newPackageSet = new Set(newlyDiscoveredPackagePaths);
+  const selectedDomains = discovery.domains.filter((domain) => domain.packages.some((packagePath) => newPackageSet.has(packagePath)));
+  const selectedPackageSet = new Set(selectedDomains.flatMap((domain) => domain.packages));
+
+  return {
+    workspace: discovery.workspace,
+    packages: discovery.packages.filter((pkg) => selectedPackageSet.has(pkg.packagePath)),
+    domains: selectedDomains,
   };
 }
 
@@ -673,15 +643,43 @@ function strategicIntentFromModels(models: StrategicDomainModel[]): ControlPlane
   };
 }
 
-function toRuntimeCapabilities(mode: RuntimeMode): ControlPlane["capabilities"] {
+function toRuntimeCapabilities(
+  mode: RuntimeMode,
+  overrideCapabilities?: ControlPlane["capabilities"]
+): ControlPlane["capabilities"] {
+  if (overrideCapabilities) {
+    return { ...overrideCapabilities };
+  }
+
   return defaultCapabilitiesForMode(mode);
+}
+
+function resolveGlobalRuntimeCapabilities(
+  models: StrategicDomainModel[],
+  fallbackMode: RuntimeMode
+): ControlPlane["capabilities"] {
+  const explicit = models
+    .map((model) => model.runtimeCapabilities)
+    .filter((value): value is NonNullable<ControlPlane["capabilities"]> => value !== undefined);
+
+  if (explicit.length === 0) {
+    return toRuntimeCapabilities(fallbackMode);
+  }
+
+  const first = stableStringify(explicit[0]);
+  const allMatch = explicit.every((capabilities) => stableStringify(capabilities) === first);
+  if (!allMatch) {
+    return toRuntimeCapabilities(fallbackMode);
+  }
+
+  return { ...explicit[0] };
 }
 
 function toPackageMode(model: StrategicDomainModel): NonNullable<ControlPlane["packageModes"]>[string] {
   if (model.runtimeMode) {
     return {
       mode: model.runtimeMode,
-      capabilities: toRuntimeCapabilities(model.runtimeMode),
+      capabilities: toRuntimeCapabilities(model.runtimeMode, model.runtimeCapabilities),
     };
   }
 
@@ -689,14 +687,14 @@ function toPackageMode(model: StrategicDomainModel): NonNullable<ControlPlane["p
     const mode: RuntimeMode = "approval-required";
     return {
       mode,
-      capabilities: toRuntimeCapabilities(mode),
+      capabilities: toRuntimeCapabilities(mode, model.runtimeCapabilities),
     };
   }
 
   const mode: RuntimeMode = "execution-enabled";
   return {
     mode,
-    capabilities: toRuntimeCapabilities(mode),
+    capabilities: toRuntimeCapabilities(mode, model.runtimeCapabilities),
   };
 }
 
@@ -776,6 +774,7 @@ export function seedStrategicDomainPromptDefaults(
     stabilityProfile: currentIntent?.stabilityProfile ?? domain.inferred.stabilityProfile,
     governanceIntensity: currentIntent?.governanceIntensity ?? domain.inferred.governanceIntensity,
     runtimeMode: uniqueExistingDomainRuntimeMode(domain, currentControl)
+      ?? domain.inferred.runtimeMode
       ?? defaultRuntimeModeFromPosture(
         currentIntent?.governanceIntensity ?? domain.inferred.governanceIntensity,
         currentIntent?.riskTolerance ?? domain.inferred.riskTolerance,
@@ -788,6 +787,12 @@ export function synthesizeStrategicControlPlane(
   input: StrategicInitSynthesisInput
 ): StrategicInitSynthesisResult {
   const hasRootPackage = fs.existsSync(path.join(input.discovery.workspace.root, "package.json"));
+  const singlePackageRooted = hasRootPackage && input.discovery.packages.length === 1;
+  const singlePackageRuntimeMode = singlePackageRooted && input.models.length === 1
+    ? input.models[0]?.runtimeMode
+    : undefined;
+  const effectiveRuntimeMode = singlePackageRuntimeMode ?? input.runtimeMode;
+  const effectiveRuntimeCapabilities = resolveGlobalRuntimeCapabilities(input.models, effectiveRuntimeMode);
   const packageDomainMap = new Map<string, string>();
   for (const domain of input.discovery.domains) {
     for (const pkg of domain.packages) {
@@ -850,12 +855,12 @@ export function synthesizeStrategicControlPlane(
 
   const { domains: _domains, ...baseWithoutDomains } = baseControl;
   const runtimeScopedBase = scopeControlPlaneRuntimeForWorkspace(baseWithoutDomains as ControlPlane, hasRootPackage);
-  const strategicScopedBase = hasRootPackage
-    ? runtimeScopedBase
-    : (() => {
+  const strategicScopedBase = (!hasRootPackage || singlePackageRooted)
+    ? (() => {
       const { strategicIntent: _strategicIntent, ...rest } = runtimeScopedBase;
       return rest as ControlPlane;
-    })();
+    })()
+    : runtimeScopedBase;
 
   const nextPackages = input.mode === "expand-domain"
     ? {
@@ -866,11 +871,25 @@ export function synthesizeStrategicControlPlane(
     }
     : (input.mode === "recalibrate" ? (baseControl.packages ?? {}) : discoveredPackages);
 
+  const nextPackageModes = input.mode === "recalibrate"
+    ? {
+      ...(strategicScopedBase.packageModes ?? {}),
+      ...packageModes,
+    }
+    : (input.mode === "expand-domain"
+      ? {
+        ...(strategicScopedBase.packageModes ?? {}),
+        ...Object.fromEntries(
+          Object.entries(packageModes).filter(([id]) => !(strategicScopedBase.packageModes && Object.prototype.hasOwnProperty.call(strategicScopedBase.packageModes, id)))
+        ),
+      }
+      : packageModes);
+
   const nextControl: ControlPlane = {
     ...strategicScopedBase,
     ...(input.mission && input.mission.trim().length > 0 ? { mission: input.mission.trim() } : {}),
     ...(input.vision && input.vision.trim().length > 0 ? { vision: input.vision.trim() } : {}),
-    ...(hasRootPackage ? { strategicIntent: strategicIntentFromModels(input.models) } : {}),
+    ...(hasRootPackage && !singlePackageRooted ? { strategicIntent: strategicIntentFromModels(input.models) } : {}),
     packages: nextPackages,
     contexts: {
       ...(strategicScopedBase.contexts ?? {}),
@@ -881,19 +900,14 @@ export function synthesizeStrategicControlPlane(
     ...(hasRootPackage
       ? {
         runtime: {
-          mode: input.runtimeMode,
+          mode: effectiveRuntimeMode,
         },
-        capabilities: toRuntimeCapabilities(input.runtimeMode),
+        capabilities: effectiveRuntimeCapabilities,
       }
       : {}),
     ...(!hasRootPackage
       ? {
-        packageModes: input.mode === "recalibrate"
-          ? {
-            ...(strategicScopedBase.packageModes ?? {}),
-            ...packageModes,
-          }
-          : packageModes,
+        packageModes: nextPackageModes,
       }
       : {}),
   };
@@ -930,7 +944,7 @@ export function synthesizeStrategicControlPlane(
       workspaceType: input.discovery.workspace.type,
       packages: input.discovery.packages.length,
       domains: input.models.length,
-      runtimeMode: input.runtimeMode,
+      runtimeMode: effectiveRuntimeMode,
       calibration: input.calibration,
     },
   };

@@ -119,9 +119,15 @@ Core flow:
 - runtime governance scope is exclusive during init synthesis: rooted workspaces persist global `runtime` + `capabilities`, rootless workspaces persist `packageModes`
 - strategic intent scope is exclusive during init synthesis when `packageModes` are present: rootless workspaces omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`
 - rootless runtime scoping is enforced on final init write paths (including merge-mode finish with no domains selected) so root-level intent updates never leave global `runtime`/`capabilities` behind
-- init persists default `capabilities` correlated to each selected runtime mode: globally when a root package exists, otherwise per-package in `packageModes`
+- init persists `capabilities` at the applicable governance scope from the authoritative source: template-defined capabilities from `config/init-templates.json` when `--template` is used, otherwise deterministic mode defaults
 - strategic init rerun modes: `@choir init --expand-domain`, `@choir init --reclassify`, `@choir init --recalibrate`
-- strategic init templates: `backend`, `frontend`, `fintech-platform`, `saas-product`, `enterprise-monolith`, `internal-tooling`, `experimentation-platform`, `distributed-platform`
+- `@choir init --expand-domain` scopes strategic re-model prompts to domains touched by newly discovered packages (it does not re-prompt unchanged domains)
+- strategic init templates are sourced from `config/init-templates.json` (single source of truth for available `@choir init --template` values and defaults)
+- malformed `config/init-templates.json` entries now fail closed at load time via strict schema validation (startup/runtime command surfaces reject invalid catalogs)
+- strategic init single-select prompts (for example risk tolerance, stability profile, governance intensity, runtime mode) explicitly mark the current/default value during template-seeded init and re-init flows
+- template-selected runtimeMode (from config/init-templates.json) now seeds per-domain runtime prompt defaults during fresh init and re-init when no package-level runtime override exists
+- rooted single-package synthesis now avoids duplicated strategic intent blocks by persisting package-level `packages.".".strategicIntent` and omitting global `strategicIntent`
+- rooted single-package init no longer prompts for a separate global runtime mode after domain modeling; global runtime is derived from the sole domain runtime selection
 - analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
