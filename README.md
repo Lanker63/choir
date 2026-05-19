@@ -74,7 +74,7 @@ execution:
 Policy merge order is deterministic: org -> repo -> environment.
 Parent deny cannot be bypassed.
 Runtime governance order is deterministic: runtime -> policy -> approval -> execution.
-Strategic intent order is deterministic: global strategicIntent -> domain -> package -> context -> orchestration unit.
+Strategic intent order is deterministic: domain -> package -> context -> orchestration unit.
 
 ## Intent Semantics
 
@@ -283,7 +283,7 @@ packageModes:
 ```
 
 Global `runtime` and `packageModes` are mutually exclusive in a valid control plane.
-Global `strategicIntent` and `packageModes` are also mutually exclusive; package-scoped governance must use `packages.*.strategicIntent`.
+Strategic intent is modeled at domain/package/context scopes; package-scoped governance should define intent on `packages.*.strategicIntent`.
 
 Runtime governance decisions are persisted in orchestration traces and diagnostics metadata under runtimeGovernance.
 

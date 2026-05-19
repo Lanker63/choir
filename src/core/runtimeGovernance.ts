@@ -33,12 +33,6 @@ export type RuntimeConfig = {
   }>;
 };
 
-export type RuntimeCapabilityEvaluation = {
-  capability: Capability;
-  decision: CapabilityDecision;
-  reason: "capability-disabled" | "mode-requires-approval" | "capability-enabled";
-};
-
 export type PackageRuntimeDecision = {
   packageName: string;
   mode: RuntimeMode;

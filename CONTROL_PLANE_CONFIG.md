@@ -233,7 +233,6 @@ Domain key is a free-form non-empty string.
 ```yaml
 packages:
   packages/payments:
-    domain: payments
     strategicIntent:
       riskTolerance: low
 ```
@@ -241,7 +240,7 @@ packages:
 Notes:
 
 - Package key is a non-empty string (typically workspace-relative package path/id).
-- domain is optional.
+- domain is optional for manual mapping; strategic init does not emit `packages.*.domain` in generated output.
 - strategicIntent is optional.
 
 ### 4.5 contexts
@@ -532,7 +531,6 @@ domains:
 
 packages:
   packages/payments:
-    domain: payments
     strategicIntent:
       architecturalPosture:
         - strict-boundaries

@@ -3,6 +3,7 @@
 Validates all functional capabilities through a manual, step-by-step QA/QC procedure. Steps are grouped by what is being tested. Each numbered step describes the action to perform; sub-items describe what to validate as a result.
 
 Scope assumption: this manual smoke test is executed in a target repository using the Choir extension runtime surfaces (chat/UI), not in the Choir extension source repository.
+Configuration assertions in this procedure use the current control-plane schema (`runtime`, `capabilities`, `packageModes`) rather than legacy keys.
 
 ---
 

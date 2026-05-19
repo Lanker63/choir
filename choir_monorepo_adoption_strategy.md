@@ -103,16 +103,17 @@ WITHOUT changing anything.
 Initial config SHOULD look like:
 
 ```yaml
-mode: observe-only
+runtime:
+  mode: observe-only
 
-execution:
-  enabled: false
-
-simulation:
-  enabled: true
-
-preview:
-  enabled: true
+capabilities:
+  preview: true
+  simulate: true
+  execute: false
+  optimize: true
+  import: true
+  install: false
+  update: false
 ```
 
 ---
@@ -197,11 +198,20 @@ BEFORE allowing execution.
 Examples:
 
 ```yaml
-policies:
-  org:
-    deny:
-      - crossPackageMutationWithoutApproval
-      - productionExecutionWithoutSimulation
+policy:
+  rules:
+    - id: cross-package-mutation-requires-approval
+      description: "Cross-package mutation requires an approval gate"
+      constraint:
+        type: require
+      message: "Cross-package mutation must be approval-gated"
+      severity: error
+    - id: execute-requires-simulation
+      description: "Execution requires prior simulation evidence"
+      constraint:
+        type: require
+      message: "Run simulation before execute"
+      severity: error
 ```
 
 ---
@@ -211,11 +221,13 @@ policies:
 Example:
 
 ```yaml
-ownership:
-  payments:
-    owners:
-      - payments-team
+contexts:
+  payments-owned:
+    packages:
+      - packages/payments
 ```
+
+Use repository ownership controls (for example CODEOWNERS) as the enforcement layer, and keep Choir context mappings aligned with those boundaries.
 
 ---
 
@@ -224,9 +236,17 @@ ownership:
 Example:
 
 ```yaml
-criticality:
-  payments: critical
-  auth: critical
+packages:
+  packages/payments:
+    strategicIntent:
+      riskTolerance: low
+      governanceIntensity: strict
+      rolloutPreferences:
+        - canary-required
+  packages/auth:
+    strategicIntent:
+      riskTolerance: low
+      governanceIntensity: strict
 ```
 
 This affects:
@@ -316,10 +336,13 @@ Allow REAL execution — but inside:
 Example:
 
 ```yaml
-execution:
-  allowedPackages:
-    - internal-tools
-    - ui-playground
+packageModes:
+  internal-tools:
+    mode: execution-enabled
+  ui-playground:
+    mode: execution-enabled
+  payments:
+    mode: approval-required
 ```
 
 ---

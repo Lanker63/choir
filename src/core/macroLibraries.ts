@@ -57,18 +57,6 @@ export type ChoirLibrary = {
   integrityHash: string;
 };
 
-export type RegistryEntry = {
-  id: string;
-  version: string;
-  selectors: string[];
-  capabilities: string[];
-  compatibility: string;
-};
-
-export type LibraryRegistry = {
-  libraries: RegistryEntry[];
-};
-
 export type MacroLibrary = {
   name: string;
   version: string;
@@ -77,11 +65,6 @@ export type MacroLibrary = {
     description?: string;
     owner?: string;
   };
-};
-
-export type MacroLibraryCatalogEntry = {
-  name: string;
-  versions: string[];
 };
 
 export type LibraryCatalogEntry = {
@@ -347,6 +330,10 @@ function compareSemver(left: string, right: string): number {
 
 function uniqueSorted(values: string[]): string[] {
   return Array.from(new Set(values.filter((value) => value.trim().length > 0))).sort((left, right) => left.localeCompare(right));
+}
+
+function uniqueSemverSorted(values: string[]): string[] {
+  return Array.from(new Set(values.filter((value) => value.trim().length > 0))).sort((left, right) => compareSemver(left, right));
 }
 
 function normalizeMacro(macro: Macro): Macro {
@@ -1134,15 +1121,6 @@ export function detectBreakingChanges(oldLib: MacroLibrary, newLib: MacroLibrary
   };
 }
 
-export function listLibraryVersions(root: string, name: string): string[] {
-  if (!LIBRARY_NAME_PATTERN.test(name)) {
-    throw new LibraryResolutionError("registry-resolution", `Invalid library name: ${name}`);
-  }
-
-  const candidates = resolveLibraryCandidates(root, name);
-  return uniqueSorted(candidates.map((entry) => entry.library.version)).sort((left, right) => compareSemver(left, right));
-}
-
 function selectorListForLibrary(entries: ResolvedLibrary[]): string[] {
   const selectors = ["latest", "stable"];
   for (const entry of entries) {
@@ -1165,7 +1143,7 @@ export function listLibraryCatalog(root: string): LibraryCatalogEntry[] {
   return [...grouped.entries()]
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([id, entries]) => {
-      const versions = uniqueSorted(entries.map((entry) => entry.library.version)).sort((left, right) => compareSemver(left, right));
+      const versions = uniqueSemverSorted(entries.map((entry) => entry.library.version));
       const selectors = selectorListForLibrary(entries);
       const capabilities = uniqueSorted(entries.flatMap((entry) => entry.library.capabilities.map((capability) => capability.id)));
       const compatibility = uniqueSorted(entries.map((entry) => entry.library.compatibility ?? "unspecified")).join(", ");
@@ -1178,13 +1156,6 @@ export function listLibraryCatalog(root: string): LibraryCatalogEntry[] {
         compatibility,
       };
     });
-}
-
-export function listMacroLibraryCatalog(root: string): MacroLibraryCatalogEntry[] {
-  return listLibraryCatalog(root).map((entry) => ({
-    name: entry.id,
-    versions: entry.versions,
-  }));
 }
 
 function resolveLibraryBySelector(root: string, id: string, selector: string): ResolvedLibrary {
@@ -1229,40 +1200,11 @@ export function readMacroLock(root: string): MacroLibraryLock {
   return toMacroLock(readLibraryLock(root));
 }
 
-export function writeMacroLock(root: string, lock: MacroLibraryLock): void {
-  const normalized: ChoirLibraryLock = {
-    libraries: Object.fromEntries(Object.entries(lock.libraries)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([id, version]) => {
-        const resolved = resolveLibraryByVersion(root, id, version);
-        return [id, {
-          version: resolved.library.version,
-          selector: "exact",
-          integrityHash: resolved.library.integrityHash,
-          source: resolved.source,
-          installed: false,
-        } satisfies LibraryLockEntry];
-      })),
-  };
-
-  writeLibraryLock(root, normalized);
-}
-
 function updateLockAndGraph(root: string, lock: ChoirLibraryLock): ChoirLibraryLock {
   writeLibraryLock(root, lock);
   const graph = buildCapabilityGraph(root, lock);
   ensureReplayConsistency(root, lock, graph);
   return normalizeLock(lock);
-}
-
-export function lockLibraries(root: string): MacroLibraryLock {
-  const current = readLibraryLock(root);
-  for (const [id, entry] of Object.entries(current.libraries)) {
-    const resolved = resolveLibraryByVersion(root, id, entry.version);
-    validateIntegrity(resolved.library);
-  }
-
-  return toMacroLock(updateLockAndGraph(root, current));
 }
 
 export function lockChoirLibraries(root: string): ChoirLibraryLock {
@@ -1450,19 +1392,6 @@ export function resolveLibraryMacro(root: string, qualifiedMacroId: string): {
       resolvedVersion: version,
     },
     macro,
-  };
-}
-
-export function libraryRegistry(root: string): LibraryRegistry {
-  const catalog = listLibraryCatalog(root);
-  return {
-    libraries: catalog.map((entry) => ({
-      id: entry.id,
-      version: entry.versions[entry.versions.length - 1] ?? "0.0.0",
-      selectors: entry.selectors,
-      capabilities: entry.capabilities,
-      compatibility: entry.compatibility,
-    })),
   };
 }
 
