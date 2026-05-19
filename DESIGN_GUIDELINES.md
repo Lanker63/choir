@@ -32,6 +32,7 @@ Hard rule: runtime source modules under `src/` must not import from `src/tests/`
 Hard rule: VS Code extension package manifest must not declare an npm `bin` entry for `choir`; shell PATH exposure is an explicit CLI-install concern, not extension installation behavior.
 Hard rule: shell `choir` command distribution is provided only by standalone package `packages/choir-cli` with explicit user install (`npm install -g choir-cli` or `npx choir-cli`).
 Hard rule: standalone CLI release automation must only publish on tag push events; pull requests must run pack dry-run validation and must not publish.
+Hard rule: choir-cli command responses must be JSON envelopes (`ok`, `command`, `data|error`) so automation consumers receive deterministic machine-readable output.
 Chat-triggered environment actions (for example CLI install) must execute through explicit, user-visible terminal commands with clear scope selection and cancellation path.
 Chat-triggered CLI install must require an explicit package source and fail closed for ambiguous/default package names.
 

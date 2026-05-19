@@ -190,6 +190,12 @@ import {
   normalizeCliPackageSpec,
   validateCliPackageSpec,
 } from "../../core/cliInstall.js";
+import { parseCliIntent } from "../../core/cliRuntime.js";
+import {
+  CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS,
+  CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS,
+  isCLIExcludedVSCodeShortcut,
+} from "../../core/cliSurface.js";
 import { synthesizePreviewContract } from "../../core/previewOrchestrator.js";
 import {
   getAbstraction,
@@ -9617,6 +9623,68 @@ const finalPass: TestPass = {
         assert.strictEqual(parsed.name, "choir-cli");
         assert.deepStrictEqual(parsed.bin, { choir: "./dist/out/cli.js" });
         assert.strictEqual(parsed.scripts?.prepack, "npm run prepare:dist");
+      },
+    },
+    {
+      id: "X.9",
+      name: "cli runtime parser preserves verify/ci behavior and fail-closes VS Code-only shortcuts",
+      run: async () => {
+        assert.deepStrictEqual(parseCliIntent(["verify"]), {
+          type: "verify",
+          mode: "full",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["verify", "--quick"]), {
+          type: "verify",
+          mode: "quick",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["verify", "--chaos", "extreme"]), {
+          type: "verify",
+          mode: "chaos",
+          chaosMode: "extreme",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["verify", "--property", "--seed", "7"]), {
+          type: "verify",
+          mode: "property",
+          seed: 7,
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["ci", "run"]), {
+          type: "ci-run",
+        });
+
+        assert.strictEqual(isCLIExcludedVSCodeShortcut(["control"]), true);
+        assert.strictEqual(isCLIExcludedVSCodeShortcut(["timeline"]), true);
+        assert.strictEqual(isCLIExcludedVSCodeShortcut(["diagnostics"]), true);
+        assert.strictEqual(isCLIExcludedVSCodeShortcut(["verify"]), false);
+
+        const excludedShortcut = parseCliIntent(["control"]);
+        assert.strictEqual(excludedShortcut.type, "parse-error");
+        if (excludedShortcut.type === "parse-error") {
+          assert.ok(excludedShortcut.reason.includes("VS Code-only"));
+        }
+      },
+    },
+    {
+      id: "X.10",
+      name: "cli scope registry captures in-scope parity surface and explicit exclusions",
+      run: async () => {
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("verify"));
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("ci-run"));
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("init"));
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("execute"));
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("audit-report"));
+        assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("abstraction-run"));
+
+        assert.ok(CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS.includes("panel-control"));
+        assert.ok(CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS.includes("panel-timeline"));
+        assert.ok(CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS.includes("cli-install-helper"));
+
+        assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("panel-control" as never), false);
+        assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("panel-timeline" as never), false);
+        assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("cli-install-helper" as never), false);
       },
     },
   ],

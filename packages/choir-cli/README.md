@@ -15,6 +15,20 @@ choir ci run
 choir verify --quick
 ```
 
+`choir-cli` emits JSON envelopes for command output:
+
+```json
+{
+	"ok": true,
+	"command": "verify",
+	"data": {
+		"mode": "quick"
+	}
+}
+```
+
+Current implementation coverage in this package slice includes `verify` and `ci run`.
+
 ## Publish Notes
 
 This package copies runtime files from the source repository `out/` tree during `prepack`.
