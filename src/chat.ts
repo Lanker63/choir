@@ -102,8 +102,6 @@ import {
     readStrategicInitState,
     selectExpandDomainModelingDiscovery,
     seedStrategicDomainPromptDefaults,
-    // scopeControlPlaneRuntimeForWorkspace,
-    strategicTemplateDefaults,
     synthesizeStrategicControlPlane,
     type GovernanceIntensity,
     type OptimizationGoal,
@@ -1052,8 +1050,6 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         ? (readControlPlane() ?? createDefaultControlPlane())
                         : createDefaultControlPlane();
 
-                    // currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
-
                     for (const command of commands) {
                         const compiled = compileDSLAndWrite(command, currentControl, controlPath, {
                             workspaceRoot,
@@ -1086,7 +1082,6 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     visionForSynthesis = wizard.state.data.vision ?? currentControl.vision;
 
                     if (!hasRootPackage) {
-                        // currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
                         writeControlPlane(currentControl);
                     }
 
@@ -1168,7 +1163,6 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     if (mergeSelection && models.length === 0) {
                         if (!hasRootPackage) {
-                            // currentControl = scopeControlPlaneRuntimeForWorkspace(currentControl, hasRootPackage);
                             writeControlPlane(currentControl);
                         }
 

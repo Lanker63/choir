@@ -7,7 +7,6 @@ import { ControlPlaneSchema } from "../../../schema.js";
 import {
   calibrateStrategicOrchestration,
   discoverStrategicDomains,
-  // scopeControlPlaneRuntimeForWorkspace,
   seedStrategicDomainPromptDefaults,
   synthesizeStrategicControlPlane,
   type StrategicDomainModel,
@@ -401,15 +400,6 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
         : "rootless synthesis should persist packageModes without global runtime/capabilities",
     });
 
-    // const rootlessStrategicScopeExclusive = rootlessSynthesis.controlPlane.strategicIntent === undefined;
-    // checks.push({
-    //   name: "rootless-strategic-scope-exclusive",
-    //   passed: rootlessStrategicScopeExclusive,
-    //   detail: rootlessStrategicScopeExclusive
-    //     ? "rootless synthesis omits global strategicIntent when packageModes are used"
-    //     : "rootless synthesis should not persist global strategicIntent with packageModes",
-    // });
-
     const rootlessPackageCapabilitiesCoherent = rootlessDiscovery.packages.every((pkg) => {
       const packageMode = rootlessSynthesis.controlPlane.packageModes?.[pkg.packagePath];
       const mode = packageMode?.mode;
@@ -453,38 +443,6 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
         : "expected all rootless package modes/capabilities to follow explicit domain runtime mode",
     });
 
-    // const scopedRootless = scopeControlPlaneRuntimeForWorkspace(control, false);
-    // const scopedRooted = scopeControlPlaneRuntimeForWorkspace(control, true);
-    // checks.push({
-    //   name: "runtime-scoping-helper-rootless-omits-global-runtime",
-    //   passed: scopedRootless.runtime === undefined && scopedRootless.capabilities === undefined,
-    //   detail: scopedRootless.runtime === undefined && scopedRootless.capabilities === undefined
-    //     ? "rootless runtime/capabilities removed"
-    //     : "rootless runtime/capabilities were not removed",
-    // });
-    // checks.push({
-    //   name: "runtime-scoping-helper-rooted-preserves-global-runtime",
-    //   passed: scopedRooted.runtime?.mode === "execution-enabled",
-    //   detail: `runtime=${scopedRooted.runtime?.mode ?? "none"}`,
-    // });
-
-    // const rootlessControlPath = path.join(rootlessFixture.root, ".choir", "choir.config.yaml");
-    // let rootlessWorkingControl = scopeControlPlaneRuntimeForWorkspace(control, false);
-    // const rootlessCompiled = compileDSLAndWrite(
-    //   'choir define mission "Rootless mission"',
-    //   rootlessWorkingControl,
-    //   rootlessControlPath,
-    //   { workspaceRoot: rootlessFixture.root, actorId: "init-verification" }
-    // );
-    // rootlessWorkingControl = scopeControlPlaneRuntimeForWorkspace(rootlessCompiled.updatedControlPlane, false);
-
-    // checks.push({
-    //   name: "rootless-runtime-cleanup-after-root-intent-write",
-    //   passed: rootlessWorkingControl.runtime === undefined && rootlessWorkingControl.capabilities === undefined,
-    //   detail: rootlessWorkingControl.runtime === undefined && rootlessWorkingControl.capabilities === undefined
-    //     ? "runtime/capabilities removed after root intent write"
-    //     : "runtime/capabilities persisted after root intent write",
-    // });
   } finally {
     fixture.dispose();
     rootlessFixture.dispose();

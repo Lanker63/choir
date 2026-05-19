@@ -259,7 +259,7 @@ export function evaluateRuntimeGovernance(input: {
   const strategicDomains = sortedUnique(packageNames
     .map((packageName) => input.controlPlane.packages?.[packageName]?.domain ?? packageName)
     .filter((entry): entry is string => typeof entry === "string"));
-  const strategicGovernanceIntensity = "moderate"; //input.controlPlane.strategicIntent?.governanceIntensity ?? "moderate";
+  const strategicGovernanceIntensity = "moderate"; 
 
   if (packageDeny) {
     finalDecision = "deny";

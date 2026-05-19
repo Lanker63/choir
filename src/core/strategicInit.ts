@@ -703,18 +703,6 @@ function mergeUniqueSorted(left: string[] | undefined, right: string[] | undefin
   return [...new Set([...(left ?? []), ...(right ?? [])])].sort((a, b) => a.localeCompare(b));
 }
 
-// export function scopeControlPlaneRuntimeForWorkspace(
-//   control: ControlPlane,
-//   hasRootPackage: boolean
-// ): ControlPlane {
-//   if (hasRootPackage) {
-//     return control;
-//   }
-
-//   const { runtime: _runtime, capabilities: _capabilities, ...rest } = control;
-//   return rest as ControlPlane;
-// }
-
 function defaultRuntimeModeFromPosture(
   governanceIntensity: GovernanceIntensity,
   riskTolerance: RiskTolerance
@@ -855,13 +843,6 @@ export function synthesizeStrategicControlPlane(
     : existing;
 
   const { domains: _domains, ...baseWithoutDomains } = baseControl;
-  // const runtimeScopedBase = scopeControlPlaneRuntimeForWorkspace(baseWithoutDomains as ControlPlane, hasRootPackage);
-  // const strategicScopedBase = (!hasRootPackage || singlePackageRooted)
-  //   ? (() => {
-  //     const { strategicIntent: _strategicIntent, ...rest } = runtimeScopedBase;
-  //     return rest as ControlPlane;
-  //   })()
-  //   : runtimeScopedBase;
   const strategicScopedBase = baseWithoutDomains as ControlPlane;
   const nextPackages = input.mode === "expand-domain"
     ? {
@@ -921,7 +902,6 @@ export function synthesizeStrategicControlPlane(
 
   const strategicHash = deterministicId("init-strategic", {
     models: input.models,
-    // strategicIntent: nextControl.strategicIntent,
     packages: nextControl.packages,
   }, 16);
 

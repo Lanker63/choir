@@ -69,7 +69,6 @@ export class StrategicInitWizardViewProvider {
 
     const domains = control?.domains ? Object.entries(control.domains).sort(([left], [right]) => left.localeCompare(right)) : [];
     const packages = control?.packages ? Object.entries(control.packages).sort(([left], [right]) => left.localeCompare(right)) : [];
-    // const strategic = control?.strategicIntent;
 
     const domainRows = domains.length > 0
       ? domains.map(([id, domain]) => {
