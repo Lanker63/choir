@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 export type ContractVerificationMode = "quick" | "full";
 
 export type ContractCommandResult = {
-  id: "build" | "architecture" | "verification" | "property" | "chaos" | "runtime-governance";
+  id: "typecheck" | "architecture" | "verification" | "property" | "chaos" | "runtime-governance";
   command: string;
   args: string[];
   exitCode: number;
@@ -367,7 +367,6 @@ function nodeExecutable(): string {
 function looksLikeChoirProjectRoot(root: string): boolean {
   const packagePath = path.join(root, "package.json");
   const srcHarness = path.join(root, "src", "tests", "verification", "harness.ts");
-  const outHarness = path.join(root, "out", "tests", "verification", "harness.js");
 
   if (!fs.existsSync(packagePath)) {
     return false;
@@ -383,7 +382,7 @@ function looksLikeChoirProjectRoot(root: string): boolean {
       && typeof scripts["verify"] === "string"
       && typeof scripts["verify:contracts"] === "string";
 
-    return hasCoreScripts && (fs.existsSync(srcHarness) || fs.existsSync(outHarness));
+    return hasCoreScripts && fs.existsSync(srcHarness);
   } catch {
     return false;
   }
@@ -438,20 +437,20 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
   const chaosIterations = mode === "full" ? "120" : "10";
   const node = nodeExecutable();
 
-  const build = runCommand("build", workspaceRoot, npmExecutable(), ["run", "build:extension"]);
+  const typecheck = runCommand("typecheck", workspaceRoot, npmExecutable(), ["run", "build:extension", "--", "--noEmit"]);
 
   const architecture = runCommand(
     "architecture",
     workspaceRoot,
     node,
-    [path.join("out", "tests", "architecture", "suite.js")]
+    ["--loader", "ts-node/esm", path.join("src", "tests", "architecture", "suite.ts")]
   );
 
   const verification = runCommand(
     "verification",
     workspaceRoot,
     node,
-    [path.join("out", "tests", "verification", "harness.js")],
+    ["--loader", "ts-node/esm", path.join("src", "tests", "verification", "harness.ts")],
     { CHOIR_VERIFY_MODE: verifyMode }
   );
 
@@ -459,7 +458,7 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
     "property",
     workspaceRoot,
     node,
-    [path.join("out", "tests", "verification", "propertyChaosHarness.js"), "property"],
+    ["--loader", "ts-node/esm", path.join("src", "tests", "verification", "propertyChaosHarness.ts"), "property"],
     { CHOIR_PROPERTY_ITERATIONS: propertyIterations }
   );
 
@@ -467,7 +466,7 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
     "chaos",
     workspaceRoot,
     node,
-    [path.join("out", "tests", "verification", "propertyChaosHarness.js"), "chaos", "moderate"],
+    ["--loader", "ts-node/esm", path.join("src", "tests", "verification", "propertyChaosHarness.ts"), "chaos", "moderate"],
     { CHOIR_CHAOS_ITERATIONS: chaosIterations }
   );
 
@@ -475,10 +474,10 @@ function executeContractCommands(workspaceRoot: string, mode: ContractVerificati
     "runtime-governance",
     workspaceRoot,
     node,
-    [path.join("out", "tests", "verification", "runtimeGovernance.js")]
+    ["--loader", "ts-node/esm", path.join("src", "tests", "verification", "runtimeGovernance.ts")]
   );
 
-  return [build, architecture, verification, property, chaos, runtimeGovernance];
+  return [typecheck, architecture, verification, property, chaos, runtimeGovernance];
 }
 
 function evaluateSections(outputs: Record<OutputSource, string>): ContractSectionResult[] {

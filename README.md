@@ -199,6 +199,7 @@ Additional commands:
   - @choir verify --full
   - choir verify --full
   - Chat/CLI verification now uses runtime-safe checks only (no direct dependency on `src/tests` modules)
+  - npm test and npm run verify:* execute TypeScript source tests directly from src/tests via ts-node ESM loader (no out/tests JavaScript execution)
   - `verify --contracts` reports a runtime contract subset in target repos; full source harness contract checks remain source-repo CI concerns
   - npm run verify:simulation
   - npm run verify:execution

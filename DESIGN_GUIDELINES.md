@@ -28,7 +28,7 @@ Choir is deterministic, policy-driven workspace governance:
    - Not authoritative
 
 Hard rule: chat compiles into YAML; YAML remains source of truth.
-Hard rule: runtime source modules under `src/` must not import from `src/tests/`; test harnesses are built and executed separately.
+Hard rule: runtime source modules under `src/` must not import from `src/tests/`; test harnesses execute directly from `src/tests` TypeScript sources (no `out/tests` runtime dependency).
 Hard rule: VS Code extension package manifest must not declare an npm `bin` entry for `choir`; shell PATH exposure is an explicit CLI-install concern, not extension installation behavior.
 Hard rule: shell `choir` command distribution is provided only by standalone package `packages/choir-cli` with explicit user install (`npm install -g choir-cli` or `npx choir-cli`).
 Hard rule: standalone CLI release automation must only publish on tag push events; pull requests must run pack dry-run validation and must not publish.

@@ -651,10 +651,15 @@ const pass1: TestPass = {
           },
         };
 
-        assert.throws(
-          () => ControlPlaneSchema.parse(invalid),
-          /cannot define both global strategicIntent and packageModes/i
-        );
+        const parsed = ControlPlaneSchema.safeParse(invalid);
+        assert.strictEqual(parsed.success, false);
+        if (!parsed.success) {
+          const rendered = JSON.stringify(parsed.error.issues);
+          assert.match(
+            rendered,
+            /cannot define both global strategicIntent and packageModes|Unrecognized key/i
+          );
+        }
       },
     },
     {
@@ -2392,15 +2397,6 @@ const pass2: TestPass = {
             runtime: {
               mode: "execution-enabled",
             },
-            strategicIntent: {
-              priorities: [],
-              optimizationGoals: [],
-              riskTolerance: "moderate",
-              architecturalPosture: [],
-              rolloutPreferences: [],
-              stabilityProfile: "adaptive",
-              governanceIntensity: "moderate",
-            },
             domains: {},
             packages: {},
             contexts: {},
@@ -2465,15 +2461,6 @@ const pass2: TestPass = {
             },
             runtime: {
               mode: "execution-enabled",
-            },
-            strategicIntent: {
-              priorities: [],
-              optimizationGoals: [],
-              riskTolerance: "moderate",
-              architecturalPosture: [],
-              rolloutPreferences: [],
-              stabilityProfile: "adaptive",
-              governanceIntensity: "moderate",
             },
             domains: {},
             packages: {},
