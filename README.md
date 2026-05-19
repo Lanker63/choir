@@ -26,12 +26,34 @@ Standalone CLI install and publish path:
 
 - Install globally: `npm install -g choir-cli`
 - One-off run: `npx choir-cli verify --quick`
+- Analyze summary payload: `npx choir-cli analyze summary`
 - Build publishable CLI package from source repo: `npm run build:cli:package`
 - Pack locally for validation: `npm run pack:cli`
 - Publish package: `npm run publish:cli`
+- All `choir-cli` commands emit deterministic JSON envelopes: `{ "ok": boolean, "command": string, "data"|"error": ... }`
+- CLI parity command families currently include:
+  - control-plane mutation and status: `define`, `status`, `policy status`, `approve`, `reject`, `export dsl`, `export --format json`, `remove goal`
+  - analysis and orchestration runtime: `analyze`, `plan --optimize|--adaptive`, `simulate`, `preview`, `execute`, `rollback`
+  - refactor and macro/abstraction: `refactor rename|move|extract|inline`, `macro list|show|run`, `abstraction list|describe|<abstraction-id>`
+  - library and audit: `import`, `library list|install|update|lock`, `audit log|query|report`
+  - initialization: `init [--template <name>] [--expand-domain|--reclassify|--recalibrate]`
 - CI behavior:
   - PRs run `npm pack --dry-run ./packages/choir-cli` as a publishability check
   - Release tag pushes matching `choir-cli-v*` publish `choir-cli` to npm via `.github/workflows/choir-cli-publish.yml`
+
+Representative examples:
+
+```bash
+npx choir-cli plan --optimize
+npx choir-cli simulate plan <plan-id>
+npx choir-cli preview plan <plan-id>
+npx choir-cli execute plan <plan-id> --preview <preview-hash>
+npx choir-cli rollback --stage <stage-id>
+npx choir-cli refactor rename oldName newName
+npx choir-cli library list
+npx choir-cli audit report
+npx choir-cli init --template baseline --reclassify
+```
 
 ## Quick Start
 

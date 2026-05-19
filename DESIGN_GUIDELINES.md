@@ -33,13 +33,14 @@ Hard rule: VS Code extension package manifest must not declare an npm `bin` entr
 Hard rule: shell `choir` command distribution is provided only by standalone package `packages/choir-cli` with explicit user install (`npm install -g choir-cli` or `npx choir-cli`).
 Hard rule: standalone CLI release automation must only publish on tag push events; pull requests must run pack dry-run validation and must not publish.
 Hard rule: choir-cli command responses must be JSON envelopes (`ok`, `command`, `data|error`) so automation consumers receive deterministic machine-readable output.
+Hard rule: every operation listed in `src/core/cliSurface.ts` under `CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS` must be implemented in choir-cli parser and executor paths using existing core runtime modules (no alternate core logic paths).
 Chat-triggered environment actions (for example CLI install) must execute through explicit, user-visible terminal commands with clear scope selection and cancellation path.
 Chat-triggered CLI install must require an explicit package source and fail closed for ambiguous/default package names.
 
 Execute rollout mode must be behaviorally observable: `execute --strategy` must change reported execution stage grouping and expose rollout mode explicitly in runtime/chat output.
 Integrity lineage comparison must treat rollout mode as part of execution context; canonical-stage/DAG parity checks are only valid against rollout-compatible lineage artifacts.
 
-Read-only chat commands (for example analyze workspace/hotspots/summary) must still return command-specific result payloads; generic no-change mutation status alone is insufficient UX feedback.
+Read-only analyze commands across chat and choir-cli surfaces (for example analyze workspace/hotspots/summary) must return command-specific result payloads; generic no-change mutation status alone is insufficient UX feedback.
 Hotspot analysis labels are line-count based and include LOC in output: `Large file (<n> LOC)` (>500 lines) and `God file (<n> LOC)` (>1000 lines).
 Hotspot analysis must ignore `node_modules` by default and allow deterministic package-scoped exclusion globs through `analysis.hotspots.excludeGlobs`; `workspaceRoot` is the canonical root key and `.` is a supported alias.
 Compilation trace output should render empty change sets inline as `changes: none` instead of a separate top-level list item.

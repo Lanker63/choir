@@ -13,6 +13,7 @@ npm install -g choir-cli
 ```bash
 choir ci run
 choir verify --quick
+choir analyze summary
 ```
 
 `choir-cli` emits JSON envelopes for command output:
@@ -27,7 +28,20 @@ choir verify --quick
 }
 ```
 
-Current implementation coverage in this package slice includes `verify` and `ci run`.
+Current implementation coverage includes:
+
+- `verify [--quick]`
+- `ci run`
+- `define`, `status`, `policy status`, `approve`, `reject`
+- `export dsl`, `export json`, `remove goal <name>`
+- `analyze workspace|hotspots|summary`
+- `plan --optimize|--adaptive`, `simulate`, `preview`, `execute`, `rollback`
+- `refactor rename|move|extract|inline`
+- `import`, `library list|install|update|lock`
+- `macro list|show|run`
+- `abstraction list|describe|<abstraction-id>`
+- `audit log|query|report`
+- `init [--template <name>] [--expand-domain|--reclassify|--recalibrate]`
 
 ## Publish Notes
 

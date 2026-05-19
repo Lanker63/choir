@@ -178,6 +178,59 @@ Configuration assertions in this procedure use the current control-plane schema 
 Topic setup for deterministic lineage:
 
 - For each strategy-specific execute run in this topic, start from a fresh checkpoint or re-run `@choir preview` immediately before execute to bind current state/workspace lineage.
+
+---
+
+## Topic 3.1: CLI Parity Validation (Target Repository)
+
+Run these from a terminal in the target repository root with `choir-cli` installed.
+
+1. Verify JSON envelope contract for runtime families.
+
+   ```bash
+   choir analyze summary
+   choir plan --optimize
+   choir simulate plan <plan-id>
+   choir preview plan <plan-id>
+   choir execute plan <plan-id> --preview <preview-hash>
+   choir rollback --stage <stage-id>
+   ```
+
+   - Confirm each command prints JSON with top-level `ok` and `command` keys.
+   - Confirm `preview` and `execute` payloads include orchestration/runtime sections.
+
+2. Verify refactor and macro/abstraction families.
+
+   ```bash
+   choir refactor rename <symbol> <new-name>
+   choir macro list
+   choir abstraction list
+   ```
+
+   - Confirm each command returns an envelope and does not emit plain-text-only output.
+
+3. Verify library and audit families.
+
+   ```bash
+   choir library list
+   choir audit report
+   ```
+
+   - Confirm `audit report` writes:
+     - `.choir/reports/compliance-report.json`
+     - `.choir/reports/compliance-report.yaml`
+     - `.choir/reports/compliance-report.pdf`
+
+4. Verify non-interactive init family.
+
+   ```bash
+   choir init
+   choir init --template baseline --reclassify
+   choir init --recalibrate
+   ```
+
+   - Confirm each run is deterministic for unchanged workspace topology.
+   - Confirm `--recalibrate` fails closed if package catalog drift is detected.
 - If integrity reports `STATE_LINEAGE_DIVERGENCE` or `PREVIEW_HASH_MISMATCH`, treat it as a stale-lineage setup issue and refresh preview/simulation before retrying.
 
 1. In chat, enter `@choir simulate`.

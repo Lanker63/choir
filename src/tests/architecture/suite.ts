@@ -190,7 +190,7 @@ import {
   normalizeCliPackageSpec,
   validateCliPackageSpec,
 } from "../../core/cliInstall.js";
-import { parseCliIntent } from "../../core/cliRuntime.js";
+import { executeCliIntent, parseCliIntent } from "../../core/cliRuntime.js";
 import {
   CLI_EXCLUDED_VSCODE_CHAT_SHORTCUTS,
   CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS,
@@ -9655,6 +9655,131 @@ const finalPass: TestPass = {
           type: "ci-run",
         });
 
+        assert.deepStrictEqual(parseCliIntent(["define", "goal", "deterministic orchestration"]), {
+          type: "define",
+          defineType: "goal",
+          value: "deterministic orchestration",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["status"]), {
+          type: "status",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["policy", "status"]), {
+          type: "policy-status",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["approve", "diff-abc"]), {
+          type: "approve",
+          diffId: "diff-abc",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["reject", "diff-abc"]), {
+          type: "reject",
+          diffId: "diff-abc",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["export", "dsl", "intent"]), {
+          type: "export-dsl",
+          section: "intent",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["export", "--format", "json"]), {
+          type: "export-json",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["remove", "goal", "legacy api"]), {
+          type: "remove-goal",
+          goal: "legacy api",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["analyze", "workspace"]), {
+          type: "analyze",
+          target: "workspace",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["analyze", "hotspots"]), {
+          type: "analyze",
+          target: "hotspots",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["analyze", "summary"]), {
+          type: "analyze",
+          target: "summary",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["abstraction", "list"]), {
+          type: "abstraction-list",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["abstraction", "describe", "deploy.safe"]), {
+          type: "abstraction-describe",
+          id: "deploy.safe",
+        });
+
+        assert.deepStrictEqual(parseCliIntent(["init", "--template", "baseline", "--reclassify"]), {
+          type: "init",
+          template: "baseline",
+          mode: "reclassify",
+        });
+
+        const planOptimizeIntent = parseCliIntent(["plan", "--optimize"]);
+        assert.strictEqual(planOptimizeIntent.type, "dsl-action");
+        if (planOptimizeIntent.type === "dsl-action") {
+          assert.strictEqual(planOptimizeIntent.ast.type, "plan");
+          if (planOptimizeIntent.ast.type === "plan") {
+            assert.strictEqual(planOptimizeIntent.ast.optimize, true);
+          }
+        }
+
+        const simulateIntent = parseCliIntent(["simulate", "plan", "plan-core"]);
+        assert.strictEqual(simulateIntent.type, "dsl-action");
+        if (simulateIntent.type === "dsl-action") {
+          assert.strictEqual(simulateIntent.ast.type, "simulate");
+        }
+
+        const previewIntent = parseCliIntent(["preview", "plan", "plan-core"]);
+        assert.strictEqual(previewIntent.type, "dsl-action");
+        if (previewIntent.type === "dsl-action") {
+          assert.strictEqual(previewIntent.ast.type, "preview");
+        }
+
+        const executeIntent = parseCliIntent(["execute", "plan", "plan-core", "--preview", "a".repeat(64)]);
+        assert.strictEqual(executeIntent.type, "dsl-action");
+        if (executeIntent.type === "dsl-action") {
+          assert.strictEqual(executeIntent.ast.type, "execute");
+        }
+
+        const rollbackIntent = parseCliIntent(["rollback", "--stage", "stage-1"]);
+        assert.strictEqual(rollbackIntent.type, "dsl-action");
+        if (rollbackIntent.type === "dsl-action") {
+          assert.strictEqual(rollbackIntent.ast.type, "rollback");
+        }
+
+        const refactorIntent = parseCliIntent(["refactor", "rename", "checkout", "checkoutFlow"]);
+        assert.strictEqual(refactorIntent.type, "dsl-action");
+        if (refactorIntent.type === "dsl-action") {
+          assert.strictEqual(refactorIntent.ast.type, "refactor-rename");
+        }
+
+        const libraryIntent = parseCliIntent(["library", "list"]);
+        assert.strictEqual(libraryIntent.type, "dsl-action");
+        if (libraryIntent.type === "dsl-action") {
+          assert.strictEqual(libraryIntent.ast.type, "library-list");
+        }
+
+        const macroIntent = parseCliIntent(["macro", "list"]);
+        assert.strictEqual(macroIntent.type, "dsl-action");
+        if (macroIntent.type === "dsl-action") {
+          assert.strictEqual(macroIntent.ast.type, "macro-list");
+        }
+
+        const auditIntent = parseCliIntent(["audit", "report"]);
+        assert.strictEqual(auditIntent.type, "dsl-action");
+        if (auditIntent.type === "dsl-action") {
+          assert.strictEqual(auditIntent.ast.type, "audit-report");
+        }
+
         assert.strictEqual(isCLIExcludedVSCodeShortcut(["control"]), true);
         assert.strictEqual(isCLIExcludedVSCodeShortcut(["timeline"]), true);
         assert.strictEqual(isCLIExcludedVSCodeShortcut(["diagnostics"]), true);
@@ -9685,6 +9810,190 @@ const finalPass: TestPass = {
         assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("panel-control" as never), false);
         assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("panel-timeline" as never), false);
         assert.strictEqual(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("cli-install-helper" as never), false);
+      },
+    },
+    {
+      id: "X.11",
+      name: "cli runtime executor returns JSON envelopes for status and remove-goal",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-runtime-"));
+        const choirDir = path.join(root, ".choir");
+        fs.mkdirSync(choirDir, { recursive: true });
+
+        const control = makeControlPlane();
+        control.intent.goals = ["legacy api", "safe rollout"];
+        fs.writeFileSync(path.join(choirDir, "choir.config.yaml"), YAML.stringify(control), "utf-8");
+
+        const previousCwd = process.cwd();
+        const originalLog = console.log;
+        const logs: string[] = [];
+        console.log = (...values: unknown[]) => {
+          logs.push(values.map((value) => String(value)).join(" "));
+        };
+
+        try {
+          process.chdir(root);
+
+          logs.length = 0;
+          const statusCode = await executeCliIntent(["status"]);
+          assert.strictEqual(statusCode, 0);
+          const statusEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            ok: boolean;
+            command: string;
+            data: { intent: { goals: number } };
+          };
+          assert.strictEqual(statusEnvelope.ok, true);
+          assert.strictEqual(statusEnvelope.command, "status");
+          assert.strictEqual(statusEnvelope.data.intent.goals, 2);
+
+          logs.length = 0;
+          const removeCode = await executeCliIntent(["remove", "goal", "legacy api"]);
+          assert.strictEqual(removeCode, 0);
+          const removeEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            ok: boolean;
+            command: string;
+            data: { removed: string };
+          };
+          assert.strictEqual(removeEnvelope.ok, true);
+          assert.strictEqual(removeEnvelope.command, "remove-goal");
+          assert.strictEqual(removeEnvelope.data.removed, "legacy api");
+
+          logs.length = 0;
+          const statusAfterCode = await executeCliIntent(["status"]);
+          assert.strictEqual(statusAfterCode, 0);
+          const statusAfterEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            data: { intent: { goals: number } };
+          };
+          assert.strictEqual(statusAfterEnvelope.data.intent.goals, 1);
+        } finally {
+          console.log = originalLog;
+          process.chdir(previousCwd);
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "X.12",
+      name: "cli runtime executor supports analyze targets with deterministic JSON payloads",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-analyze-"));
+        const choirDir = path.join(root, ".choir");
+        fs.mkdirSync(choirDir, { recursive: true });
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+
+        const control = makeControlPlane();
+        fs.writeFileSync(path.join(choirDir, "choir.config.yaml"), YAML.stringify(control), "utf-8");
+        fs.writeFileSync(path.join(root, "src", "payment.service.ts"), "export const service = true;\n", "utf-8");
+        fs.writeFileSync(path.join(root, "src", "api.controller.ts"), "export const controller = true;\n", "utf-8");
+
+        const previousCwd = process.cwd();
+        const originalLog = console.log;
+        const logs: string[] = [];
+        console.log = (...values: unknown[]) => {
+          logs.push(values.map((value) => String(value)).join(" "));
+        };
+
+        try {
+          process.chdir(root);
+
+          logs.length = 0;
+          const workspaceCode = await executeCliIntent(["analyze", "workspace"]);
+          assert.strictEqual(workspaceCode, 0);
+          const workspaceEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            ok: boolean;
+            command: string;
+            data: { target: string; workspace: { totalFiles: number; services: number; controllers: number } };
+          };
+          assert.strictEqual(workspaceEnvelope.ok, true);
+          assert.strictEqual(workspaceEnvelope.command, "analyze");
+          assert.strictEqual(workspaceEnvelope.data.target, "workspace");
+          assert.strictEqual(workspaceEnvelope.data.workspace.services, 1);
+          assert.strictEqual(workspaceEnvelope.data.workspace.controllers, 1);
+          assert.ok(workspaceEnvelope.data.workspace.totalFiles >= 2);
+
+          logs.length = 0;
+          const summaryCode = await executeCliIntent(["analyze", "summary"]);
+          assert.strictEqual(summaryCode, 0);
+          const summaryEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            data: { target: string; hotspots: string[] };
+          };
+          assert.strictEqual(summaryEnvelope.data.target, "summary");
+          assert.ok(Array.isArray(summaryEnvelope.data.hotspots));
+        } finally {
+          console.log = originalLog;
+          process.chdir(previousCwd);
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "X.13",
+      name: "cli runtime executor covers remaining parity command families with JSON envelopes",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-parity-"));
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "tmp-cli-parity", version: "1.0.0" }, null, 2), "utf-8");
+        fs.writeFileSync(path.join(root, "src", "index.ts"), "export const ok = true;\n", "utf-8");
+
+        const previousCwd = process.cwd();
+        const originalLog = console.log;
+        const logs: string[] = [];
+        console.log = (...values: unknown[]) => {
+          logs.push(values.map((value) => String(value)).join(" "));
+        };
+
+        try {
+          process.chdir(root);
+
+          logs.length = 0;
+          const initCode = await executeCliIntent(["init"]);
+          assert.strictEqual(initCode, 0);
+          const initEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            ok: boolean;
+            command: string;
+          };
+          assert.strictEqual(initEnvelope.ok, true);
+          assert.strictEqual(initEnvelope.command, "init");
+
+          logs.length = 0;
+          const abstractionCode = await executeCliIntent(["abstraction", "list"]);
+          assert.strictEqual(abstractionCode, 0);
+          const abstractionEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            command: string;
+          };
+          assert.strictEqual(abstractionEnvelope.command, "abstraction-list");
+
+          logs.length = 0;
+          const macroCode = await executeCliIntent(["macro", "list"]);
+          assert.strictEqual(macroCode, 0);
+          const macroEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            command: string;
+          };
+          assert.strictEqual(macroEnvelope.command, "macro-list");
+
+          logs.length = 0;
+          const libraryCode = await executeCliIntent(["library", "list"]);
+          assert.strictEqual(libraryCode, 0);
+          const libraryEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            command: string;
+          };
+          assert.strictEqual(libraryEnvelope.command, "library-list");
+
+          logs.length = 0;
+          const reportCode = await executeCliIntent(["audit", "report"]);
+          assert.strictEqual(reportCode, 0);
+          const reportEnvelope = JSON.parse(logs[logs.length - 1] as string) as {
+            command: string;
+            data: { exported: string[] };
+          };
+          assert.strictEqual(reportEnvelope.command, "audit-report");
+          assert.ok(reportEnvelope.data.exported.includes(".choir/reports/compliance-report.json"));
+          assert.strictEqual(fs.existsSync(path.join(root, ".choir", "reports", "compliance-report.json")), true);
+        } finally {
+          console.log = originalLog;
+          process.chdir(previousCwd);
+          fs.rmSync(root, { recursive: true, force: true });
+        }
       },
     },
   ],
