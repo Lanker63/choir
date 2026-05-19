@@ -115,6 +115,9 @@ Core flow:
 - rooted single-package synthesis now avoids duplicated strategic intent blocks by persisting package-level `packages.".".strategicIntent` and omitting global `strategicIntent`
 - rooted single-package init no longer prompts for a separate global runtime mode after domain modeling; global runtime is derived from the sole domain runtime selection
 - analyze commands are read-only but must return analysis payloads (workspace, hotspots, summary) instead of mutation-only status text
+- hotspot labels are line-based and include LOC counts: `Large file (<n> LOC)` for files with >500 lines, `God file (<n> LOC)` for files with >1000 lines
+- hotspot analysis ignores `node_modules` by default and supports config-driven glob exclusions per package via `analysis.hotspots.excludeGlobs`; use `workspaceRoot` as the root key (`.` remains supported as an alias)
+- compilation trace output renders empty change sets inline as `changes: none` for cleaner operator readability
 - deterministic plan optimization: choir plan --optimize [for "<goalRef>"]
 - progressive rollout execution: choir execute --strategy <all-at-once|canary|phased|batched>
 - execute output reports both selectionStrategy (optimizer candidate strategy) and rolloutStrategy (requested rollout mode)

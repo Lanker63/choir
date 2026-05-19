@@ -75,7 +75,9 @@ import {
   validateAST,
   validGrammar,
 } from "../../core/choirRouter.js";
+import { classifyHotspotEntries, resolveHotspotIgnoreGlobs } from "../../core/hotspotClassifier.js";
 import { formatAnalyzeMarkdown } from "../../core/analyzeOutput.js";
+import { formatCompilationTraceMarkdown } from "../../core/compilationTraceOutput.js";
 import { persistSelectedOptimizedPlan } from "../../core/planPersistence.js";
 import {
   Rule,
@@ -835,6 +837,66 @@ const pass2: TestPass = {
         assert.ok(summary.includes("Workspace analysis unavailable: no workspace folder found."));
         assert.ok(summary.includes("Hotspots:"));
         assert.ok(summary.includes("- Large file: src/chat.ts"));
+      },
+    },
+    {
+      id: "2.7b",
+      name: "compilation trace formatter renders empty change list inline",
+      run: async () => {
+        const output = formatCompilationTraceMarkdown({
+          input: "choir analyze workspace",
+          changes: [],
+          ast: {
+            type: "analyze",
+            target: "workspace",
+          },
+        });
+
+        assert.ok(output.includes("- changes: none"));
+        assert.ok(!output.includes("- changes:\n- none"));
+      },
+    },
+    {
+      id: "2.7c",
+      name: "hotspot classifier uses line-based Large and God thresholds",
+      run: async () => {
+        const belowThreshold = Array.from({ length: 500 }, (_, index) => `line-${index + 1}`).join("\n");
+        const largeFile = Array.from({ length: 501 }, (_, index) => `line-${index + 1}`).join("\n");
+        const godFile = Array.from({ length: 1001 }, (_, index) => `line-${index + 1}`).join("\n");
+
+        assert.deepStrictEqual(classifyHotspotEntries("small.ts", belowThreshold), []);
+        assert.deepStrictEqual(classifyHotspotEntries("large.ts", largeFile), ["🔥 Large file (501 LOC): large.ts"]);
+        assert.deepStrictEqual(classifyHotspotEntries("god.ts", godFile), ["🧠 God file (1001 LOC): god.ts"]);
+      },
+    },
+    {
+      id: "2.7d",
+      name: "hotspot analyzer resolves workspaceRoot and package-scoped exclude globs deterministically",
+      run: async () => {
+        const control = ControlPlaneSchema.parse({
+          ...makeControlPlane(),
+          analysis: {
+            hotspots: {
+              excludeGlobs: {
+                workspaceRoot: ["dist/**", "**/*.gen.ts"],
+                ".": ["reports/**"],
+                "packages/api": ["src/generated/**", "packages/api/custom/**"],
+                "packages/web": ["/build/**"],
+              },
+            },
+          },
+        });
+
+        const resolved = resolveHotspotIgnoreGlobs(control);
+        assert.deepStrictEqual(resolved, [
+          "**/*.gen.ts",
+          "**/node_modules/**",
+          "dist/**",
+          "packages/api/custom/**",
+          "packages/api/src/generated/**",
+          "packages/web/build/**",
+          "reports/**",
+        ]);
       },
     },
     {

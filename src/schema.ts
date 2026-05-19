@@ -260,6 +260,14 @@ const PackageRuntimeModeSchema = z.object({
     capabilities: RuntimeCapabilitiesSchema.optional(),
 }).strict();
 
+const HotspotAnalysisSchema = z.object({
+    excludeGlobs: z.record(z.string().min(1), z.array(z.string().min(1))).optional(),
+}).strict();
+
+const AnalysisSchema = z.object({
+    hotspots: HotspotAnalysisSchema.optional(),
+}).strict();
+
 const PolicyRoleSchema = z.enum(["architect", "analyst", "conductor", "enforcer"]);
 const PolicyEnvironmentSchema = z.enum(["local", "ci", "staging", "production"]);
 
@@ -286,6 +294,7 @@ export const ControlPlaneSchema = z.object({
         }).strict().optional()
     }).strict(),
     execution: ExecutionSchema.default({ plans: [] }),
+    analysis: AnalysisSchema.optional(),
     runtime: RuntimeSchema.optional(),
     capabilities: RuntimeCapabilitiesSchema.optional(),
     packageModes: z.record(z.string().min(1), PackageRuntimeModeSchema).optional(),

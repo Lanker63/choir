@@ -1,6 +1,16 @@
 import * as vscode from "vscode";
 import { globSync } from "glob";
 import * as fs from "fs";
+import { readControlPlane } from "./choirManager.js";
+import { classifyHotspotEntries, resolveHotspotIgnoreGlobs } from "./core/hotspotClassifier.js";
+
+function safeReadControlPlaneForAnalyze() {
+    try {
+        return readControlPlane();
+    } catch {
+        return null;
+    }
+}
 
 export function analyzeWorkspace() {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -31,23 +41,18 @@ export function findHotspots() {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!root) return [];
 
+    const controlPlane = safeReadControlPlaneForAnalyze();
+
     const files = globSync("**/*.ts", {
         cwd: root,
-        ignore: ["node_modules/**"]
+        ignore: resolveHotspotIgnoreGlobs(controlPlane),
     });
 
     const hotspots: string[] = [];
 
     for (const file of files) {
         const content = fs.readFileSync(root + "/" + file, "utf-8");
-
-        if (content.length > 5000) {
-            hotspots.push(`🔥 Large file: ${file}`);
-        }
-
-        if (content.split("\n").length > 300) {
-            hotspots.push(`📏 Long file: ${file}`);
-        }
+        hotspots.push(...classifyHotspotEntries(file, content));
     }
 
     return hotspots;

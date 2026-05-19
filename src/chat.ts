@@ -50,6 +50,7 @@ import {
     validateIsolation,
 } from "./core/globalOrchestration.js";
 import { formatSimulationChatResult } from "./core/simulationChat.js";
+import { formatCompilationTraceMarkdown } from "./core/compilationTraceOutput.js";
 import { persistSelectedOptimizedPlan } from "./core/planPersistence.js";
 import { formatAnalyzeMarkdown } from "./core/analyzeOutput.js";
 import { resolveRollbackStageSelection, resolveRollbackUnitSelection } from "./core/rollbackSelectors.js";
@@ -286,28 +287,7 @@ function mergeWorkUnitBindings(
 }
 
 function renderTrace(stream: vscode.ChatResponseStream, trace: CompilationTrace): void {
-    const astJson = JSON.stringify(trace.ast, null, 2);
-
-    const changeLines = trace.changes.length === 0
-        ? ["- none"]
-        : trace.changes.map((change) => {
-            const before = JSON.stringify(change.before);
-            const after = JSON.stringify(change.after);
-            return `- ${change.field}: ${before} -> ${after}`;
-        });
-
-    stream.markdown([
-        "",
-        "---",
-        "Compilation trace:",
-        `- input: ${trace.input}`,
-        "- changes:",
-        ...changeLines,
-        "- ast:",
-        "```json",
-        astJson,
-        "```",
-    ].join("\n"));
+    stream.markdown(formatCompilationTraceMarkdown(trace));
 }
 
 function extractAnalyzeTarget(ast: AST): AnalyzeTarget | null {

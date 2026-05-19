@@ -39,6 +39,9 @@ Execute rollout mode must be behaviorally observable: `execute --strategy` must 
 Integrity lineage comparison must treat rollout mode as part of execution context; canonical-stage/DAG parity checks are only valid against rollout-compatible lineage artifacts.
 
 Read-only chat commands (for example analyze workspace/hotspots/summary) must still return command-specific result payloads; generic no-change mutation status alone is insufficient UX feedback.
+Hotspot analysis labels are line-count based and include LOC in output: `Large file (<n> LOC)` (>500 lines) and `God file (<n> LOC)` (>1000 lines).
+Hotspot analysis must ignore `node_modules` by default and allow deterministic package-scoped exclusion globs through `analysis.hotspots.excludeGlobs`; `workspaceRoot` is the canonical root key and `.` is a supported alias.
+Compilation trace output should render empty change sets inline as `changes: none` instead of a separate top-level list item.
 Plan optimization outputs must be promotable to plan approval without manual YAML edits; selected optimize plan ids must be persisted to the control plane when optimization is invoked interactively.
 Rollback commands must resolve and persist the deterministic previous state target; when a prior transition exists, `stateHash` after rollback must equal the previous transition hash rather than remaining unchanged.
 Rollback stage and unit selectors must support deterministic alias normalization (stage order aliases, canonical punctuation-insensitive unit ids, and resolvable work-unit ids like `wu-<hash>`) while still failing closed on ambiguous selector mappings.
