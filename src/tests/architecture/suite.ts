@@ -166,6 +166,8 @@ import {
 import { strategicTemplateDefaults } from "../../core/strategicInit.js";
 import {
   calibrateStrategicOrchestration,
+  detectMissingControlPlanePackageReferences,
+  detectStrategicPackageCatalogDelta,
   discoverStrategicDomains,
   selectExpandDomainModelingDiscovery,
   seedStrategicDomainPromptDefaults,
@@ -1495,7 +1497,7 @@ const pass2: TestPass = {
           id: "selector-resolution",
           tasks: [
             { id: "task-a", repoId: "packages:api", action: "lint", dependsOn: [] },
-            { id: "task-b", repoId: "workspace:root", action: "test", dependsOn: ["task-a"] },
+            { id: "task-b", repoId: "workspaceRoot", action: "test", dependsOn: ["task-a"] },
           ],
         };
         const stages = buildStages(plan, { type: "batched", batchSize: 1 });
@@ -1507,7 +1509,7 @@ const pass2: TestPass = {
         const stageOrderAlias = resolveRollbackStageSelection("stage-1", stages);
         assert.strictEqual(stageOrderAlias.stage?.id, stages[0]?.id);
 
-        const unitAlias = resolveRollbackUnitSelection("packages.api", ["packages:api", "workspace:root"]);
+        const unitAlias = resolveRollbackUnitSelection("packages.api", ["packages:api", "workspaceRoot"]);
         assert.strictEqual(unitAlias.unit, "packages:api");
 
         const executionPlan = buildExecutionPlan([
@@ -1531,14 +1533,14 @@ const pass2: TestPass = {
         const wuId = executionPlan.executionPlan.batches[0]?.workUnits[0]?.id;
         assert.ok(wuId);
 
-        const workUnitSelection = resolveRollbackUnitSelection(wuId as string, ["packages:api", "workspace:root"], {
+        const workUnitSelection = resolveRollbackUnitSelection(wuId as string, ["packages:api", "workspaceRoot"], {
           workUnitBindings: {
             [wuId as string]: ["packages:api"],
           },
         });
         assert.strictEqual(workUnitSelection.unit, "packages:api");
 
-        const missingUnit = resolveRollbackUnitSelection("packages.web", ["packages:api", "workspace:root"]);
+        const missingUnit = resolveRollbackUnitSelection("packages.web", ["packages:api", "workspaceRoot"]);
         assert.strictEqual(typeof missingUnit.error, "string");
       },
     },
@@ -2641,6 +2643,319 @@ const pass2: TestPass = {
           assert.strictEqual(synthesized.packageModes?.[existingPackagePath]?.mode, "observe-only");
           assert.deepStrictEqual(synthesized.packageModes?.[existingPackagePath]?.capabilities, existingCapabilities);
           assert.strictEqual(synthesized.packageModes?.[newPackagePath]?.mode, targetDomain.inferred.runtimeMode);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah1",
+      name: "recalibrate package drift detection flags added discovered packages",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-add-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "recalibrate-drift-add",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          for (const packagePath of ["packages/api", "packages/web"]) {
+            const packageDir = path.join(root, packagePath);
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+              name: packagePath.replace(/\//g, "-"),
+              private: true,
+            }, null, 2));
+          }
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const delta = detectStrategicPackageCatalogDelta(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+            },
+          });
+
+          assert.strictEqual(delta.hasChanges, true);
+          assert.deepStrictEqual(delta.addedPackagePaths, ["packages/web"]);
+          assert.deepStrictEqual(delta.removedPackagePaths, []);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah2",
+      name: "recalibrate package drift detection flags removed persisted packages",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-remove-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "recalibrate-drift-remove",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          const packageDir = path.join(root, "packages/api");
+          fs.mkdirSync(packageDir, { recursive: true });
+          fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+            name: "packages-api",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const delta = detectStrategicPackageCatalogDelta(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+              "packages/legacy": {},
+            },
+          });
+
+          assert.strictEqual(delta.hasChanges, true);
+          assert.deepStrictEqual(delta.addedPackagePaths, []);
+          assert.deepStrictEqual(delta.removedPackagePaths, ["packages/legacy"]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah3",
+      name: "recalibrate package drift detection allows unchanged package catalogs",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-none-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "recalibrate-drift-none",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          for (const packagePath of ["packages/api", "packages/web"]) {
+            const packageDir = path.join(root, packagePath);
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+              name: packagePath.replace(/\//g, "-"),
+              private: true,
+            }, null, 2));
+          }
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const delta = detectStrategicPackageCatalogDelta(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+              "packages/web": {},
+            },
+          });
+
+          assert.strictEqual(delta.hasChanges, false);
+          assert.deepStrictEqual(delta.addedPackagePaths, []);
+          assert.deepStrictEqual(delta.removedPackagePaths, []);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah4",
+      name: "init discovery stale-reference detection flags non-existent package references across control plane scopes",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-detect-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "init-stale-refs-detect",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          const packageDir = path.join(root, "packages/api");
+          fs.mkdirSync(packageDir, { recursive: true });
+          fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+            name: "packages-api",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const stale = detectMissingControlPlanePackageReferences(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+              "packages/legacy": {},
+            },
+            packageModes: {
+              "packages/legacy": {
+                mode: "observe-only",
+              },
+            },
+            contexts: {
+              "workspaceRoot": {
+                packages: ["packages/api", "packages/legacy"],
+              },
+              "release:legacy": {
+                packages: ["packages/legacy", "packages/missing"],
+              },
+            },
+          });
+
+          assert.strictEqual(stale.hasMissingReferences, true);
+          assert.deepStrictEqual(stale.missingPackageCatalogEntries, ["packages/legacy"]);
+          assert.deepStrictEqual(stale.missingPackageModeEntries, ["packages/legacy"]);
+          assert.deepStrictEqual(stale.missingContextPackageEntries, [
+            { contextId: "release:legacy", packagePath: "packages/legacy" },
+            { contextId: "release:legacy", packagePath: "packages/missing" },
+            { contextId: "workspaceRoot", packagePath: "packages/legacy" },
+          ]);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah5",
+      name: "init discovery stale-reference detection allows control plane package references aligned with discovery",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-none-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "init-stale-refs-none",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          for (const packagePath of ["packages/api", "packages/web"]) {
+            const packageDir = path.join(root, packagePath);
+            fs.mkdirSync(packageDir, { recursive: true });
+            fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+              name: packagePath.replace(/\//g, "-"),
+              private: true,
+            }, null, 2));
+          }
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const stale = detectMissingControlPlanePackageReferences(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+              "packages/web": {},
+            },
+            packageModes: {
+              "packages/api": {
+                mode: "observe-only",
+              },
+              "packages/web": {
+                mode: "simulation-only",
+              },
+            },
+            contexts: {
+              "workspaceRoot": {
+                packages: ["packages/api", "packages/web"],
+              },
+            },
+          });
+
+          assert.strictEqual(stale.hasMissingReferences, false);
+          assert.deepStrictEqual(stale.missingPackageCatalogEntries, []);
+          assert.deepStrictEqual(stale.missingPackageModeEntries, []);
+          assert.deepStrictEqual(stale.missingContextPackageEntries, []);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah6",
+      name: "init discovery stale-reference detection can ignore package and packageModes references",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-ignore-modes-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "init-stale-refs-ignore-modes",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          const packageDir = path.join(root, "packages/api");
+          fs.mkdirSync(packageDir, { recursive: true });
+          fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+            name: "packages-api",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const stale = detectMissingControlPlanePackageReferences(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+              "packages/legacy": {},
+            },
+            packageModes: {
+              "packages/legacy": {
+                mode: "observe-only",
+              },
+            },
+            contexts: {
+              "workspaceRoot": {
+                packages: ["packages/api"],
+              },
+            },
+          }, {
+            includePackages: false,
+            includePackageModes: false,
+          });
+
+          assert.strictEqual(stale.hasMissingReferences, false);
+          assert.deepStrictEqual(stale.missingPackageCatalogEntries, []);
+          assert.deepStrictEqual(stale.missingPackageModeEntries, []);
+          assert.deepStrictEqual(stale.missingContextPackageEntries, []);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
+      id: "2.30ah7",
+      name: "init discovery stale-reference detection fails on packageModes-only drift when packageModes checks are enabled",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-modes-only-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "init-stale-refs-modes-only",
+            private: true,
+            workspaces: ["packages/*"],
+          }, null, 2));
+
+          const packageDir = path.join(root, "packages/api");
+          fs.mkdirSync(packageDir, { recursive: true });
+          fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+            name: "packages-api",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const stale = detectMissingControlPlanePackageReferences(discovery, {
+            ...makeControlPlane(),
+            packages: {
+              "packages/api": {},
+            },
+            packageModes: {
+              "packages/legacy": {
+                mode: "observe-only",
+              },
+            },
+            contexts: {
+              "workspaceRoot": {
+                packages: ["packages/api"],
+              },
+            },
+          });
+
+          assert.strictEqual(stale.hasMissingReferences, true);
+          assert.deepStrictEqual(stale.missingPackageCatalogEntries, []);
+          assert.deepStrictEqual(stale.missingPackageModeEntries, ["packages/legacy"]);
+          assert.deepStrictEqual(stale.missingContextPackageEntries, []);
         } finally {
           fs.rmSync(root, { recursive: true, force: true });
         }
@@ -5565,7 +5880,7 @@ const pass3: TestPass = {
           const baseline = createEmptyStatePlane();
           persistStatePlane(root, baseline, {
             action: "seed-state",
-            metadata: { unitId: "workspace:root" },
+            metadata: { unitId: "workspaceRoot" },
           });
 
           const executed = {
@@ -5579,7 +5894,7 @@ const pass3: TestPass = {
 
           persistStatePlane(root, executed, {
             action: "execute",
-            metadata: { unitId: "workspace:root" },
+            metadata: { unitId: "workspaceRoot" },
           });
 
           const transitionsBeforeRollback = listStateTransitions(root);
@@ -5596,7 +5911,7 @@ const pass3: TestPass = {
 
           persistStatePlane(root, rollbackTarget.state, {
             action: "rollback",
-            metadata: { unitId: "workspace:root" },
+            metadata: { unitId: "workspaceRoot" },
           });
 
           const reverted = readStatePlane(root);

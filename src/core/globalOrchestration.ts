@@ -2026,7 +2026,7 @@ export async function executeTransaction(
       deterministicTrace,
       failure: {
         stageId: "transaction:prepare",
-        unitId: lockUnits[0] ?? "workspace:root",
+        unitId: lockUnits[0] ?? "workspaceRoot",
         error: prepare.errors.join("; "),
         timestamp: nextDeterministicTimestamp(tx),
       },
@@ -2054,7 +2054,7 @@ export async function executeTransaction(
         deterministicTrace,
         failure: {
           stageId: "transaction:lock",
-          unitId: lockUnits[0] ?? "workspace:root",
+          unitId: lockUnits[0] ?? "workspaceRoot",
           error: lockResult.errors.join("; "),
           timestamp: nextDeterministicTimestamp(tx),
         },
@@ -2122,7 +2122,7 @@ export async function executeTransaction(
         deterministicTrace,
         failure: {
           stageId: "transaction:approval",
-          unitId: normalizedRepos[0]?.id ?? "workspace:root",
+          unitId: normalizedRepos[0]?.id ?? "workspaceRoot",
           error: "approval required",
           timestamp: nextDeterministicTimestamp(tx),
         },
@@ -2168,7 +2168,7 @@ export async function executeTransaction(
           deterministicTrace,
           failure: {
             stageId: `${stage.id}:prepare`,
-            unitId: stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root",
+            unitId: stage.units[0] ?? normalizedRepos[0]?.id ?? "workspaceRoot",
             error: stagePrepared.errors.join("; "),
             timestamp: nextDeterministicTimestamp(tx),
           },
@@ -2217,7 +2217,7 @@ export async function executeTransaction(
         throwIfTestRollbackForced(mode, executedMutations);
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+        const failedUnit = activeTask?.repoId ?? stage.units[0] ?? normalizedRepos[0]?.id ?? "workspaceRoot";
         setUnitExecutionState(executionState, failedUnit, "failed");
         abortTransaction(stageTx);
         if (committedStages.length === 0) {
@@ -2252,7 +2252,7 @@ export async function executeTransaction(
         policyResult,
       });
       if (!stageValidation.valid) {
-        const failedUnit = stage.units[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+        const failedUnit = stage.units[0] ?? normalizedRepos[0]?.id ?? "workspaceRoot";
         setUnitExecutionState(executionState, failedUnit, "failed");
         if (committedStages.length === 0) {
           abortTransaction(tx);
@@ -2325,7 +2325,7 @@ export async function executeTransaction(
           deterministicTrace,
           failure: {
             stageId: "transaction:simulate",
-            unitId: normalizedRepos[0]?.id ?? "workspace:root",
+            unitId: normalizedRepos[0]?.id ?? "workspaceRoot",
             error: "simulation mismatch",
             timestamp: nextDeterministicTimestamp(tx),
           },
@@ -2341,7 +2341,7 @@ export async function executeTransaction(
 
     if (!finalValidation.valid) {
       const fallbackTask = taskById.get(stepsExecuted[stepsExecuted.length - 1] ?? "") ?? null;
-      const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspace:root";
+      const failedUnit = fallbackTask?.repoId ?? normalizedRepos[0]?.id ?? "workspaceRoot";
       setUnitExecutionState(executionState, failedUnit, "failed");
       const deterministicTrace = finalizeDeterministicTrace(tx.workingState, true);
       return {
@@ -2392,7 +2392,7 @@ export async function executeTransaction(
           deterministicTrace,
           failure: {
             stageId: "transaction:persist",
-            unitId: normalizedRepos[0]?.id ?? "workspace:root",
+            unitId: normalizedRepos[0]?.id ?? "workspaceRoot",
             error: error instanceof Error ? error.message : String(error),
             timestamp: nextDeterministicTimestamp(tx),
           },
@@ -4119,7 +4119,7 @@ export async function executeGlobalPlan(
   }
 
   if (!execution.success) {
-    const failedUnit = execution.failure?.unitId ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+    const failedUnit = execution.failure?.unitId ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspaceRoot";
     const isolatedRollback = await executeIsolatedRollback(
       failedUnit,
       dependencyGraph,
@@ -4176,7 +4176,7 @@ export async function executeGlobalPlan(
 
   if (!equivalent) {
     const divergentUnits = stateDiffUnits(expectedState, actualState);
-    const failedUnit = divergentUnits[0] ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspace:root";
+    const failedUnit = divergentUnits[0] ?? execution.unitsAffected[0] ?? normalizedRepos[0]?.id ?? "workspaceRoot";
     const isolatedRollback = await executeIsolatedRollback(
       failedUnit,
       dependencyGraph,
@@ -4868,7 +4868,7 @@ export async function executeRolloutPlan(
         });
       }
 
-      const failedUnit = stageResult.failure?.unitId ?? stage.units[0] ?? "workspace:root";
+      const failedUnit = stageResult.failure?.unitId ?? stage.units[0] ?? "workspaceRoot";
       const isolatedRollback = await executeIsolatedRollback(
         failedUnit,
         dependencyGraph,
@@ -4929,7 +4929,7 @@ export async function executeRolloutPlan(
   const equivalent = statesEqual(currentState, simulation.finalState);
   if (!equivalent) {
     const divergentUnits = stateDiffUnits(currentState, simulation.finalState);
-    const failedUnit = divergentUnits[0] ?? trace.stages[0]?.units[0] ?? "workspace:root";
+    const failedUnit = divergentUnits[0] ?? trace.stages[0]?.units[0] ?? "workspaceRoot";
     const isolatedRollback = await executeIsolatedRollback(
       failedUnit,
       dependencyGraph,

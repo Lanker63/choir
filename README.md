@@ -56,30 +56,13 @@ intent:
   goals: []
   constraints: []
   nonGoals: []
-strategicIntent:
-  priorities: []
-  optimizationGoals: []
-  riskTolerance: moderate
-  architecturalPosture: []
-  rolloutPreferences: []
-  stabilityProfile: adaptive
-  governanceIntensity: moderate
 packages: {}
+domains: {}
 contexts: {}
 policy:
   rules: []
 execution:
   plans: []
-runtime:
-  mode: execution-enabled
-capabilities:
-  preview: true
-  simulate: true
-  execute: true
-  optimize: true
-  import: true
-  install: true
-  update: true
 ```
 
 ## Core Model
@@ -123,6 +106,8 @@ Core flow:
 - init persists `capabilities` at the applicable governance scope from the authoritative source: template-defined capabilities from `config/init-templates.json` when `--template` is used, otherwise deterministic mode defaults
 - strategic init rerun modes: `@choir init --expand-domain`, `@choir init --reclassify`, `@choir init --recalibrate`
 - `@choir init --expand-domain` scopes strategic re-model prompts to domains touched by newly discovered packages (it does not re-prompt unchanged domains)
+- `@choir init --recalibrate` is fail-closed on package catalog drift (added/removed discovered packages); operators must run `@choir init --reclassify` first
+- `@choir init` is fail-closed when control-plane package references point to non-existent discovered packages (`contexts.*.packages` in all modes; stale `packages` and `packageModes` in all modes except `--reclassify`); on initialized workspaces this preflight runs before the full-init wizard opens
 - strategic init templates are sourced from `config/init-templates.json` (single source of truth for available `@choir init --template` values and defaults)
 - malformed `config/init-templates.json` entries now fail closed at load time via strict schema validation (startup/runtime command surfaces reject invalid catalogs)
 - strategic init single-select prompts (for example risk tolerance, stability profile, governance intensity, runtime mode) explicitly mark the current/default value during template-seeded init and re-init flows
@@ -509,7 +494,7 @@ Artifacts:
 - Timeline events project into:
   - one global timeline
   - one per-unit timeline
-- If no unit is provided, the transition is scoped to workspace:root.
+- If no unit is provided, the transition is scoped to workspaceRoot.
 - Determinism guarantee: same ordered transitions -> same global and unit replay ordering.
 
 Webview synchronization contract:

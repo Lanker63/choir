@@ -116,7 +116,7 @@ Workspace timeline model requirements:
 - every transition must project to a global timeline event
 - every transition must also project to its unit timeline event
 - global and per-unit timelines must remain index-aligned and deterministic
-- missing unit scope defaults to workspace:root
+- missing unit scope defaults to workspaceRoot
 
 Required files:
 
@@ -192,6 +192,8 @@ Strategic init contract:
 - Rooted single-package init must not prompt for an additional global runtime selection after domain modeling; global runtime must be derived from the sole domain runtime mode.
 - Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
 - `--expand-domain` interactive modeling must scope to domains impacted by newly discovered packages; unchanged domains are not re-prompted.
+- `--recalibrate` must fail closed when discovery detects package catalog drift (added/removed package paths relative to persisted `packages`); operators must run `--reclassify` before recalibrating.
+- `@choir init` must fail closed when discovery finds stale control-plane package references to non-existent package paths (`contexts.*.packages` in all modes, plus `packages` and `packageModes` in all modes except `--reclassify`) until operators reconcile those mappings; for initialized workspaces this preflight must run before the full-init wizard opens.
 - Init diagnostics must persist pipeline stage outcomes in `.choir/pipeline.diagnostics.jsonl`.
 - Strategic init replay artifact `.choir/init-strategic-state.json` is required for reviewable reruns and visualization.
 

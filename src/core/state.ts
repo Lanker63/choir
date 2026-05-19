@@ -264,7 +264,7 @@ export type StatePlane = {
 const MAX_STRATEGY_HISTORY = 256;
 const STATE_VERSION = "2.0.0-alpha";
 const SNAPSHOT_INTERVAL = 5;
-const DEFAULT_WORKSPACE_UNIT_ID = "workspace:root";
+const DEFAULT_WORKSPACE_UNIT_ID = "workspaceRoot";
 
 type UnknownRecord = Record<string, unknown>;
 

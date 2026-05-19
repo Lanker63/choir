@@ -542,6 +542,96 @@ export function selectExpandDomainModelingDiscovery(
   };
 }
 
+export type StrategicPackageCatalogDelta = {
+  addedPackagePaths: string[];
+  removedPackagePaths: string[];
+  hasChanges: boolean;
+};
+
+export type StrategicMissingControlPlanePackageReferences = {
+  missingPackageCatalogEntries: string[];
+  missingPackageModeEntries: string[];
+  missingContextPackageEntries: Array<{ contextId: string; packagePath: string }>;
+  hasMissingReferences: boolean;
+};
+
+type MissingControlPlanePackageReferenceOptions = {
+  includePackages?: boolean;
+  includePackageModes?: boolean;
+};
+
+export function detectStrategicPackageCatalogDelta(
+  discovery: StrategicDiscovery,
+  currentControl: ControlPlane
+): StrategicPackageCatalogDelta {
+  const discoveredPackagePaths = discovery.packages
+    .map((pkg) => pkg.packagePath)
+    .sort((left, right) => left.localeCompare(right));
+  const existingPackagePaths = Object.keys(currentControl.packages ?? {})
+    .sort((left, right) => left.localeCompare(right));
+
+  const discoveredSet = new Set(discoveredPackagePaths);
+  const existingSet = new Set(existingPackagePaths);
+
+  const addedPackagePaths = discoveredPackagePaths
+    .filter((packagePath) => !existingSet.has(packagePath));
+  const removedPackagePaths = existingPackagePaths
+    .filter((packagePath) => !discoveredSet.has(packagePath));
+
+  return {
+    addedPackagePaths,
+    removedPackagePaths,
+    hasChanges: addedPackagePaths.length > 0 || removedPackagePaths.length > 0,
+  };
+}
+
+export function detectMissingControlPlanePackageReferences(
+  discovery: StrategicDiscovery,
+  currentControl: ControlPlane,
+  options?: MissingControlPlanePackageReferenceOptions
+): StrategicMissingControlPlanePackageReferences {
+  const includePackages = options?.includePackages ?? true;
+  const includePackageModes = options?.includePackageModes ?? true;
+  const discoveredPackageSet = new Set(discovery.packages.map((pkg) => pkg.packagePath));
+
+  const missingPackageCatalogEntries = includePackages
+    ? Object.keys(currentControl.packages ?? {})
+      .filter((packagePath) => !discoveredPackageSet.has(packagePath))
+      .sort((left, right) => left.localeCompare(right))
+    : [];
+
+  const missingPackageModeEntries = includePackageModes
+    ? Object.keys(currentControl.packageModes ?? {})
+      .filter((packagePath) => !discoveredPackageSet.has(packagePath))
+      .sort((left, right) => left.localeCompare(right))
+    : [];
+
+  const missingContextPackageEntries = Object.entries(currentControl.contexts ?? {})
+    .flatMap(([contextId, contextConfig]) => {
+      const packages = contextConfig.packages ?? [];
+      return packages
+        .filter((packagePath) => !discoveredPackageSet.has(packagePath))
+        .map((packagePath) => ({ contextId, packagePath }));
+    })
+    .sort((left, right) => {
+      const contextCompare = left.contextId.localeCompare(right.contextId);
+      if (contextCompare !== 0) {
+        return contextCompare;
+      }
+
+      return left.packagePath.localeCompare(right.packagePath);
+    });
+
+  return {
+    missingPackageCatalogEntries,
+    missingPackageModeEntries,
+    missingContextPackageEntries,
+    hasMissingReferences: missingPackageCatalogEntries.length > 0
+      || missingPackageModeEntries.length > 0
+      || missingContextPackageEntries.length > 0,
+  };
+}
+
 function averageGovernance(models: StrategicDomainModel[]): GovernanceIntensity {
   const score = models.reduce((total, model) => {
     if (model.governanceIntensity === "strict") {
@@ -896,7 +986,7 @@ export function synthesizeStrategicControlPlane(
     packages: nextPackages,
     contexts: {
       ...(strategicScopedBase.contexts ?? {}),
-      "workspace:root": {
+      "workspaceRoot": {
         packages: input.discovery.packages.map((pkg) => pkg.packagePath).sort((left, right) => left.localeCompare(right)),
       },
     },

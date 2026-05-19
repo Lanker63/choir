@@ -98,6 +98,8 @@ import {
 } from "./core/initWizard.js";
 import {
     calibrateStrategicOrchestration,
+    detectMissingControlPlanePackageReferences,
+    detectStrategicPackageCatalogDelta,
     discoverStrategicDomains,
     readStrategicInitState,
     selectExpandDomainModelingDiscovery,
@@ -195,7 +197,7 @@ function deriveSimulationUnit(task: Task): string {
 
     const first = files[0];
     if (!first) {
-        return "workspace:root";
+        return "workspaceRoot";
     }
 
     const segments = first.split("/").filter((entry) => entry.length > 0);
@@ -203,7 +205,7 @@ function deriveSimulationUnit(task: Task): string {
         return `${segments[0]}:${segments[1]}`;
     }
 
-    return "workspace:root";
+    return "workspaceRoot";
 }
 
 function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {
@@ -730,7 +732,7 @@ function mergeSelectedStrategicDomainsIntoControl(
             )),
         };
 
-    const existingWorkspacePackages = currentControl.contexts?.["workspace:root"]?.packages ?? [];
+    const existingWorkspacePackages = currentControl.contexts?.["workspaceRoot"]?.packages ?? [];
     const mergedWorkspacePackages = sortedUnique([...existingWorkspacePackages, ...allDiscoveredPackagePaths]);
 
     const { domains: _domains, packageModes: _packageModes, ...rest } = currentControl;
@@ -740,8 +742,8 @@ function mergeSelectedStrategicDomainsIntoControl(
         packages: nextPackages,
         contexts: {
             ...(currentControl.contexts ?? {}),
-            "workspace:root": {
-                ...(currentControl.contexts?.["workspace:root"] ?? {}),
+            "workspaceRoot": {
+                ...(currentControl.contexts?.["workspaceRoot"] ?? {}),
                 packages: mergedWorkspacePackages,
             },
         },
@@ -824,6 +826,110 @@ export function registerChoir(context: vscode.ExtensionContext) {
                 let missionForSynthesis = currentControl.mission;
                 let visionForSynthesis = currentControl.vision;
                 const hasRootPackage = fs.existsSync(path.join(workspaceRoot, "package.json"));
+
+                const failClosedForMissingControlPlaneReferences = (
+                    discovery: ReturnType<typeof discoverStrategicDomains>,
+                    missingControlPlaneReferences: ReturnType<typeof detectMissingControlPlanePackageReferences>,
+                    stages: Array<{ stage: string; status: "success" | "failure"; detail: string }>
+                ): true => {
+                    const missingPackageCatalogLine = missingControlPlaneReferences.missingPackageCatalogEntries.length > 0
+                        ? `- packages catalog stale entries: ${missingControlPlaneReferences.missingPackageCatalogEntries.join(", ")}`
+                        : "";
+                    const missingPackageModesLine = missingControlPlaneReferences.missingPackageModeEntries.length > 0
+                        ? `- packageModes stale entries: ${missingControlPlaneReferences.missingPackageModeEntries.join(", ")}`
+                        : "";
+                    const missingContextPackagesLine = missingControlPlaneReferences.missingContextPackageEntries.length > 0
+                        ? `- contexts stale package references: ${missingControlPlaneReferences.missingContextPackageEntries
+                            .map((entry) => `${entry.contextId} -> ${entry.packagePath}`)
+                            .join(", ")}`
+                        : "";
+
+                    appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                        command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                        source: "chat",
+                        category: "pipeline",
+                        result: "failure",
+                        summary: "Strategic init failed closed: stale control-plane package references detected.",
+                        stages: [
+                            ...stages,
+                            {
+                                stage: "domain-classification",
+                                status: "failure",
+                                detail: [
+                                    `stale packages=${missingControlPlaneReferences.missingPackageCatalogEntries.length}`,
+                                    `stale packageModes=${missingControlPlaneReferences.missingPackageModeEntries.length}`,
+                                    `stale context package refs=${missingControlPlaneReferences.missingContextPackageEntries.length}`,
+                                ].join(", "),
+                            },
+                        ],
+                        metadata: {
+                            strategicInit: {
+                                mode: strategicMode,
+                                template: strategicTemplate ?? "none",
+                                workspaceType: discovery.workspace.type,
+                                packageCount: discovery.packages.length,
+                                missingPackageCatalogEntries: missingControlPlaneReferences.missingPackageCatalogEntries,
+                                missingPackageModeEntries: missingControlPlaneReferences.missingPackageModeEntries,
+                                missingContextPackageEntries: missingControlPlaneReferences.missingContextPackageEntries,
+                            },
+                        },
+                    });
+
+                    stream.markdown([
+                        "Strategic init failed closed: control-plane references packages that no longer exist in the workspace.",
+                        missingPackageCatalogLine,
+                        missingPackageModesLine,
+                        missingContextPackagesLine,
+                        "Update stale control-plane references (domains/contexts/package mappings) before running @choir init again.",
+                    ].filter((line) => line.length > 0).join("\n"));
+
+                    return true;
+                };
+
+                if (strategicMode === "full" && fs.existsSync(controlPath)) {
+                    try {
+                        const preflightDiscovery = discoverStrategicDomains(
+                            workspaceRoot,
+                            (strategicTemplate as Parameters<typeof discoverStrategicDomains>[1])
+                        );
+                        const preflightMissingControlPlaneReferences = detectMissingControlPlanePackageReferences(
+                            preflightDiscovery,
+                            currentControl,
+                            {
+                                includePackageModes: true,
+                            }
+                        );
+
+                        if (preflightMissingControlPlaneReferences.hasMissingReferences) {
+                            failClosedForMissingControlPlaneReferences(
+                                preflightDiscovery,
+                                preflightMissingControlPlaneReferences,
+                                [{
+                                    stage: "workspace-discovery",
+                                    status: "success",
+                                    detail: "detected workspace and package topology",
+                                }]
+                            );
+                            return;
+                        }
+                    } catch (error) {
+                        const message = error instanceof Error ? error.message : String(error);
+                        appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                            command: `choir init${strategicMode !== "full" ? ` --${strategicMode}` : ""}`,
+                            source: "chat",
+                            category: "pipeline",
+                            result: "failure",
+                            summary: `Strategic init failed: ${message}`,
+                            stages: [{
+                                stage: "workspace-discovery",
+                                status: "failure",
+                                detail: message,
+                            }],
+                        });
+                        stream.markdown(`Strategic init failed: ${message}`);
+                        return;
+                    }
+                }
 
                 if (strategicMode === "full") {
                     const statePath = getInitStatePath(workspaceRoot);
@@ -1101,6 +1207,19 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         (strategicTemplate as Parameters<typeof discoverStrategicDomains>[1])
                     );
 
+                    const missingControlPlaneReferences = detectMissingControlPlanePackageReferences(discovery, currentControl, {
+                        includePackages: strategicMode !== "reclassify",
+                        includePackageModes: strategicMode !== "reclassify",
+                    });
+                    if (missingControlPlaneReferences.hasMissingReferences) {
+                        failClosedForMissingControlPlaneReferences(
+                            discovery,
+                            missingControlPlaneReferences,
+                            diagnosticsStages
+                        );
+                        return;
+                    }
+
                     if (discovery.domains.length === 0) {
                         stream.markdown("Strategic init failed: no packages were discovered for domain modeling.");
                         appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
@@ -1119,6 +1238,53 @@ export function registerChoir(context: vscode.ExtensionContext) {
                             ],
                         });
                         return;
+                    }
+
+                    if (strategicMode === "recalibrate") {
+                        const packageCatalogDelta = detectStrategicPackageCatalogDelta(discovery, currentControl);
+                        if (packageCatalogDelta.hasChanges) {
+                            const changeDetails = [
+                                packageCatalogDelta.addedPackagePaths.length > 0
+                                    ? `- added packages: ${packageCatalogDelta.addedPackagePaths.join(", ")}`
+                                    : "",
+                                packageCatalogDelta.removedPackagePaths.length > 0
+                                    ? `- removed packages: ${packageCatalogDelta.removedPackagePaths.join(", ")}`
+                                    : "",
+                            ].filter((line) => line.length > 0);
+
+                            appendPipelineDiagnosticsRecordIfPossible(workspaceRoot, {
+                                command: `choir init --recalibrate`,
+                                source: "chat",
+                                category: "pipeline",
+                                result: "failure",
+                                summary: "Strategic init --recalibrate failed closed: package catalog changed; run --reclassify.",
+                                stages: [
+                                    ...diagnosticsStages,
+                                    {
+                                        stage: "domain-classification",
+                                        status: "failure",
+                                        detail: `package catalog drift detected: added=${packageCatalogDelta.addedPackagePaths.length}, removed=${packageCatalogDelta.removedPackagePaths.length}`,
+                                    },
+                                ],
+                                metadata: {
+                                    strategicInit: {
+                                        mode: strategicMode,
+                                        template: strategicTemplate ?? "none",
+                                        workspaceType: discovery.workspace.type,
+                                        packageCount: discovery.packages.length,
+                                        addedPackagePaths: packageCatalogDelta.addedPackagePaths,
+                                        removedPackagePaths: packageCatalogDelta.removedPackagePaths,
+                                    },
+                                },
+                            });
+
+                            stream.markdown([
+                                "Strategic init failed closed: discovered package catalog changed during recalibration.",
+                                ...changeDetails,
+                                "Run @choir init --reclassify and then re-run @choir init --recalibrate.",
+                            ].join("\n"));
+                            return;
+                        }
                     }
 
                     diagnosticsStages.push({

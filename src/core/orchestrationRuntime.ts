@@ -455,7 +455,7 @@ function deriveSimulationUnit(task: Task): string {
 
   const first = files[0];
   if (!first) {
-    return "workspace:root";
+    return "workspaceRoot";
   }
 
   const segments = first.split("/").filter((entry) => entry.length > 0);
@@ -463,7 +463,7 @@ function deriveSimulationUnit(task: Task): string {
     return `${segments[0]}:${segments[1]}`;
   }
 
-  return "workspace:root";
+  return "workspaceRoot";
 }
 
 function toGlobalPlanFromPlan(plan: Plan): GlobalPlan {

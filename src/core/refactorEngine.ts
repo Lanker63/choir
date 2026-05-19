@@ -252,7 +252,7 @@ function deriveUnitId(root: string, filePath: string): string {
     return `${segments[0]}:${segments[1]}`;
   }
 
-  return "workspace:root";
+  return "workspaceRoot";
 }
 
 function makeSymbolId(symbol: import("ts-morph").Symbol, root: string, sourceFiles: Set<string>): string | null {
@@ -901,7 +901,7 @@ function canonicalizeModulePath(value: string): string {
 
 function unitDefaultFilePath(root: string, unit: string): string {
   const normalizedUnit = normalizeUnitSelector(unit);
-  if (normalizedUnit === "workspace:root") {
+  if (normalizedUnit === "workspaceRoot") {
     return path.join(root, "src", "index.ts");
   }
 
