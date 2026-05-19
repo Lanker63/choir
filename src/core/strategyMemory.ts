@@ -207,7 +207,7 @@ export function buildSignature(control: ControlPlane, state: StatePlane): Contex
   const modules = extractModules(state);
   const packageDomains = sortedUnique(Object.keys(control.packages ?? {}));
   const strategicRolloutPreferences = sortedUnique([
-    ...(control.strategicIntent?.rolloutPreferences ?? []),
+    // ...(control.strategicIntent?.rolloutPreferences ?? []),
     ...Object.values(control.packages ?? {}).flatMap((entry) => entry.strategicIntent?.rolloutPreferences ?? []),
   ]);
 
@@ -215,9 +215,9 @@ export function buildSignature(control: ControlPlane, state: StatePlane): Contex
     goals: sortedUnique(control.intent.goals ?? []),
     constraints: sortedUnique(control.intent.constraints ?? []),
     ...(packageDomains.length > 0 ? { strategicDomains: packageDomains } : {}),
-    ...(control.strategicIntent?.governanceIntensity
-      ? { strategicGovernanceIntensity: control.strategicIntent.governanceIntensity }
-      : {}),
+    // ...(control.strategicIntent?.governanceIntensity
+    //   ? { strategicGovernanceIntensity: control.strategicIntent.governanceIntensity }
+    //   : {}),
     ...(strategicRolloutPreferences.length > 0
       ? { strategicRolloutPreferences }
       : {}),

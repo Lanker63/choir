@@ -11,7 +11,7 @@ import type {
 } from "../schema.js";
 
 export type StrategicIntent = {
-  mission?: string;
+  // mission?: string;
   priorities: StrategicPriority[];
   optimizationGoals: OptimizationGoal[];
   riskTolerance: RiskTolerance;
@@ -80,31 +80,31 @@ function mergeArray<T extends string>(base: T[], next: T[] | undefined): T[] {
   return next ? sortedUnique(next) as T[] : base;
 }
 
-function normalizePartialIntent(input: ControlPlane["strategicIntent"] | undefined): StrategicIntent {
-  const base = defaultStrategicIntent();
-  if (!input) {
-    return base;
-  }
+// function normalizePartialIntent(input: StrategicIntent | undefined): StrategicIntent {
+//   const base = defaultStrategicIntent();
+//   if (!input) {
+//     return base;
+//   }
 
-  return {
-    mission: normalizeOptionalString(input.mission),
-    priorities: mergeArray(base.priorities, input.priorities),
-    optimizationGoals: mergeArray(base.optimizationGoals, input.optimizationGoals),
-    riskTolerance: input.riskTolerance ?? base.riskTolerance,
-    architecturalPosture: mergeArray(base.architecturalPosture, input.architecturalPosture),
-    rolloutPreferences: mergeArray(base.rolloutPreferences, input.rolloutPreferences),
-    stabilityProfile: input.stabilityProfile ?? base.stabilityProfile,
-    governanceIntensity: input.governanceIntensity ?? base.governanceIntensity,
-  };
-}
+//   return {
+//     mission: normalizeOptionalString(input.mission),
+//     priorities: mergeArray(base.priorities, input.priorities),
+//     optimizationGoals: mergeArray(base.optimizationGoals, input.optimizationGoals),
+//     riskTolerance: input.riskTolerance ?? base.riskTolerance,
+//     architecturalPosture: mergeArray(base.architecturalPosture, input.architecturalPosture),
+//     rolloutPreferences: mergeArray(base.rolloutPreferences, input.rolloutPreferences),
+//     stabilityProfile: input.stabilityProfile ?? base.stabilityProfile,
+//     governanceIntensity: input.governanceIntensity ?? base.governanceIntensity,
+//   };
+// }
 
-function mergeIntent(base: StrategicIntent, next: ControlPlane["strategicIntent"] | undefined): StrategicIntent {
+function mergeIntent(base: StrategicIntent, next: StrategicIntent | undefined): StrategicIntent {
   if (!next) {
     return base;
   }
 
   return {
-    mission: normalizeOptionalString(next.mission) ?? base.mission,
+    // mission: normalizeOptionalString(next.mission) ?? base.mission,
     priorities: mergeArray(base.priorities, next.priorities),
     optimizationGoals: mergeArray(base.optimizationGoals, next.optimizationGoals),
     riskTolerance: next.riskTolerance ?? base.riskTolerance,
@@ -127,22 +127,23 @@ export function resolveStrategicContext(input: {
   const packageNames = sortedUnique(input.packageNames.map((entry) => entry.trim()).filter((entry) => entry.length > 0));
   const control = input.controlPlane;
   const strategicHierarchyEnabled = Boolean(
-    (control.strategicIntent && (
-      (control.strategicIntent.mission?.trim().length ?? 0) > 0
-      || (control.strategicIntent.priorities?.length ?? 0) > 0
-      || (control.strategicIntent.optimizationGoals?.length ?? 0) > 0
-      || (control.strategicIntent.architecturalPosture?.length ?? 0) > 0
-      || (control.strategicIntent.rolloutPreferences?.length ?? 0) > 0
-      || typeof control.strategicIntent.riskTolerance === "string"
-      || typeof control.strategicIntent.stabilityProfile === "string"
-      || typeof control.strategicIntent.governanceIntensity === "string"
-    ))
-    || Object.keys(control.domains ?? {}).length > 0
+    // (control.strategicIntent && (
+    //   (control.strategicIntent.mission?.trim().length ?? 0) > 0
+    //   || (control.strategicIntent.priorities?.length ?? 0) > 0
+    //   || (control.strategicIntent.optimizationGoals?.length ?? 0) > 0
+    //   || (control.strategicIntent.architecturalPosture?.length ?? 0) > 0
+    //   || (control.strategicIntent.rolloutPreferences?.length ?? 0) > 0
+    //   || typeof control.strategicIntent.riskTolerance === "string"
+    //   || typeof control.strategicIntent.stabilityProfile === "string"
+    //   || typeof control.strategicIntent.governanceIntensity === "string"
+    // ))
+    // || 
+    Object.keys(control.domains ?? {}).length > 0
     || Object.keys(control.packages ?? {}).length > 0
     || Object.keys(control.contexts ?? {}).length > 0
   );
 
-  const globalIntent = normalizePartialIntent(control.strategicIntent);
+  const globalIntent = defaultStrategicIntent(); // normalizePartialIntent(control.packages?.root?.strategicIntent);
   const globalChain: string[] = ["global"];
 
   if (packageNames.length === 0) {
@@ -227,12 +228,12 @@ export function resolveStrategicContext(input: {
   const domain = domains.length === 1 ? domains[0] as string : undefined;
   const domainConfig = domain ? control.domains?.[domain] : undefined;
 
-  let effectiveIntent = mergeIntent(globalIntent, domainConfig?.strategicIntent);
+  let effectiveIntent = mergeIntent(globalIntent, domainConfig?.strategicIntent as StrategicIntent | undefined);
   const chain = domain ? [...globalChain, `domain:${domain}`] : [...globalChain];
 
   for (const packageName of packageNames) {
     const packageConfig = control.packages?.[packageName];
-    effectiveIntent = mergeIntent(effectiveIntent, packageConfig?.strategicIntent);
+    effectiveIntent = mergeIntent(effectiveIntent, packageConfig?.strategicIntent as StrategicIntent | undefined);
     chain.push(`package:${packageName}`);
   }
 
@@ -256,7 +257,7 @@ export function resolveStrategicContext(input: {
     .map(([contextName]) => contextName));
 
   for (const contextName of contexts) {
-    effectiveIntent = mergeIntent(effectiveIntent, control.contexts?.[contextName]?.strategicIntent);
+    effectiveIntent = mergeIntent(effectiveIntent, control.contexts?.[contextName]?.strategicIntent as StrategicIntent | undefined);
     chain.push(`context:${contextName}`);
   }
 

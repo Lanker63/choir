@@ -69,7 +69,7 @@ export class StrategicInitWizardViewProvider {
 
     const domains = control?.domains ? Object.entries(control.domains).sort(([left], [right]) => left.localeCompare(right)) : [];
     const packages = control?.packages ? Object.entries(control.packages).sort(([left], [right]) => left.localeCompare(right)) : [];
-    const strategic = control?.strategicIntent;
+    // const strategic = control?.strategicIntent;
 
     const domainRows = domains.length > 0
       ? domains.map(([id, domain]) => {
@@ -116,7 +116,6 @@ pre { margin: 0; max-height: 240px; overflow: auto; background: #0f1a16; color: 
     <h3>Strategic Initialization Overview</h3>
     <p>Mission: ${control?.mission ?? ""}</p>
     <p>Vision: ${control?.vision ?? ""}</p>
-    <p>Global governance: ${strategic?.governanceIntensity ?? "n/a"} | risk: ${strategic?.riskTolerance ?? "n/a"} | rollout: ${(strategic?.rolloutPreferences ?? []).join(", ") || "none"}</p>
   </section>
   <section class="card">
     <h3>Domain Heatmap</h3>

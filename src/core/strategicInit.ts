@@ -2,6 +2,7 @@ import fs from "fs";
 import path from "path";
 import * as YAML from "yaml";
 import type { ControlPlane } from "../schema.js";
+import { type StrategicIntent } from "./strategicIntent.js";
 import { stableStringify, deterministicId } from "./deterministicCore.js";
 import { defaultCapabilitiesForMode } from "./runtimeGovernance.js";
 import { strategicTemplateDefaultsFromCatalog } from "./initTemplateCatalog.js";
@@ -605,7 +606,7 @@ export function calibrateStrategicOrchestration(discovery: StrategicDiscovery, m
   };
 }
 
-function strategicIntentFromModels(models: StrategicDomainModel[]): ControlPlane["strategicIntent"] {
+function strategicIntentFromModels(models: StrategicDomainModel[]): StrategicIntent {
   if (models.length === 0) {
     return {
       priorities: [],
@@ -702,17 +703,17 @@ function mergeUniqueSorted(left: string[] | undefined, right: string[] | undefin
   return [...new Set([...(left ?? []), ...(right ?? [])])].sort((a, b) => a.localeCompare(b));
 }
 
-export function scopeControlPlaneRuntimeForWorkspace(
-  control: ControlPlane,
-  hasRootPackage: boolean
-): ControlPlane {
-  if (hasRootPackage) {
-    return control;
-  }
+// export function scopeControlPlaneRuntimeForWorkspace(
+//   control: ControlPlane,
+//   hasRootPackage: boolean
+// ): ControlPlane {
+//   if (hasRootPackage) {
+//     return control;
+//   }
 
-  const { runtime: _runtime, capabilities: _capabilities, ...rest } = control;
-  return rest as ControlPlane;
-}
+//   const { runtime: _runtime, capabilities: _capabilities, ...rest } = control;
+//   return rest as ControlPlane;
+// }
 
 function defaultRuntimeModeFromPosture(
   governanceIntensity: GovernanceIntensity,
@@ -854,14 +855,14 @@ export function synthesizeStrategicControlPlane(
     : existing;
 
   const { domains: _domains, ...baseWithoutDomains } = baseControl;
-  const runtimeScopedBase = scopeControlPlaneRuntimeForWorkspace(baseWithoutDomains as ControlPlane, hasRootPackage);
-  const strategicScopedBase = (!hasRootPackage || singlePackageRooted)
-    ? (() => {
-      const { strategicIntent: _strategicIntent, ...rest } = runtimeScopedBase;
-      return rest as ControlPlane;
-    })()
-    : runtimeScopedBase;
-
+  // const runtimeScopedBase = scopeControlPlaneRuntimeForWorkspace(baseWithoutDomains as ControlPlane, hasRootPackage);
+  // const strategicScopedBase = (!hasRootPackage || singlePackageRooted)
+  //   ? (() => {
+  //     const { strategicIntent: _strategicIntent, ...rest } = runtimeScopedBase;
+  //     return rest as ControlPlane;
+  //   })()
+  //   : runtimeScopedBase;
+  const strategicScopedBase = baseWithoutDomains as ControlPlane;
   const nextPackages = input.mode === "expand-domain"
     ? {
       ...(baseControl.packages ?? {}),
@@ -920,7 +921,7 @@ export function synthesizeStrategicControlPlane(
 
   const strategicHash = deterministicId("init-strategic", {
     models: input.models,
-    strategicIntent: nextControl.strategicIntent,
+    // strategicIntent: nextControl.strategicIntent,
     packages: nextControl.packages,
   }, 16);
 

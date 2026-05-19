@@ -273,7 +273,7 @@ export const ControlPlaneSchema = z.object({
         constraints: z.array(z.string()).default([]),
         "non-goals": z.array(z.string()).default([])
     }).strict(),
-    strategicIntent: StrategicIntentPartialSchema.optional(),
+    // strategicIntent: StrategicIntentPartialSchema.optional(),
     domains: z.record(z.string().min(1), DomainStrategicSchema).optional(),
     packages: z.record(z.string().min(1), PackageStrategicSchema).optional(),
     contexts: z.record(z.string().min(1), ContextStrategicSchema).optional(),
@@ -346,18 +346,18 @@ export const ControlPlaneSchema = z.object({
             });
         }
 
-        if (control.strategicIntent && Object.keys(control.packageModes).length > 0) {
-            context.addIssue({
-                code: "custom",
-                message: "cannot define both global strategicIntent and packageModes",
-                path: ["strategicIntent"],
-            });
-            context.addIssue({
-                code: "custom",
-                message: "cannot define both global strategicIntent and packageModes",
-                path: ["packageModes"],
-            });
-        }
+        // if (control.strategicIntent && Object.keys(control.packageModes).length > 0) {
+        //     context.addIssue({
+        //         code: "custom",
+        //         message: "cannot define both global strategicIntent and packageModes",
+        //         path: ["strategicIntent"],
+        //     });
+        //     context.addIssue({
+        //         code: "custom",
+        //         message: "cannot define both global strategicIntent and packageModes",
+        //         path: ["packageModes"],
+        //     });
+        // }
     }
 
     const hasDomainCatalog = Object.keys(control.domains ?? {}).length > 0;
