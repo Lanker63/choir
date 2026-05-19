@@ -125,6 +125,7 @@ Scope assumption: this manual smoke test is executed in a target repository usin
    - Confirm discovered domain identity follows topology-derived naming from package paths.
    - Run `@choir init --reclassify` with unchanged workspace.
    - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
+   - Confirm each reclassify domain mission prompt is pre-populated from previously modeled mission text (not reset to generic topology fallback wording).
    - Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
    - Confirm rollout/governance recommendations are recalibrated and persisted without destructive resets of unrelated intent fields.
    - For multi-domain workspaces, confirm runtime governance is captured per-domain during domain modeling and global runtime prompt is not required as an interactive blocker.

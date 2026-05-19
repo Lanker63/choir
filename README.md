@@ -115,6 +115,7 @@ Core flow:
 - merge-mode init pre-populates mission/vision prompts from current control-plane values
 - merge-mode strategic re-init is domain-by-domain: choose a candidate domain, re-initialize it, return to the domain list, then finish when ready
 - strategic init persists `packages` as the canonical strategic catalog; `domains` are modeling-time constructs and are not persisted as a duplicate catalog
+- strategic domain mission text is persisted on package-level `packages.*.strategicIntent.mission` and re-used to seed re-init/reclassify domain mission prompts when top-level `domains` is omitted
 - package entries in persisted init output no longer carry legacy `packages.*.domain`; package-level `strategicIntent` and `contexts` provide canonical strategic scope
 - runtime governance scope is exclusive during init synthesis: rooted workspaces persist global `runtime` + `capabilities`, rootless workspaces persist `packageModes`
 - strategic intent scope is exclusive during init synthesis when `packageModes` are present: rootless workspaces omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`

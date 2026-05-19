@@ -160,15 +160,6 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
       runtime: {
         mode: "execution-enabled",
       },
-      strategicIntent: {
-        priorities: [],
-        optimizationGoals: [],
-        riskTolerance: "moderate",
-        architecturalPosture: [],
-        rolloutPreferences: [],
-        stabilityProfile: "adaptive",
-        governanceIntensity: "moderate",
-      },
       domains: {},
       packages: {},
       contexts: {},
@@ -284,6 +275,15 @@ export async function runInitVerification(): Promise<InitVerificationReport> {
           && seededDefaults.stabilityProfile === "stable"
           && seededDefaults.governanceIntensity === "strict"
           && seededDefaults.runtimeMode === "approval-required",
+        detail: `domain=${domainForPrompt.id}`,
+      });
+
+      const modelMission = models.find((model) => model.id === domainForPrompt.id)?.mission ?? "";
+      const packageSeededDefaults = seedStrategicDomainPromptDefaults(domainForPrompt, synthA.controlPlane);
+      checks.push({
+        name: "domain-prompt-defaults-seeded-from-package-strategic-intent",
+        passed: modelMission.length > 0
+          && packageSeededDefaults.mission === modelMission,
         detail: `domain=${domainForPrompt.id}`,
       });
 

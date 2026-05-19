@@ -462,12 +462,13 @@ const ROLLOUT_PREFERENCES: RolloutPreference[] = [
 ];
 
 async function modelStrategicDomainsInteractively(
-    discovery: ReturnType<typeof discoverStrategicDomains>
+    discovery: ReturnType<typeof discoverStrategicDomains>,
+    currentControl?: ControlPlane
 ): Promise<StrategicDomainModel[] | null> {
     const models: StrategicDomainModel[] = [];
 
     for (const domain of discovery.domains) {
-        const model = await modelSingleStrategicDomain(domain);
+        const model = await modelSingleStrategicDomain(domain, currentControl);
         if (!model) {
             return null;
         }
@@ -1146,7 +1147,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
 
                     const models = mergeSelection
                         ? mergeSelection.models
-                        : await modelStrategicDomainsInteractively(modelingDiscovery);
+                        : await modelStrategicDomainsInteractively(modelingDiscovery, currentControl);
 
                     if (!models) {
                         stream.markdown("Choir init cancelled during strategic domain modeling.");
@@ -1202,19 +1203,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     });
 
                     const singlePackageRooted = hasRootPackage && modelingDiscovery.packages.length === 1 && models.length === 1;
-                    const requiresGlobalRuntimePrompt = strategicMode === "full"
-                        && modelingDiscovery.domains.length <= 1
-                        && !singlePackageRooted;
-                    const runtimeMode = strategicMode === "full"
-                        ? (requiresGlobalRuntimePrompt
-                            ? await chooseRuntimeMode(
-                                calibration.governanceModeRecommendation,
-                                `strategy=${calibration.selectedStrategyType}, rollout=${calibration.rolloutDefault}, blastRadius=${calibration.estimatedBlastRadius}`
-                            )
-                            : (singlePackageRooted
-                                ? (models[0]?.runtimeMode ?? calibration.governanceModeRecommendation)
-                                : calibration.governanceModeRecommendation))
-                        : (currentControl.runtime?.mode ?? calibration.governanceModeRecommendation);
+                    const runtimeMode = currentControl.runtime?.mode ?? calibration.governanceModeRecommendation;
 
                     if (!runtimeMode) {
                         stream.markdown("Choir init cancelled during runtime governance modeling.");
@@ -1226,11 +1215,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         status: "success",
                         detail: strategicMode !== "full"
                             ? `runtime mode retained for ${strategicMode}: ${runtimeMode}`
-                            : (requiresGlobalRuntimePrompt
-                                ? `global runtime mode selected: ${runtimeMode}`
-                                : (singlePackageRooted
+                            : (singlePackageRooted
                                     ? `single-package rooted runtime derived from domain modeling: ${runtimeMode}`
-                                    : `global runtime mode baseline (auto): ${runtimeMode}; domain runtime modes captured per domain`)),
+                                    : `global runtime mode baseline (auto): ${runtimeMode}; domain runtime modes captured per domain`),
                     });
 
                     const runtimeModeForSynthesis = mergeSelection

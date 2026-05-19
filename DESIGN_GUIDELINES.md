@@ -177,6 +177,7 @@ Strategic init contract:
 - In merge mode, scalar root fields (`mission`, `vision`) must be pre-populated from the current control plane before prompting.
 - In merge mode after root prompts, domain re-init must be operator-driven with a domain picker loop (select domain -> model domain -> return to picker), with an explicit finish option.
 - Strategic init persistence must use `packages` as the canonical strategic catalog and must not persist a duplicate top-level `domains` catalog.
+- Domain mission continuity across re-init/reclassify must be preserved via package-level `packages.*.strategicIntent.mission` so prompt defaults remain stable even when top-level `domains` is omitted.
 - Persisted package records must not require or emit legacy `packages.*.domain`; strategic resolution is package/context-driven.
 - Runtime governance persistence for init must be scope-exclusive: rooted workspaces persist global `runtime`/`capabilities` and omit `packageModes`; rootless workspaces persist `packageModes` and omit global `runtime`/`capabilities`.
 - Strategic intent persistence for init must align with governance scope: rooted workspaces may persist global `strategicIntent`; rootless workspaces using `packageModes` must omit global `strategicIntent` and persist package-level `packages.*.strategicIntent`.

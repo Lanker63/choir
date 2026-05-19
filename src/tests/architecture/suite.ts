@@ -2647,6 +2647,68 @@ const pass2: TestPass = {
       },
     },
     {
+      id: "2.30ai",
+      name: "reclassify prompt defaults preserve domain mission from package strategic intent when domains are omitted",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-reclassify-mission-seed-"));
+        try {
+          fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
+            name: "reclassify-mission-seed",
+            private: true,
+          }, null, 2));
+
+          const packageDir = path.join(root, "client");
+          fs.mkdirSync(packageDir, { recursive: true });
+          fs.writeFileSync(path.join(packageDir, "package.json"), JSON.stringify({
+            name: "client",
+            private: true,
+          }, null, 2));
+
+          const discovery = discoverStrategicDomains(root, undefined);
+          const targetDomain = discovery.domains[0];
+          assert.ok(targetDomain);
+          if (!targetDomain) {
+            return;
+          }
+
+          const preservedMission = "Serve all client outcomes";
+          const models = discovery.domains.map((domain) => ({
+            id: domain.id,
+            mission: domain.id === targetDomain.id ? preservedMission : `Owns ${domain.id}`,
+            priorities: [...domain.inferred.priorities],
+            optimizationGoals: [...domain.inferred.optimizationGoals],
+            riskTolerance: domain.inferred.riskTolerance,
+            rolloutPreferences: [...domain.inferred.rolloutPreferences],
+            stabilityProfile: domain.inferred.stabilityProfile,
+            governanceIntensity: domain.inferred.governanceIntensity,
+            runtimeMode: domain.inferred.runtimeMode,
+            runtimeCapabilities: domain.inferred.runtimeCapabilities,
+          }));
+
+          const calibration = calibrateStrategicOrchestration(discovery, models);
+          const synthesized = synthesizeStrategicControlPlane(makeControlPlane(), {
+            mode: "full",
+            mission: "Mission",
+            vision: "Vision",
+            runtimeMode: calibration.governanceModeRecommendation,
+            discovery,
+            models,
+            calibration,
+          }).controlPlane;
+
+          assert.ok(!synthesized.domains || Object.keys(synthesized.domains).length === 0);
+          for (const packagePath of targetDomain.packages) {
+            assert.strictEqual(synthesized.packages?.[packagePath]?.strategicIntent?.mission, preservedMission);
+          }
+
+          const defaults = seedStrategicDomainPromptDefaults(targetDomain, synthesized);
+          assert.strictEqual(defaults.mission, preservedMission);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
+    {
       id: "2.30a",
       name: "init chat shortcut parser accepts prefixed and stripped participant input",
       run: async () => {

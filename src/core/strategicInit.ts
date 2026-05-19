@@ -731,16 +731,36 @@ function uniqueExistingDomainRuntimeMode(
   return undefined;
 }
 
+function uniqueExistingDomainMission(
+  domain: StrategicDomainDraft,
+  currentControl?: ControlPlane
+): string | undefined {
+  const missions = [...new Set(
+    domain.packages
+      .map((packagePath) => currentControl?.packages?.[packagePath]?.strategicIntent?.mission)
+      .filter((value): value is string => typeof value === "string")
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+  )].sort((left, right) => left.localeCompare(right));
+
+  if (missions.length === 1) {
+    return missions[0];
+  }
+
+  return undefined;
+}
+
 export function seedStrategicDomainPromptDefaults(
   domain: StrategicDomainDraft,
   currentControl?: ControlPlane
 ): StrategicDomainPromptDefaults {
   const currentDomain = currentControl?.domains?.[domain.id];
   const currentIntent = currentDomain?.strategicIntent;
+  const packageMission = uniqueExistingDomainMission(domain, currentControl);
 
   const mission = (typeof currentDomain?.mission === "string" && currentDomain.mission.trim().length > 0)
     ? currentDomain.mission.trim()
-    : `Owns ${domain.id} outcomes across ${domain.packages.length} package(s).`;
+    : (packageMission ?? `Owns ${domain.id} outcomes across ${domain.packages.length} package(s).`);
 
   const priorities = (currentIntent?.priorities && currentIntent.priorities.length > 0)
     ? [...currentIntent.priorities]
@@ -801,6 +821,7 @@ export function synthesizeStrategicControlPlane(
           ...(model
             ? {
               strategicIntent: {
+                ...(model.mission.trim().length > 0 ? { mission: model.mission.trim() } : {}),
                 priorities: [...model.priorities],
                 optimizationGoals: [...model.optimizationGoals],
                 riskTolerance: model.riskTolerance,
