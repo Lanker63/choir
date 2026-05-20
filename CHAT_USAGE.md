@@ -324,6 +324,10 @@ choir refactor move <symbol> <targetUnit>
 choir refactor move MyService --file "src/modules/users/service.ts"
 ```
 
+Move is a clean relocation for top-level declarations: dependents are rewritten to import from the new declaration module path, compiler-aware module specifiers are enforced (including explicit `.js` for Node16/NodeNext), and the previous source module does not retain automatic compatibility re-exports for the moved symbol.
+
+When using `--file`, the target must resolve inside the workspace root; unresolved or out-of-root targets fail closed.
+
 ### Extract
 
 ```

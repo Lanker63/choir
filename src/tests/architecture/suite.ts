@@ -316,6 +316,10 @@ import {
   toUIGraph,
 } from "../../core/dependencyGraphUi.js";
 import {
+  createTrackedTmpDir,
+  installTmpDirTerminationCleanup,
+} from "../utils/tmpCleanup.js";
+import {
   rollbackRefactor,
   runRefactorIntent,
 } from "../../core/refactorEngine.js";
@@ -334,6 +338,8 @@ import {
   runVerificationCase,
 } from "../verification/core/verificationHarness.js";
 import { CONTROL_PLANE_VERSION, ControlPlane, ControlPlaneSchema, Plan, Task } from "../../schema.js";
+
+installTmpDirTerminationCleanup();
 
 function testLocation(file: string, startLine: number, startChar: number, endLine: number, endChar: number): SourceLocation {
   return {
@@ -1601,7 +1607,7 @@ const pass2: TestPass = {
         const persisted = persistSelectedOptimizedPlan(control, selectedPlan);
         assert.ok(persisted.execution.plans.some((plan) => plan.id === selectedPlan.id));
 
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-plan-opt-persist-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-plan-opt-persist-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         fs.mkdirSync(path.dirname(controlPath), { recursive: true });
         fs.writeFileSync(controlPath, YAML.stringify(control), "utf-8");
@@ -1757,7 +1763,7 @@ const pass2: TestPass = {
 
       name: "dsl compiler write path preserves packageModes-only governance without injecting global runtime",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-package-modes-only-write-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-package-modes-only-write-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         const control = makeControlPlane();
         control.packageModes = {
@@ -1929,7 +1935,7 @@ const pass2: TestPass = {
 
       name: "policy deny rule blocks yaml mutation before write",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-deny-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-deny-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
@@ -1956,7 +1962,7 @@ const pass2: TestPass = {
 
       name: "policy require-approval blocks until approved for exact diff hash",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-approval-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-approval-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
@@ -2290,7 +2296,7 @@ const pass2: TestPass = {
 
       name: "init wizard session persistence supports resume and clear",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-wizard-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-init-wizard-"));
         try {
           const wizard = new InitWizard(createWizardState("backend"));
           wizard.next("Mission");
@@ -2434,7 +2440,7 @@ const pass2: TestPass = {
 
       name: "template-seeded domain runtime defaults preserve template runtime mode",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-runtime-defaults-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-template-runtime-defaults-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "template-runtime-defaults",
@@ -2460,7 +2466,7 @@ const pass2: TestPass = {
 
       name: "rootless template synthesis applies template capabilities to packageModes",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-package-capabilities-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-template-package-capabilities-"));
         try {
           const pkgDir = path.join(root, "service");
           fs.mkdirSync(pkgDir, { recursive: true });
@@ -2517,7 +2523,7 @@ const pass2: TestPass = {
 
       name: "rooted single-package synthesis avoids duplicating global and package strategicIntent",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-intent-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-rooted-single-intent-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "single-package",
@@ -2583,7 +2589,7 @@ const pass2: TestPass = {
 
       name: "rooted single-package synthesis derives global runtime from sole domain runtime mode",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-runtime-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-rooted-single-runtime-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "single-package-runtime",
@@ -2648,7 +2654,7 @@ const pass2: TestPass = {
 
       name: "expand-domain modeling selector scopes to domains touched by newly discovered packages",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-selector-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-expand-domain-selector-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "expand-domain-selector",
@@ -2726,7 +2732,7 @@ const pass2: TestPass = {
 
       name: "rootless expand-domain synthesis preserves existing packageModes and adds new package modes only",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-rootless-modes-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-expand-domain-rootless-modes-"));
         try {
           const existingPackagePath = "packages/payments";
           const newPackagePath = "packages/orders";
@@ -2814,7 +2820,7 @@ const pass2: TestPass = {
 
       name: "recalibrate package drift detection flags added discovered packages",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-add-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-recalibrate-drift-add-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "recalibrate-drift-add",
@@ -2852,7 +2858,7 @@ const pass2: TestPass = {
 
       name: "recalibrate package drift detection flags removed persisted packages",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-remove-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-recalibrate-drift-remove-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "recalibrate-drift-remove",
@@ -2889,7 +2895,7 @@ const pass2: TestPass = {
 
       name: "recalibrate package drift detection allows unchanged package catalogs",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-none-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-recalibrate-drift-none-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "recalibrate-drift-none",
@@ -2928,7 +2934,7 @@ const pass2: TestPass = {
 
       name: "init discovery stale-reference detection flags non-existent package references across control plane scopes",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-detect-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-init-stale-refs-detect-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "init-stale-refs-detect",
@@ -2983,7 +2989,7 @@ const pass2: TestPass = {
 
       name: "init discovery stale-reference detection allows control plane package references aligned with discovery",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-none-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-init-stale-refs-none-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "init-stale-refs-none",
@@ -3036,7 +3042,7 @@ const pass2: TestPass = {
 
       name: "init discovery stale-reference detection can ignore package and packageModes references",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-ignore-modes-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-init-stale-refs-ignore-modes-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "init-stale-refs-ignore-modes",
@@ -3087,7 +3093,7 @@ const pass2: TestPass = {
 
       name: "init discovery stale-reference detection fails on packageModes-only drift when packageModes checks are enabled",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-modes-only-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-init-stale-refs-modes-only-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "init-stale-refs-modes-only",
@@ -3134,7 +3140,7 @@ const pass2: TestPass = {
 
       name: "reclassify prompt defaults preserve domain mission from package strategic intent when domains are omitted",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-reclassify-mission-seed-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-reclassify-mission-seed-"));
         try {
           fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({
             name: "reclassify-mission-seed",
@@ -3600,7 +3606,7 @@ const pass2: TestPass = {
 
       name: "macro expansion is deterministic with parameter defaults",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-defaults-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-defaults-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
           "macros:",
@@ -3639,7 +3645,7 @@ const pass2: TestPass = {
 
       name: "macro execution compiles sequentially through yaml pipeline",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-run-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-run-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
           "macros:",
@@ -3682,7 +3688,7 @@ const pass2: TestPass = {
 
       name: "macro composition rejects recursive cycles deterministically",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-recursion-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-recursion-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
           "macros:",
@@ -3821,7 +3827,7 @@ const pass2: TestPass = {
 
       name: "runtime environment detection drives policy deny in production",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-prod-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-env-prod-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         const control = makeControlPlane();
@@ -3910,7 +3916,7 @@ const pass2: TestPass = {
 
       name: "policy dsl loader rejects duplicate policy ids",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dsl-dup-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-dsl-dup-"));
         writePoliciesDSL(root, [
           "policy dup {",
           "  when diff.operation = add then allow",
@@ -3930,7 +3936,7 @@ const pass2: TestPass = {
 
       name: "policy inheritance loader returns org repo and environment sources",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-sources-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-sources-"));
 
         writeOrgPoliciesDSL(root, [
           "policy org-base {",
@@ -3957,7 +3963,7 @@ const pass2: TestPass = {
 
       name: "org deny policy wins over repo allow policy",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-org-deny-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-org-deny-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         writeOrgPoliciesDSL(root, [
@@ -3990,7 +3996,7 @@ const pass2: TestPass = {
 
       name: "repo cannot override org deny with assign inheritance",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-no-override-deny-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-no-override-deny-"));
 
         writeOrgPoliciesDSL(root, [
           "policy org-deny-db {",
@@ -4016,7 +4022,7 @@ const pass2: TestPass = {
 
       name: "org can allow controlled child assign for non-deny policy",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-child-override-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-child-override-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         writeOrgPoliciesDSL(root, [
@@ -4051,7 +4057,7 @@ const pass2: TestPass = {
 
       name: "environment policy layer is applied last and can enforce strict production denies",
       run: async () => {
-        const prodRoot = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-last-prod-"));
+        const prodRoot = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-env-last-prod-"));
         const prodControlPath = path.join(prodRoot, ".choir", "choir.config.yaml");
 
         writeOrgPoliciesDSL(prodRoot, [
@@ -4076,7 +4082,7 @@ const pass2: TestPass = {
           assert.strictEqual(result.policyTrace?.environment, "production");
         });
 
-        const localRoot = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-last-local-"));
+        const localRoot = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-env-last-local-"));
         const localControlPath = path.join(localRoot, ".choir", "choir.config.yaml");
 
         writeOrgPoliciesDSL(localRoot, [
@@ -4106,7 +4112,7 @@ const pass2: TestPass = {
 
       name: "duplicate policy ids across org and repo layers are rejected",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dup-cross-layer-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-dup-cross-layer-"));
 
         writeOrgPoliciesDSL(root, [
           "policy shared-policy {",
@@ -4130,7 +4136,7 @@ const pass2: TestPass = {
 
       name: "effective policy trace records source and final decision deterministically",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-trace-sources-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-policy-trace-sources-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         writeOrgPoliciesDSL(root, [
@@ -4198,7 +4204,7 @@ const pass2: TestPass = {
 
       name: "audit store records compile and policy evaluation with immutable hash chain",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-compile-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-audit-compile-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         compileDSLAndWrite(
@@ -4231,7 +4237,7 @@ const pass2: TestPass = {
 
       name: "audit records approval granted events",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-approval-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-audit-approval-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         writePoliciesDSL(root, [
@@ -4264,7 +4270,7 @@ const pass2: TestPass = {
 
       name: "audit query and compliance reports are deterministic with multi-format export",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-report-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-audit-report-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
 
         writePoliciesDSL(root, [
@@ -4310,7 +4316,7 @@ const pass2: TestPass = {
 
       name: "transactional execution writes execution audit record",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-execute-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-audit-execute-"));
         const control = makeControlPlane();
         const plan = makePlan("plan-audit", [
           makeTask("t-analysis", "analysis"),
@@ -4351,7 +4357,7 @@ const pass2: TestPass = {
 
       name: "macro library version selectors resolve deterministically",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-resolve-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-library-resolve-"));
 
         const writeLibrary = (name: string, version: string, selector: string, bodyLine: string) => {
           const dir = path.join(root, ".choir", "registry", "local", name, version);
@@ -4392,7 +4398,7 @@ const pass2: TestPass = {
 
       name: "library install update and lock are reproducible",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-lock-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-library-lock-"));
 
         const writeLibrary = (version: string) => {
           const dir = path.join(root, ".choir", "registry", "local", "core", version);
@@ -4439,7 +4445,7 @@ const pass2: TestPass = {
 
       name: "library catalog import and lock graph are deterministic",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-library-catalog-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-library-catalog-"));
         const registryDir = path.join(root, ".choir", "registry", "local", "org.auth-patterns", "2.1.4");
         fs.mkdirSync(registryDir, { recursive: true });
         fs.writeFileSync(path.join(registryDir, "manifest.yaml"), [
@@ -4484,7 +4490,7 @@ const pass2: TestPass = {
 
       name: "namespaced library macro execution logs audit metadata",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-run-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-library-run-"));
         const registryDir = path.join(root, ".choir", "registry", "local", "core", "1.0.0");
         fs.mkdirSync(registryDir, { recursive: true });
         fs.writeFileSync(path.join(registryDir, "manifest.yaml"), [
@@ -4623,7 +4629,7 @@ const pass2: TestPass = {
         assert.strictEqual(breaking.breaking, true);
         assert.strictEqual(breaking.reasons.length > 0, true);
 
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-breaking-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-library-breaking-"));
         const dir = path.join(root, ".choir", "registry", "local", "core", "1.1.0");
         fs.mkdirSync(dir, { recursive: true });
         fs.writeFileSync(path.join(dir, "manifest.yaml"), [
@@ -4655,7 +4661,7 @@ const pass2: TestPass = {
 
       name: "ci config defaults are deterministic",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-config-defaults-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-ci-config-defaults-"));
         const config = loadCIConfig(root);
 
         assert.deepStrictEqual(config.pipeline.stages, [
@@ -4675,7 +4681,7 @@ const pass2: TestPass = {
 
       name: "ci pipeline trace and artifacts are deterministic for identical inputs",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-run-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-ci-run-"));
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "index.ts"), [
           "export const value = 1;",
@@ -4746,7 +4752,7 @@ const pass2: TestPass = {
 
       name: "refactor engine preview is deterministic and rollback restores snapshots",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-engine-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-engine-"));
 
         fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
         fs.mkdirSync(path.join(root, "packages", "app", "src"), { recursive: true });
@@ -4816,7 +4822,7 @@ const pass2: TestPass = {
 
       name: "refactor rename supports exported function declarations",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-exported-function-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-exported-function-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "index.ts"), [
@@ -4861,7 +4867,7 @@ const pass2: TestPass = {
 
       name: "refactor rename fails closed when symbol name is ambiguous",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-ambiguous-rename-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-ambiguous-rename-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "alpha.ts"), [
@@ -4899,7 +4905,7 @@ const pass2: TestPass = {
 
       name: "refactor rename supports declaration selector to resolve ambiguity",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-rename-selector-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "alpha.ts"), [
@@ -4948,7 +4954,7 @@ const pass2: TestPass = {
 
       name: "refactor rename file selector requires line and character when file has multiple matches",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-multi-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-rename-selector-multi-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "single.ts"), [
@@ -4988,7 +4994,7 @@ const pass2: TestPass = {
 
       name: "refactor inline supports top-level variable declarations referenced across functions",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-inline-variable-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-inline-variable-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "index.ts"), [
@@ -5030,7 +5036,7 @@ const pass2: TestPass = {
 
       name: "refactor move executes for top-level exported function declarations",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-function-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-function-"));
 
         fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
         fs.mkdirSync(path.join(root, "packages", "shared", "src"), { recursive: true });
@@ -5079,7 +5085,7 @@ const pass2: TestPass = {
       id: "2.117",
       name: "refactor move supports file-target selector within workspace root",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-file-target-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-file-target-"));
 
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "src", "index.ts"), [
@@ -5126,7 +5132,7 @@ const pass2: TestPass = {
         id: "2.118",
         name: "refactor move ignores dist declaration files when resolving symbol source",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-ignore-dist-dts-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-ignore-dist-dts-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
           fs.mkdirSync(path.join(root, "dist"), { recursive: true });
@@ -5182,7 +5188,7 @@ const pass2: TestPass = {
         id: "2.119",
         name: "refactor move rewrites imports that reference moved symbol through previous source file",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-rewrite-external-imports-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-rewrite-external-imports-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
 
@@ -5231,7 +5237,7 @@ const pass2: TestPass = {
         id: "2.120",
         name: "refactor move uses explicit .js extensions for rewritten relative imports under NodeNext",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-import-ext-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-node-next-import-ext-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
 
@@ -5281,7 +5287,7 @@ const pass2: TestPass = {
         id: "2.121",
         name: "refactor move resolves NodeNext moduleResolution from extended tsconfig with JSONC",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-extends-jsonc-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-node-next-extends-jsonc-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
 
@@ -5340,7 +5346,7 @@ const pass2: TestPass = {
         id: "2.122",
         name: "refactor move uses .js extensions when tsconfig sets NodeNext module without moduleResolution",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-nodenext-module-only-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-move-nodenext-module-only-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
 
@@ -5389,7 +5395,7 @@ const pass2: TestPass = {
         id: "2.123",
         name: "refactor extract executes for top-level exported function declarations",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-function-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-extract-function-"));
 
           fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
           fs.mkdirSync(path.join(root, "packages", "shared", "src"), { recursive: true });
@@ -5435,7 +5441,7 @@ const pass2: TestPass = {
         id: "2.124",
         name: "refactor extract fails closed for non-exported function declarations",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-fail-closed-non-exported-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-extract-fail-closed-non-exported-"));
 
           fs.mkdirSync(path.join(root, "packages", "core", "src"), { recursive: true });
 
@@ -5464,7 +5470,7 @@ const pass2: TestPass = {
         id: "2.125",
         name: "refactor extract supports file-target selector within workspace root",
         run: async () => {
-          const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-file-target-"));
+          const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-refactor-extract-file-target-"));
 
           fs.mkdirSync(path.join(root, "src"), { recursive: true });
 
@@ -5509,7 +5515,7 @@ const pass2: TestPass = {
 
       name: "macro execution is blocked outside pipeline in ci mode",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-ci-mode-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-macro-ci-mode-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         fs.mkdirSync(path.dirname(controlPath), { recursive: true });
 
@@ -5546,7 +5552,7 @@ const pass2: TestPass = {
           }
         );
 
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-list-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-abstraction-list-"));
         const abstractions = listAbstractions(root);
         assert.strictEqual(abstractions.some((entry) => entry.id === "enforce-hexagonal-architecture"), true);
         assert.strictEqual(abstractions.some((entry) => entry.id === "migrate-to-service-layer"), true);
@@ -5557,7 +5563,7 @@ const pass2: TestPass = {
 
       name: "abstraction execution is deterministic and idempotent",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-run-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-abstraction-run-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
 
         fs.writeFileSync(path.join(root, ".choir", "macros.yaml"), [
@@ -5633,7 +5639,7 @@ const pass2: TestPass = {
 
       name: "abstraction composition rejects recursive cycles",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-recursion-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-abstraction-recursion-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
         fs.writeFileSync(path.join(root, ".choir", "abstractions.yaml"), [
           "abstractions:",
@@ -5665,7 +5671,7 @@ const pass2: TestPass = {
 
       name: "abstraction validation enforces macro existence",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-macro-validation-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-abstraction-macro-validation-"));
         fs.mkdirSync(path.join(root, ".choir"), { recursive: true });
         fs.writeFileSync(path.join(root, ".choir", "abstractions.yaml"), [
           "abstractions:",
@@ -5703,7 +5709,7 @@ const pass2: TestPass = {
           }
         );
 
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-plan-approve-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-plan-approve-"));
         const controlPath = path.join(root, ".choir", "choir.config.yaml");
         fs.mkdirSync(path.dirname(controlPath), { recursive: true });
 
@@ -6023,7 +6029,7 @@ const pass3: TestPass = {
 
       name: "state snapshots are created and rollback restores exact snapshot",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-snapshot-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-state-snapshot-"));
 
         try {
           const controlPath = path.join(root, ".choir", "choir.config.yaml");
@@ -6064,7 +6070,7 @@ const pass3: TestPass = {
 
       name: "workspace timeline model records global and per-unit events",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-timeline-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-state-timeline-"));
 
         try {
           const baseline = createEmptyStatePlane();
@@ -6117,7 +6123,7 @@ const pass3: TestPass = {
 
       name: "rollback target resolution restores previous state hash",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-rollback-target-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-state-rollback-target-"));
 
         try {
           const baseline = createEmptyStatePlane();
@@ -6171,7 +6177,7 @@ const pass3: TestPass = {
 
       name: "rollback target resolution rewinds multi-stage execute tail to pre-execution hash",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-rollback-execute-tail-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-state-rollback-execute-tail-"));
 
         try {
           const baseline = createEmptyStatePlane();
@@ -9370,7 +9376,7 @@ const pass6: TestPass = {
 
       name: "workspace detection reads pnpm workspace config with deterministic package ordering",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-pnpm-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-workspace-pnpm-"));
 
         try {
           fs.writeFileSync(
@@ -9401,7 +9407,7 @@ const pass6: TestPass = {
 
       name: "workspace detection prioritizes turbo marker over package manager hints",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-turbo-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-workspace-turbo-"));
 
         try {
           fs.writeFileSync(path.join(root, "turbo.json"), "{}", "utf-8");
@@ -9430,7 +9436,7 @@ const pass6: TestPass = {
 
       name: "workspace detection supports nx defaults and remains deterministic",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-nx-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-workspace-nx-"));
 
         try {
           fs.writeFileSync(path.join(root, "nx.json"), "{}", "utf-8");
@@ -9456,7 +9462,7 @@ const pass6: TestPass = {
 
       name: "workspace detection reads package.json workspaces and deduplicates overlaps",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-npm-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-workspace-npm-"));
 
         try {
           fs.writeFileSync(
@@ -9487,7 +9493,7 @@ const pass6: TestPass = {
 
       name: "workspace detection top-level fallback includes package directories and excludes docs-only folders",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-top-level-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-workspace-top-level-"));
 
         try {
           for (const projectDir of ["server", "client"]) {
@@ -9532,7 +9538,7 @@ const pass6: TestPass = {
 
       name: "graph snapshot is deterministic and projects plan/violation overlays",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-graph-snapshot-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-graph-snapshot-"));
 
         try {
           fs.writeFileSync(
@@ -10187,7 +10193,7 @@ const finalPass: TestPass = {
 
       name: "cli runtime executor returns JSON envelopes for status and remove-goal",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-runtime-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-cli-runtime-"));
         const choirDir = path.join(root, ".choir");
         fs.mkdirSync(choirDir, { recursive: true });
 
@@ -10248,7 +10254,7 @@ const finalPass: TestPass = {
 
       name: "cli runtime executor supports analyze targets with deterministic JSON payloads",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-analyze-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-cli-analyze-"));
         const choirDir = path.join(root, ".choir");
         fs.mkdirSync(choirDir, { recursive: true });
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
@@ -10303,7 +10309,7 @@ const finalPass: TestPass = {
 
       name: "cli runtime executor covers remaining parity command families with JSON envelopes",
       run: async () => {
-        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-parity-"));
+        const root = createTrackedTmpDir(path.join(repoRoot, ".tmp-cli-parity-"));
         fs.mkdirSync(path.join(root, "src"), { recursive: true });
         fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "tmp-cli-parity", version: "1.0.0" }, null, 2), "utf-8");
         fs.writeFileSync(path.join(root, "src", "index.ts"), "export const ok = true;\n", "utf-8");

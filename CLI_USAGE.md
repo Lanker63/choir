@@ -682,6 +682,10 @@ choir refactor move MyService --file "src/modules/users/service.ts"
 
 > **Note:** File paths for `--file` must use the `--file "path"` form. A bare path with `/` characters is not a valid identifier token in the DSL lexer.
 
+Move is a clean relocation for top-level declarations: dependents are rewritten to import from the new declaration module path, compiler-aware module specifiers are enforced (including explicit `.js` for Node16/NodeNext), and the previous source module does not retain automatic compatibility re-exports for the moved symbol.
+
+When using `--file`, the target must resolve inside the workspace root; unresolved or out-of-root targets fail closed.
+
 ### Extract
 
 ```bash

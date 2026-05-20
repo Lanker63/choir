@@ -352,6 +352,9 @@ intent -> impact -> plan -> preview -> simulate -> validate -> commit|rollback
 - Unsupported refactor execution intents must fail closed (no writes).
 - Executable intents: rename, inline, move, extract.
 - move and extract MVP scope: top-level declarations only; no automatic source compatibility re-exports.
+- Supported refactor intents must execute through the canonical semantic mutation executor shared by refactor/materialization/runtime mutation paths (no alternate edit engine behavior).
+- Move file-target selectors must resolve only within workspace root and fail closed for unresolved or out-of-root targets.
+- Move source resolution must ignore generated declaration outputs (for example dist/out `.d.ts`) so semantic source ownership is deterministic.
 
 ## Planning Contract
 

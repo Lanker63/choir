@@ -40,6 +40,7 @@ import {
 } from "../../../core/productionReadiness.js";
 import { approvePendingDiff, listPendingApprovals } from "../../../core/state.js";
 import { createReplica, mergeStates, sync, type SystemState as ReplicaSystemState } from "../../../core/distributedSync.js";
+import { createTrackedTmpDir } from "../../utils/tmpCleanup.js";
 
 export type SystemInvariant =
   | "simulate == execute"
@@ -885,7 +886,7 @@ async function runReplayStress(mode: FullSystemVerificationMode): Promise<{ pass
 
 async function runPolicyBypassAttackTest(mode: FullSystemVerificationMode): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-full-system-policy-"));
+  const root = createTrackedTmpDir(path.join(os.tmpdir(), "choir-full-system-policy-"));
 
   try {
     const plan = buildLinearPlan("full-system-policy-bypass", modeValue(mode, 3, 2), "full-system-policy");
@@ -1077,7 +1078,7 @@ async function runPerformanceStabilityHardening(mode: FullSystemVerificationMode
 
 async function runFullSystemUAT(mode: FullSystemVerificationMode, workspaceRoot: string): Promise<{ passed: boolean; failures: string[]; detail: string }> {
   const failures: string[] = [];
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "choir-full-system-uat-"));
+  const root = createTrackedTmpDir(path.join(os.tmpdir(), "choir-full-system-uat-"));
 
   try {
     const choirDir = path.join(root, ".choir");
@@ -1204,7 +1205,7 @@ export async function proveSystem(root = process.cwd()): Promise<ProofArtifact> 
 
   // Continuous verification is stateful; seed it from a clean readiness snapshot
   // so prior intentional hardening failures do not pollute proof-loop counters.
-  const proofRuntimeRoot = fs.mkdtempSync(path.join(os.tmpdir(), ".tmp-full-system-proof-"));
+  const proofRuntimeRoot = createTrackedTmpDir(path.join(os.tmpdir(), ".tmp-full-system-proof-"));
   let continuous;
   try {
     resetProductionReadiness();

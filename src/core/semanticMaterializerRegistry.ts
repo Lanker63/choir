@@ -4,6 +4,7 @@ import { Fix, Patch } from "../fix/types.js";
 import { ControlPlane, Task } from "../schema.js";
 import { WorkUnit } from "./scheduler.js";
 import { Diagnostic } from "./types.js";
+import { SemanticMutation } from "./semanticMutation.js";
 
 export type SemanticGenerationScenario = "sample-api-service";
 
@@ -55,13 +56,16 @@ function buildFix(input: {
   workUnitId: string;
   title: string;
   patches: Patch[];
+  semanticMutations?: SemanticMutation[];
 }): Fix {
   const normalizedPatches = [...input.patches];
+  const semanticMutations = input.semanticMutations ?? semanticMutationsFromPatches(normalizedPatches);
   const digest = stableHash({
     taskId: input.task.id,
     taskType: input.task.type,
     workUnitId: input.workUnitId,
     patches: normalizedPatches,
+    semanticMutations,
   }).slice(0, 16);
 
   return {
@@ -73,6 +77,9 @@ function buildFix(input: {
     isPreferred: true,
     isSafe: true,
     traceId: `semantic:${input.task.id}`,
+    ...(semanticMutations.length > 0
+      ? { semanticMutations }
+      : {}),
   };
 }
 
@@ -82,6 +89,33 @@ function createFilePatch(file: string, content: string): Patch {
     file: normalizePath(file),
     content,
   };
+}
+
+function semanticMutationsFromPatches(patches: Patch[]): SemanticMutation[] {
+  const projected: SemanticMutation[] = [];
+
+  for (const patch of patches) {
+    if (patch.type === "create-file") {
+      projected.push({
+        kind: "UpsertFile",
+        file: normalizePath(patch.file),
+        content: patch.content,
+      });
+      continue;
+    }
+
+    if (patch.type === "rename-file") {
+      projected.push({
+        kind: "RenameFile",
+        from: normalizePath(patch.from),
+        to: normalizePath(patch.to),
+        rewriteImports: true,
+      });
+      continue;
+    }
+  }
+
+  return projected;
 }
 
 export function inferSemanticGenerationScenario(controlPlane: ControlPlane): SemanticGenerationScenario | undefined {

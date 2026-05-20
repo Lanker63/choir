@@ -74,7 +74,8 @@ execution:
 | **Execution** | Staged, dependency-aware rollout (canary / phased / batched / all-at-once) with approval gates |
 | **Rollback** | Failure-isolated rollback restores control-plane state and workspace snapshot |
 | **Audit** | Append-only, hash-chained audit log from GENESIS; compliance reports in JSON/YAML/PDF |
-| **Refactoring** | Deterministic rename/move/extract/inline through the same preview → execute pipeline |
+| **Refactoring** | Deterministic rename/move/extract/inline through the same preview → execute pipeline; move rewrites import dependents to the new declaration module, enforces compiler-aware specifiers (including Node16/NodeNext `.js`), and does not keep automatic compatibility re-exports in the source module |
+| **Workspace Graph** | Deterministic package/import graph with invalidation hashes used by impact analysis, refactor planning, and semantic import rewrite targeting |
 | **Libraries** | Registry-backed capability bundles with integrity-hash enforcement and deterministic locking |
 | **CI Integration** | `choir ci run` executes the canonical pipeline: source → compile → plan → policy → preview → execute → audit |
 | **Compilation Trace** | Operator-facing trace output includes command input and normalized changes (AST payload intentionally omitted) |

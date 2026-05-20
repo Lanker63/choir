@@ -11,6 +11,9 @@ import { runPipeline } from "./pipeline.js";
 import { readStatePlane, StatePlane, validateState } from "./state.js";
 import { Diagnostic, SourceLocation } from "./types.js";
 import { recordMutationTrace } from "./mutationTrace.js";
+import { executeSemanticMutations } from "./semanticMutationExecutor.js";
+import type { SemanticMutation } from "./semanticMutation.js";
+import { deterministicTimestampFromString } from "./deterministicCore.js";
 
 export type Pattern = {
   kind: "identifier";
@@ -1333,7 +1336,72 @@ function applyRename(plan: RefactorPlan, graph: SymbolGraph, project: Project, r
   renameDeclarationNode(declaration, newName);
 }
 
-function applyRefactorPlan(plan: RefactorPlan, graph: SymbolGraph, snapshot: WorkspaceSnapshot): RefactorApplyResult {
+function supportedSemanticMutations(plan: RefactorPlan, graph: SymbolGraph): SemanticMutation[] | null {
+  if (plan.intent.type !== "rename" && plan.intent.type !== "inline" && plan.intent.type !== "move") {
+    return null;
+  }
+
+  const symbolNode = getSingleSymbolNode(plan, graph);
+  const symbolHint = {
+    file: symbolNode.declaration.file,
+    name: symbolNode.name,
+  };
+
+  if (plan.intent.type === "rename") {
+    return [{
+      kind: "RenameSymbol",
+      symbolHint,
+      newName: plan.intent.newName,
+    }];
+  }
+
+  if (plan.intent.type === "inline") {
+    return [{
+      kind: "InlineSymbol",
+      symbolHint,
+    }];
+  }
+
+  if (plan.intent.type === "move" && plan.intent.targetFile) {
+    return [{
+      kind: "MoveSymbol",
+      symbolHint,
+      targetFile: plan.intent.targetFile,
+      updateExports: true,
+    }];
+  }
+
+  return null;
+}
+
+async function applyRefactorPlan(plan: RefactorPlan, graph: SymbolGraph, snapshot: WorkspaceSnapshot): Promise<RefactorApplyResult> {
+  const semanticMutations = supportedSemanticMutations(plan, graph);
+  if (semanticMutations && semanticMutations.length > 0) {
+    const semanticResult = await executeSemanticMutations({
+      root: snapshot.root,
+      files: snapshot.files,
+      mutations: semanticMutations,
+    });
+
+    recordMutationTrace(snapshot.root, {
+      source: "refactor-engine",
+      mechanism: "ts-morph",
+      safety: "conditionally-safe",
+      operation: `${plan.intent.type}:semantic-executor`,
+      targetFiles: Object.keys(semanticResult.changedFiles),
+      detail: `affectedSymbols=${plan.impact.affectedSymbols.length}`,
+      payload: {
+        intent: plan.intent,
+        manifestId: semanticResult.manifest.id,
+        replayHash: semanticResult.manifest.replayHash,
+      },
+    });
+
+    return {
+      changedFiles: semanticResult.changedFiles,
+    };
+  }
+
   const project = createProject(snapshot);
 
   if (plan.intent.type === "rename") {
@@ -1662,7 +1730,7 @@ export async function executeRefactor(
   const snapshotId = createSnapshotId(plan, preview);
   const snapshot: RefactorSnapshot = {
     id: snapshotId,
-    createdAt: new Date().toISOString(),
+    createdAt: deterministicTimestampFromString(snapshotId),
     files: snapshotFilesForPreview(options.root, preview),
     state: readStatePlane(options.root),
   };
@@ -1744,7 +1812,7 @@ export async function simulate(
   const baselineMissing = collectMissingReferenceErrors(baselinePipeline.diagnostics);
   const baselineConsistency = validateGlobalConsistency(snapshot);
 
-  const applied = applyRefactorPlan(plan, graph, snapshot);
+  const applied = await applyRefactorPlan(plan, graph, snapshot);
   const preview = buildPreview(snapshot, applied.changedFiles);
   const afterSnapshot = snapshotWithChanges(snapshot, applied.changedFiles);
   const validation = await validateRefactor(plan, preview, afterSnapshot, controlPlane, {

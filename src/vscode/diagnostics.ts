@@ -118,7 +118,15 @@ function convertPatchesToWorkspaceEdit(patches: Patch[]): vscode.WorkspaceEdit {
 
 export function toCodeAction(fix: Fix): vscode.CodeAction {
   const action = new vscode.CodeAction(fix.title, vscode.CodeActionKind.QuickFix);
-  action.edit = convertPatchesToWorkspaceEdit(fix.patches);
+  if (fix.semanticMutations && fix.semanticMutations.length > 0) {
+    action.command = {
+      title: "Apply semantic fix",
+      command: "choir.applySemanticFix",
+      arguments: [fix],
+    };
+  } else {
+    action.edit = convertPatchesToWorkspaceEdit(fix.patches);
+  }
   action.isPreferred = fix.isPreferred;
   return action;
 }

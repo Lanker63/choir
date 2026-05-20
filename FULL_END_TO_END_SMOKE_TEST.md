@@ -493,7 +493,11 @@ policy deny-production-plan-changes {
    - Confirm the command is accepted at the parse or plan level.
    - Use a top-level exported function declaration as the move target symbol.
    - Confirm execution succeeds for supported move cases.
-   - Confirm source compatibility is preserved (for example, source re-export still satisfies existing importers).
+   - Confirm importer files are rewritten to target the new declaration module path (not the previous source module path).
+   - Confirm the previous source module does not retain an automatic compatibility re-export for the moved symbol.
+   - In Node16/NodeNext module-resolution workspaces, confirm rewritten relative imports use explicit runtime `.js` extensions.
+   - Confirm `--file` targets outside workspace root are rejected fail-closed.
+   - If dist/out declaration artifacts exist for the same symbol, confirm move resolves source ownership to the source implementation file (not generated `.d.ts` artifacts).
    - Confirm unsupported move shapes fail closed with a clear message.
 
 6. Run `@choir refactor extract <symbol> <targetUnit>`.

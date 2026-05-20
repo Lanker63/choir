@@ -34,6 +34,7 @@ import {
   synthesizeSemanticFixesForWorkUnits,
 } from "./semanticMaterializerRegistry.js";
 import { classifyPatch, recordMutationTrace } from "./mutationTrace.js";
+import { executeSemanticMutations } from "./semanticMutationExecutor.js";
 
 export type PatchOperation = {
   id: string;
@@ -225,6 +226,51 @@ function cloneFix(root: string, fix: Fix): Fix {
   };
 }
 
+function fileMapToContexts(root: string, files: Record<string, string>): Array<{ path: string; content: string }> {
+  return Object.entries(files)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([file, content]) => ({
+      path: path.resolve(root, file),
+      content,
+    }));
+}
+
+async function resolveFixPatchesFromSemanticMutations(
+  root: string,
+  fix: Fix,
+  files: Record<string, string>
+): Promise<Fix> {
+  if (!fix.semanticMutations || fix.semanticMutations.length === 0) {
+    return cloneFix(root, fix);
+  }
+
+  const semanticResult = await executeSemanticMutations({
+    root,
+    files: fileMapToContexts(root, files),
+    mutations: fix.semanticMutations,
+  });
+
+  const semanticPatches: Patch[] = [
+    ...Object.entries(semanticResult.changedFiles)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([file, content]) => ({
+        type: "create-file" as const,
+        file,
+        content,
+      })),
+    ...semanticResult.deletedFiles.map((file) => ({
+      type: "delete-file" as const,
+      file,
+    })),
+  ];
+
+  const normalized = cloneFix(root, fix);
+  return {
+    ...normalized,
+    patches: semanticPatches.length > 0 ? semanticPatches : normalized.patches,
+  };
+}
+
 function normalizeDiagnostic(root: string, diagnostic: Diagnostic): Diagnostic {
   return {
     ...diagnostic,
@@ -359,9 +405,11 @@ function createMaterializationEnforcer(
       });
       const semanticDiagnostics = semanticDiagnosticsForFixes(semanticFixes);
 
-      const allFixes = [...pipelineResult.fixes, ...semanticFixes]
-        .map((fix) => cloneFix(root, fix))
-        .sort((left, right) => left.id.localeCompare(right.id));
+      const allFixes = await Promise.all(
+        [...pipelineResult.fixes, ...semanticFixes]
+          .sort((left, right) => left.id.localeCompare(right.id))
+          .map((fix) => resolveFixPatchesFromSemanticMutations(root, fix, files))
+      );
       const allDiagnostics = [...pipelineResult.diagnostics, ...semanticDiagnostics]
         .map((diagnostic) => normalizeDiagnostic(root, diagnostic))
         .sort((left, right) => left.id.localeCompare(right.id));

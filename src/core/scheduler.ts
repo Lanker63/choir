@@ -12,6 +12,7 @@ import { Diagnostic, SchedulerTrace, TransactionTrace } from "./types.js";
 import { locationToOffsetRange } from "./diagnostics.js";
 import { cloneJson } from "../utils/clone.js";
 import { classifyPatch, recordMutationTrace } from "./mutationTrace.js";
+import { CompilerWorkspace } from "./compilerWorkspace.js";
 
 export type ExecutionNode = {
   id: string;
@@ -1237,11 +1238,21 @@ async function checkType(
   vfs: VirtualFS,
   typeCheck?: (vfs: VirtualFS) => Promise<TypeCheckResult>
 ): Promise<InvariantCheckResult> {
-  if (!typeCheck) {
+  const touchesTypeScript = Object.keys(vfs.files).some((file) => /\.(ts|tsx|mts|cts)$/i.test(file));
+
+  if (!touchesTypeScript) {
     return {
       name: "type-check",
       passed: true,
-      details: "Type check disabled",
+      details: "No TypeScript files touched",
+    };
+  }
+
+  if (!typeCheck) {
+    return {
+      name: "type-check",
+      passed: false,
+      details: "Type check is mandatory for TypeScript mutations",
     };
   }
 
@@ -1250,6 +1261,35 @@ async function checkType(
     name: "type-check",
     passed: result.passed,
     ...(result.details ? { details: result.details } : {}),
+  };
+}
+
+function createDefaultCompilerTypeCheck(root: string): (vfs: VirtualFS) => Promise<TypeCheckResult> {
+  return async (vfs: VirtualFS) => {
+    const files = Object.entries(vfs.files)
+      .filter(([file]) => /\.(ts|tsx|js|jsx|mts|cts)$/i.test(file))
+      .map(([file, content]) => ({
+        path: path.resolve(root, file),
+        content,
+      }));
+
+    const workspace = new CompilerWorkspace({
+      root,
+      files,
+    });
+
+    const totals = workspace.getDiagnostics().reduce((acc, entry) => ({
+      total: acc.total + entry.total,
+      semantic: acc.semantic + entry.semantic,
+      syntactic: acc.syntactic + entry.syntactic,
+    }), { total: 0, semantic: 0, syntactic: 0 });
+
+    return {
+      passed: totals.total === 0,
+      details: totals.total === 0
+        ? "Compiler diagnostics clean"
+        : `Compiler diagnostics present (total=${totals.total}, semantic=${totals.semantic}, syntactic=${totals.syntactic})`,
+    };
   };
 }
 
@@ -1581,9 +1621,18 @@ export async function runExecutionPlanTransactionally(
   executionPlan: ExecutionPlan,
   options: TransactionalExecutionOptions
 ): Promise<TransactionalExecutionResult> {
-  const txFs = options.fs ?? createNodeTransactionFS(options.root ?? process.cwd());
+  const workspaceRoot = options.root ?? process.cwd();
+  const auditRoot = options.root ?? (options.fs ? undefined : workspaceRoot);
+  const effectiveTypeCheck = options.typeCheck ?? createDefaultCompilerTypeCheck(workspaceRoot);
+  const txFs = options.fs ?? createNodeTransactionFS(workspaceRoot);
   const lock = options.fileLock ?? new FileSetLock();
   const batchesByLayer = groupBatchesByLayer(executionPlan);
+
+  const executionOptions: TransactionalExecutionOptions = {
+    ...options,
+    ...(auditRoot ? { root: auditRoot } : {}),
+    typeCheck: effectiveTypeCheck,
+  };
 
   const workUnitResults: WorkUnitRunResult[] = [];
   const transactions: Transaction[] = [];
@@ -1592,7 +1641,7 @@ export async function runExecutionPlanTransactionally(
   for (const layer of batchesByLayer) {
     if (options.executeLayersInParallel) {
       const layerResults = await Promise.all(
-        layer.map((batch) => executeBatchTransaction(batch, txFs, options, lock))
+        layer.map((batch) => executeBatchTransaction(batch, txFs, executionOptions, lock))
       );
 
       for (const result of layerResults.sort((left, right) => left.transaction.batchId.localeCompare(right.transaction.batchId))) {
@@ -1605,7 +1654,7 @@ export async function runExecutionPlanTransactionally(
     }
 
     for (const batch of layer) {
-      const result = await executeBatchTransaction(batch, txFs, options, lock);
+      const result = await executeBatchTransaction(batch, txFs, executionOptions, lock);
       workUnitResults.push(...result.workUnitResults);
       transactions.push(result.transaction);
       traces.push(result.trace);
@@ -1700,15 +1749,23 @@ async function runExecutionPlanSimulation(
   executionPlan: ExecutionPlan,
   options: SimulationExecutionOptions
 ): Promise<ExecutionSimulationResult> {
+  const root = options.root ?? process.cwd();
+  const effectiveTypeCheck = options.typeCheck ?? createDefaultCompilerTypeCheck(root);
   const txFs = options.fs ?? createNodeTransactionFS(options.root ?? process.cwd());
   const batchesByLayer = groupBatchesByLayer(executionPlan);
+
+  const simulationOptions: SimulationExecutionOptions = {
+    ...options,
+    root,
+    typeCheck: effectiveTypeCheck,
+  };
 
   const results: BatchSimulationResult[] = [];
   const traces: TransactionTrace[] = [];
 
   for (const layer of batchesByLayer) {
     for (const batch of layer) {
-      const simulated = await simulateBatch(batch, txFs, options);
+      const simulated = await simulateBatch(batch, txFs, simulationOptions);
       results.push(simulated.result);
       traces.push(simulated.trace);
     }

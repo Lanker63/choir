@@ -43,6 +43,7 @@ import { runOrchestrationVerification } from "./orchestrationVerification.js";
 import { runProductionVerification } from "./productionVerification.js";
 import { runRuntimeGovernanceVerification } from "./runtimeGovernanceVerification.js";
 import { resetProductionReadiness } from "../../../core/productionReadiness.js";
+import { createTrackedTmpDir } from "../../utils/tmpCleanup.js";
 
 export type VerificationCase = {
   name: string;
@@ -774,7 +775,7 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
 
   const workspaceRoot = options.workspaceRoot
     ? path.resolve(options.workspaceRoot)
-    : fs.mkdtempSync(path.join(os.tmpdir(), "choir-verify-"));
+    : createTrackedTmpDir(path.join(os.tmpdir(), "choir-verify-"));
   const ownsWorkspaceRoot = !options.workspaceRoot;
 
   let report: VerificationReport;
@@ -808,10 +809,10 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
 
     const strategy = await verifyStrategySelection(buildStrategyCandidates(deterministicCase.input), deterministicCase.input);
 
-    const memoryRoot = fs.mkdtempSync(path.join(workspaceRoot, ".tmp-verify-memory-"));
+    const memoryRoot = createTrackedTmpDir(path.join(workspaceRoot, ".tmp-verify-memory-"));
     const memory = verifyMemoryReuse(await createMemoryContext(memoryRoot));
 
-    const adaptationRoot = fs.mkdtempSync(path.join(workspaceRoot, ".tmp-verify-adaptive-"));
+    const adaptationRoot = createTrackedTmpDir(path.join(workspaceRoot, ".tmp-verify-adaptive-"));
     const adaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(adaptationRoot));
 
     let flakeFree = true;
@@ -833,9 +834,9 @@ export async function runFullVerification(options: RunVerificationOptions = {}):
         resetProductionReadiness();
         const rerunCases = await executeSuite(suite, parallelCaseExecution);
         const rerunStrategy = await verifyStrategySelection(buildStrategyCandidates(deterministicCase.input), deterministicCase.input);
-        const rerunMemoryRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-memory-${run}-`));
+        const rerunMemoryRoot = createTrackedTmpDir(path.join(workspaceRoot, `.tmp-verify-memory-${run}-`));
         const rerunMemory = verifyMemoryReuse(await createMemoryContext(rerunMemoryRoot));
-        const rerunAdaptiveRoot = fs.mkdtempSync(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
+        const rerunAdaptiveRoot = createTrackedTmpDir(path.join(workspaceRoot, `.tmp-verify-adaptive-${run}-`));
         const rerunAdaptive = await verifyAdaptation(STRATEGIES[0] as Strategy, await createAdaptationContext(rerunAdaptiveRoot));
         const rerunPolicy = (await runPolicyVerification()).passed;
         const rerunOrchestration = (await runOrchestrationVerification()).passed;

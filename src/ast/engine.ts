@@ -20,6 +20,7 @@ import { deepFreeze } from "../utils/deepFreeze.js";
 import { RuleContext, RuleResult } from "../dsl/types.js";
 import { Fix } from "../fix/types.js";
 import { createZeroLengthLocation, makeDiagnosticId, sortDiagnostics } from "../core/diagnostics.js";
+import { WorkspaceGraphStore } from "../core/workspaceGraphStore.js";
 
 function toStableFilePath(root: string, filePath: string): string {
   const relative = path.relative(root, filePath).split(path.sep).join("/");
@@ -96,6 +97,11 @@ export function runAST(
   const fixes: Fix[] = [];
 
   const rules = registry.getASTRules();
+  const workspaceGraph = new WorkspaceGraphStore({
+    root: context.root,
+    files: context.files,
+  });
+  const importGraph = workspaceGraph.getImportGraph();
   const semanticBuild = buildSemanticGraph(context, parsed.normalizedAsts, {
     includeGraph: rules.length > 0,
   });
@@ -115,6 +121,18 @@ export function runAST(
         sourceFile: ast,
         normalizedAst: createReadonlyNormalizedAST(normalizedAst),
         semanticGraph: readonlySemanticGraph,
+        workspaceGraph: {
+          hasImportPathIncludes(filePath: string, includesNeedle: string): boolean {
+            return importGraph.edges.some((edge) =>
+              edge.from === filePath && edge.moduleSpecifier.includes(includesNeedle)
+            );
+          },
+          isExternalImport(filePath: string, moduleSpecifier: string): boolean {
+            return importGraph.edges.some((edge) =>
+              edge.from === filePath && edge.moduleSpecifier === moduleSpecifier && edge.external
+            );
+          },
+        },
         traceId,
         resolveNodeId(node) {
           return normalizedAst.nodeIdByNode.get(node);

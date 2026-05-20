@@ -2,9 +2,10 @@ import fs from "fs";
 import path from "path";
 import type { ControlPlane, Plan, Task } from "../schema.js";
 import type { StatePlane } from "./state.js";
-import { detectWorkspace } from "./workspaceDetection.js";
 import { readLatestOrchestrationTrace } from "./orchestrationRuntimeTrace.js";
 import { deriveRolloutBias, resolveStrategicContext } from "./strategicIntent.js";
+import { WorkspaceGraphStore } from "./workspaceGraphStore.js";
+import { deterministicTimestampFromString } from "./deterministicCore.js";
 
 export type DependencyGraph = {
   nodes: {
@@ -128,44 +129,6 @@ function normalizeRelative(root: string, candidatePath: string): string {
   return relative === "" ? "." : relative;
 }
 
-function readPackageJson(filePath: string): Record<string, unknown> | null {
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-
-  const raw = fs.readFileSync(filePath, "utf-8");
-  const parsed = JSON.parse(raw) as unknown;
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    return null;
-  }
-
-  return parsed as Record<string, unknown>;
-}
-
-function extractDependencyNames(pkg: Record<string, unknown> | null): string[] {
-  if (!pkg) {
-    return [];
-  }
-
-  const fields = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
-  const collected: string[] = [];
-
-  for (const field of fields) {
-    const value = pkg[field];
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      continue;
-    }
-
-    for (const depName of Object.keys(value).sort((left, right) => left.localeCompare(right))) {
-      if (depName.trim().length > 0) {
-        collected.push(depName.trim());
-      }
-    }
-  }
-
-  return sortedUnique(collected);
-}
-
 function packageLabel(relPath: string, packageName?: string): string {
   if (packageName && packageName.length > 0) {
     return packageName;
@@ -180,50 +143,32 @@ function packageLabel(relPath: string, packageName?: string): string {
 }
 
 function buildWorkspaceUnits(root: string): WorkspaceUnit[] {
-  const workspace = detectWorkspace(root);
-  const unitPaths = workspace.packages.length > 0 ? workspace.packages : ["."];
+  const graphStore = new WorkspaceGraphStore({ root });
+  const packageGraph = graphStore.getPackageGraph();
+  const byUnitId = new Map(packageGraph.nodes.map((node) => [node.id, node] as const));
+  const dependencyByUnit = new Map<string, string[]>(
+    packageGraph.nodes.map((node) => [node.id, []] as const)
+  );
 
-  const preliminary = sortedUnique(unitPaths.map((entry) => normalizePath(entry))).map((relPath) => {
-    const packageJsonPath = path.join(root, relPath, "package.json");
-    const pkg = readPackageJson(packageJsonPath);
-    const packageName = typeof pkg?.name === "string" && pkg.name.trim().length > 0
-      ? pkg.name.trim()
-      : undefined;
-
-    return {
-      relPath,
-      packageName,
-      dependencyNames: extractDependencyNames(pkg),
-    };
-  });
-
-  const byPackageName = new Map<string, string>();
-  for (const unit of preliminary) {
-    if (!unit.packageName) {
-      continue;
-    }
-
-    byPackageName.set(unit.packageName, unit.relPath);
+  for (const edge of packageGraph.edges) {
+    const existing = dependencyByUnit.get(edge.from) ?? [];
+    existing.push(edge.to.replace(/^unit:/, ""));
+    dependencyByUnit.set(edge.from, sortedUnique(existing));
   }
 
-  const units = preliminary.map((unit) => {
-    const dependencies = sortedUnique(
-      unit.dependencyNames
-        .map((dependencyName) => byPackageName.get(dependencyName))
-        .filter((entry): entry is string => typeof entry === "string")
-        .filter((entry) => entry !== unit.relPath)
-    );
-
-    return {
-      id: `unit:${unit.relPath}`,
-      label: packageLabel(unit.relPath, unit.packageName),
-      relPath: unit.relPath,
-      packageName: unit.packageName,
-      dependencies,
-    } satisfies WorkspaceUnit;
-  });
-
-  return units.sort((left, right) => left.id.localeCompare(right.id));
+  return packageGraph.nodes
+    .map((node) => {
+      const relPath = node.relPath;
+      const dependencyIds = dependencyByUnit.get(node.id) ?? [];
+      return {
+        id: node.id,
+        label: packageLabel(relPath, node.packageName),
+        relPath,
+        packageName: node.packageName,
+        dependencies: dependencyIds,
+      } satisfies WorkspaceUnit;
+    })
+    .sort((left, right) => left.id.localeCompare(right.id));
 }
 
 function buildDependencyGraph(units: WorkspaceUnit[]): DependencyGraph {
@@ -814,7 +759,7 @@ export function buildGraphSnapshot(input: {
   }).sort((left, right) => left.nodeId.localeCompare(right.nodeId));
 
   return {
-    generatedAt: new Date().toISOString(),
+    generatedAt: deterministicTimestampFromString(`${input.root}:${input.mode}:${input.state.stateHash}`),
     mode: input.mode,
     ...(resolvedFocusNodeId ? { focusNodeId: resolvedFocusNodeId } : {}),
     graph: projectedGraph,

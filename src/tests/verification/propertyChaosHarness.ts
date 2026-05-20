@@ -6,6 +6,7 @@ import {
   runPropertyTest,
   setSeed,
 } from "./core/propertyChaosHarness.js";
+import { runVerificationCliCommand } from "./verificationCliRunner.js";
 
 function readSeed(): number {
   const envSeed = process.env.CHOIR_VERIFY_SEED;
@@ -45,34 +46,28 @@ function readIterations(mode: "property" | "chaos"): number {
   return ciIterationLimit(base, 10);
 }
 
-async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const mode = readMode(args);
-  const chaosMode = readChaosMode(args);
-  const iterations = readIterations(mode);
-  const seed = readSeed();
+void runVerificationCliCommand({
+  label: "Property/chaos harness",
+  run: async () => {
+    const args = process.argv.slice(2);
+    const mode = readMode(args);
+    const chaosMode = readChaosMode(args);
+    const iterations = readIterations(mode);
+    const seed = readSeed();
 
-  setSeed(seed);
+    setSeed(seed);
 
-  try {
-    const report = mode === "property"
-      ? await runPropertyTest(iterations, {
+    return mode === "property"
+      ? runPropertyTest(iterations, {
         seed,
         chaosMode: "none",
         throwOnFailure: false,
       })
-      : await runChaosTest(chaosMode, iterations, {
+      : runChaosTest(chaosMode, iterations, {
         seed,
         throwOnFailure: false,
       });
-
-    process.stdout.write(`${formatChaosTestReport(report)}\n`);
-    process.exitCode = report.failures === 0 ? 0 : 1;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`Property/chaos harness failed: ${message}\n`);
-    process.exitCode = 1;
-  }
-}
-
-void main();
+  },
+  format: formatChaosTestReport,
+  exitCodeFromReport: (report) => (report.failures === 0 ? 0 : 1),
+});

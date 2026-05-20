@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { ValidationResult } from "../ast/model.js";
 import { SourceLocation } from "../core/types.js";
+import { SemanticMutation } from "../core/semanticMutation.js";
 
 type ASTNode = ts.Node;
 
@@ -65,6 +66,7 @@ export type Fix = {
   dependsOn?: string[];
   conflictsWith?: string[];
   traceId: string;
+  semanticMutations?: SemanticMutation[];
 };
 
 export type PatchResult = {

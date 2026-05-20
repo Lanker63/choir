@@ -30,6 +30,19 @@ export const DSLRuleSchema = z.object({
       imports: z.array(z.string()).optional(),
       callExpressions: z.array(z.string()).optional(),
       functionNames: z.array(z.string()).optional(),
+      astSelectors: z.object({
+        importModules: z.array(z.string()).optional(),
+        callTargets: z.array(z.string()).optional(),
+        exportedNames: z.array(z.string()).optional(),
+      }).strict().optional(),
+      semanticPredicates: z.object({
+        externalImportsOnly: z.boolean().optional(),
+        resolvedImportIncludes: z.array(z.string()).optional(),
+        symbolNames: z.array(z.string()).optional(),
+      }).strict().optional(),
+      graphPolicies: z.object({
+        forbiddenImportPathIncludes: z.array(z.string()).optional(),
+      }).strict().optional(),
     })
     .strict(),
 
@@ -53,6 +66,10 @@ export interface RuleContext {
   sourceFile: ts.SourceFile;
   normalizedAst: ReadonlyNormalizedAST;
   semanticGraph: ReadonlySemanticGraph;
+  workspaceGraph?: {
+    hasImportPathIncludes(filePath: string, includesNeedle: string): boolean;
+    isExternalImport(filePath: string, moduleSpecifier: string): boolean;
+  };
   traceId: string;
   resolveNodeId(node: ts.Node): NodeId | undefined;
 }

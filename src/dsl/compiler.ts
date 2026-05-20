@@ -5,6 +5,8 @@ import { ControlPlane } from "../schema.js";
 import { Diagnostic } from "../core/types.js";
 import { makeDiagnosticId, sourceLocationFromOffsets } from "../core/diagnostics.js";
 import { visitDepthFirst } from "../ast/visitor.js";
+import { Fix } from "../fix/types.js";
+import { SemanticMutation } from "../core/semanticMutation.js";
 
 export type Rule = ASTRule;
 
@@ -137,17 +139,19 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
 
     evaluate(context: RuleContext) {
       const diagnostics: Diagnostic[] = [];
+      const fixes: Fix[] = [];
       const { filePath, sourceFile } = context;
 
       let diagnosticIndex = 0;
 
-      const emitDiagnostic = (node: ts.Node, message: string) => {
+      const emitDiagnostic = (node: ts.Node, message: string): string => {
         const start = node.getStart(sourceFile);
         const end = node.getEnd();
         const location = sourceLocationFromOffsets(sourceFile, filePath, start, end);
+        const diagnosticId = makeDiagnosticId([rule.id, filePath, location.start.line, location.start.character, diagnosticIndex]);
 
         diagnostics.push({
-          id: makeDiagnosticId([rule.id, filePath, location.start.line, location.start.character, diagnosticIndex]),
+          id: diagnosticId,
           ruleId: rule.id,
           message,
           severity: rule.severity ?? "error",
@@ -157,6 +161,34 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
         });
 
         diagnosticIndex += 1;
+        return diagnosticId;
+      };
+
+      const emitImportRemovalFix = (node: ts.ImportDeclaration, diagnosticId: string): void => {
+        const start = node.getStart(sourceFile);
+        const end = node.getEnd();
+        const before = sourceFile.getFullText();
+        const after = `${before.slice(0, start)}${before.slice(end)}`;
+        const semanticMutations: SemanticMutation[] = [{
+          kind: "UpsertFile",
+          file: filePath,
+          content: after,
+        }];
+
+        fixes.push({
+          id: makeDiagnosticId([rule.id, filePath, "fix", start, end]),
+          ruleId: rule.id,
+          title: `Remove forbidden import: ${node.moduleSpecifier.getText(sourceFile)}`,
+          diagnosticIds: [diagnosticId],
+          patches: [{
+            type: "delete",
+            location: sourceLocationFromOffsets(sourceFile, filePath, start, end),
+          }],
+          isPreferred: true,
+          isSafe: true,
+          traceId: context.traceId,
+          semanticMutations,
+        });
       };
 
       visitDepthFirst(sourceFile, (node) => {
@@ -165,14 +197,37 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
 
         // IMPORT MATCHING
         if (rule.match.imports && ts.isImportDeclaration(node)) {
-          const module = node.moduleSpecifier.getText(sourceFile);
+          const module = ts.isStringLiteral(node.moduleSpecifier)
+            ? node.moduleSpecifier.text
+            : node.moduleSpecifier.getText(sourceFile);
 
           const matched = rule.match.imports.some(i =>
             module.includes(i)
           );
 
           if (matched && rule.constraint.type === "forbid") {
-            emitDiagnostic(node, rule.message);
+            const diagnosticId = emitDiagnostic(node, rule.message);
+            emitImportRemovalFix(node, diagnosticId);
+          }
+        }
+
+        if (rule.match.astSelectors?.importModules && ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          const module = node.moduleSpecifier.text;
+          const isExternal = !module.startsWith(".");
+          const matched = rule.match.astSelectors.importModules.some((candidate) =>
+            candidate === "*" ? true : module.includes(candidate)
+          );
+          const semanticGate = rule.match.semanticPredicates?.externalImportsOnly === true
+            ? isExternal
+            : true;
+
+          const resolvedPredicate = (rule.match.semanticPredicates?.resolvedImportIncludes ?? []).length === 0
+            ? true
+            : (rule.match.semanticPredicates?.resolvedImportIncludes ?? []).some((candidate) => module.includes(candidate));
+
+          if (matched && semanticGate && resolvedPredicate && rule.constraint.type === "forbid") {
+            const diagnosticId = emitDiagnostic(node, rule.message);
+            emitImportRemovalFix(node, diagnosticId);
           }
         }
 
@@ -189,10 +244,38 @@ export function compileDSLRule(rule: DSLRule): ASTRule {
             emitDiagnostic(node, `${rule.message}${typeInfo}`);
           }
         }
+
+        if (rule.match.astSelectors?.callTargets && ts.isCallExpression(node)) {
+          const callTarget = node.expression.getText(sourceFile);
+          const selectorMatched = rule.match.astSelectors.callTargets.some((candidate) =>
+            candidate === "*" ? true : callTarget.includes(candidate)
+          );
+          const symbolGate = (rule.match.semanticPredicates?.symbolNames ?? []).length === 0
+            ? true
+            : (rule.match.semanticPredicates?.symbolNames ?? []).some((symbolName) => callTarget.includes(symbolName));
+
+          if (selectorMatched && symbolGate && rule.constraint.type === "forbid") {
+            emitDiagnostic(node, rule.message);
+          }
+        }
+
+        if (rule.match.graphPolicies?.forbiddenImportPathIncludes && ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
+          const module = node.moduleSpecifier.text;
+          const blockedByPolicy = rule.match.graphPolicies.forbiddenImportPathIncludes.some((candidate) => module.includes(candidate))
+            || rule.match.graphPolicies.forbiddenImportPathIncludes.some((candidate) =>
+              context.workspaceGraph?.hasImportPathIncludes(filePath, candidate) ?? false
+            );
+          if (blockedByPolicy && rule.constraint.type === "forbid") {
+            emitDiagnostic(node, rule.message);
+          }
+        }
       });
 
       return {
         diagnostics,
+        ...(fixes.length > 0
+          ? { fixes: fixes.sort((left, right) => left.id.localeCompare(right.id)) }
+          : {}),
       };
     },
   };

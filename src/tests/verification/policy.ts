@@ -1,15 +1,8 @@
 import { formatPolicyVerificationReport, runPolicyVerification } from "./core/policyVerification.js";
+import { runVerificationCliCommand } from "./verificationCliRunner.js";
 
-async function main(): Promise<void> {
-  try {
-    const report = await runPolicyVerification();
-    process.stdout.write(`${formatPolicyVerificationReport(report)}\n`);
-    process.exitCode = report.passed ? 0 : 1;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`Policy verification failed: ${message}\n`);
-    process.exitCode = 1;
-  }
-}
-
-void main();
+void runVerificationCliCommand({
+  label: "Policy verification",
+  run: () => runPolicyVerification(),
+  format: formatPolicyVerificationReport,
+});
