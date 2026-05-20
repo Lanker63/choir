@@ -2127,10 +2127,22 @@ export function resolveDeterministicRollbackTarget(root: string): {
     };
   }
 
-  const latest = transitions[transitions.length - 1] as StateTransition;
+  const latestIndex = transitions.length - 1;
+  const latest = transitions[latestIndex] as StateTransition;
   const fromHash = latest.toHash;
 
-  if (latest.fromHash === "GENESIS") {
+  // Execute can append multiple deterministic state writes (one per batch/stage).
+  // Rollback must target the state that existed before that full execute window.
+  let rollbackAnchor = latest;
+  if (latest.action === "persist-state") {
+    let anchorIndex = latestIndex;
+    while (anchorIndex > 0 && transitions[anchorIndex - 1]?.action === "persist-state") {
+      anchorIndex -= 1;
+    }
+    rollbackAnchor = transitions[anchorIndex] as StateTransition;
+  }
+
+  if (rollbackAnchor.fromHash === "GENESIS") {
     const genesis = createEmptyStatePlane();
     return {
       state: genesis,
@@ -2142,7 +2154,7 @@ export function resolveDeterministicRollbackTarget(root: string): {
 
   let previousIndex = -1;
   for (let index = transitions.length - 1; index >= 0; index -= 1) {
-    if (transitions[index]?.toHash === latest.fromHash) {
+    if (transitions[index]?.toHash === rollbackAnchor.fromHash) {
       previousIndex = index;
       break;
     }

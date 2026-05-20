@@ -6158,6 +6158,95 @@ const pass3: TestPass = {
         }
       },
     },
+    {
+      id: "3.17",
+
+      name: "rollback target resolution rewinds multi-stage execute tail to pre-execution hash",
+      run: async () => {
+        const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-rollback-execute-tail-"));
+
+        try {
+          const baseline = createEmptyStatePlane();
+          persistStatePlane(root, baseline, {
+            action: "seed-state",
+            metadata: { unitId: "workspaceRoot" },
+          });
+
+          const previewState = {
+            ...baseline,
+            execution: {
+              ...baseline.execution,
+              lastPreview: {
+                hash: "sha256:preview-hash",
+                planId: "plan-preview",
+                strategyId: "deterministic",
+              },
+            },
+          };
+          previewState.stateHash = hashState(previewState);
+
+          persistStatePlane(root, previewState, {
+            action: "update-execution-state",
+            metadata: { unitId: "workspaceRoot" },
+          });
+
+          const executeStageOne = {
+            ...previewState,
+            execution: {
+              ...previewState.execution,
+              history: [
+                ...previewState.execution.history,
+                {
+                  planId: "plan-preview",
+                  status: "complete" as const,
+                  detail: "Transaction tx-stage-1 committed",
+                },
+              ],
+            },
+          };
+          executeStageOne.stateHash = hashState(executeStageOne);
+          persistStatePlane(root, executeStageOne);
+
+          const executeStageTwo = {
+            ...executeStageOne,
+            execution: {
+              ...executeStageOne.execution,
+              history: [
+                ...executeStageOne.execution.history,
+                {
+                  planId: "plan-preview",
+                  status: "complete" as const,
+                  detail: "Transaction tx-stage-2 committed",
+                },
+              ],
+            },
+          };
+          executeStageTwo.stateHash = hashState(executeStageTwo);
+          persistStatePlane(root, executeStageTwo);
+
+          const transitions = listStateTransitions(root);
+          const latest = transitions[transitions.length - 1];
+          assert.ok(latest);
+          assert.strictEqual(latest?.action, "persist-state");
+
+          const rollbackTarget = resolveDeterministicRollbackTarget(root);
+          assert.strictEqual(rollbackTarget.fromHash, latest?.toHash);
+          assert.strictEqual(rollbackTarget.toHash, previewState.stateHash);
+          assert.notStrictEqual(rollbackTarget.toHash, latest?.fromHash);
+
+          persistStatePlane(root, rollbackTarget.state, {
+            action: "rollback",
+            metadata: { unitId: "workspaceRoot" },
+          });
+
+          const reverted = readStatePlane(root);
+          assert.ok(reverted);
+          assert.strictEqual(reverted?.stateHash, previewState.stateHash);
+        } finally {
+          fs.rmSync(root, { recursive: true, force: true });
+        }
+      },
+    },
   ],
 };
 

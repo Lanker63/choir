@@ -2,6 +2,10 @@
 
 This document defines the minimal, non-negotiable system contracts for Choir.
 
+## Development Methodology
+
+TDD (test-driven development) MUST be used at all time when source code is to be introduced, modified, or deleted.
+
 ## Product Scope
 
 Choir is deterministic, policy-driven workspace governance:
