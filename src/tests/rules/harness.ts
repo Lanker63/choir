@@ -254,7 +254,7 @@ function ensureRuleCoverage(compiledRuleIds: string[]): void {
   );
 }
 
-function main(): void {
+export function runRuleHarness(): void {
   const fixture = makeControlPlaneFixture();
   const rules = compileControlPlaneToRules(fixture);
   const ruleIds = rules.map((rule) => rule.id).sort((a, b) => a.localeCompare(b));
@@ -269,4 +269,10 @@ function main(): void {
   process.stdout.write(`PASS rule harness (${ruleIds.length} rules)\n`);
 }
 
-main();
+function main(): void {
+  runRuleHarness();
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main();
+}

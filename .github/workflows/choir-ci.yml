@@ -24,6 +24,12 @@ jobs:
       - name: Build extension and CLI
         run: npm run build:extension
 
+      - name: Run core unit tests
+        run: npm run test:unit
+
+      - name: Run full unit coverage suite
+        run: npm run test:unit:coverage
+
       - name: Run verification harness
         run: npm run verify
 

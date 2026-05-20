@@ -340,6 +340,7 @@ export class PipelineDiagnosticsViewProvider {
     const initialListMarkup = renderStaticList(initialSnapshot);
     const initialDetailsMarkup = renderStaticDetails(initialSnapshot);
     const bootstrapJson = bootstrapSnapshotJson(initialSnapshot);
+    const bootstrapBase64 = Buffer.from(bootstrapJson, "utf-8").toString("base64");
 
     return `<!doctype html>
 <html lang="en">
@@ -521,7 +522,17 @@ export class PipelineDiagnosticsViewProvider {
 
     let model = null;
     let selectedId = null;
-  const bootstrapSnapshot = ${bootstrapJson};
+    const bootstrapSnapshotEncoded = "${bootstrapBase64}";
+
+    function parseBootstrapSnapshot() {
+      try {
+        return JSON.parse(atob(bootstrapSnapshotEncoded));
+      } catch {
+        return null;
+      }
+    }
+
+    const bootstrapSnapshot = parseBootstrapSnapshot();
 
     function escapeHtml(value) {
       return String(value)

@@ -15,6 +15,14 @@ It compiles intent and policy into executable checks, plans and previews changes
 
 - Use strict TDD for source-code changes: RED (focused failing test) -> GREEN (minimal fix) -> REFACTOR (safe cleanup) -> regression/build validation.
 
+## Testing Workflow
+
+- Fast TDD loop (source logic units): `npm run test:unit`
+- Watch mode for local TDD: `npm run test:unit:watch`
+- Unit-only coverage snapshot: `npm run test:unit:coverage`
+- Full default test pass: `npm test` (unit + rules + architecture)
+- Verification/hardening suites remain available: `npm run verify`, `npm run verify:full`
+
 ## Install
 
 - Install from Marketplace: **Choir**

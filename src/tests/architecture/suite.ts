@@ -1,6 +1,7 @@
 import assert from "assert";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "url";
 import * as YAML from "yaml";
 import { compileControlPlaneToRules } from "../../dsl/compiler.js";
 import {
@@ -10365,16 +10366,49 @@ const finalPass: TestPass = {
   ],
 };
 
-async function runPass(testPass: TestPass): Promise<boolean> {
-  process.stdout.write(`\n== ${testPass.name} ==\n`);
+type RunPassOptions = {
+  silent?: boolean;
+};
+
+function skippedArchitectureTestIds(): Set<string> {
+  const raw = process.env.CHOIR_SKIP_TEST_IDS;
+  if (!raw || raw.trim().length === 0) {
+    return new Set<string>();
+  }
+
+  return new Set(
+    raw
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0)
+  );
+}
+
+async function runPass(testPass: TestPass, options: RunPassOptions = {}): Promise<boolean> {
+  if (!options.silent) {
+    process.stdout.write(`\n== ${testPass.name} ==\n`);
+  }
+
+  const skippedIds = skippedArchitectureTestIds();
 
   for (const test of testPass.tests) {
+    if (skippedIds.has(test.id)) {
+      if (!options.silent) {
+        process.stdout.write(`SKIP ${test.id} ${test.name}\n`);
+      }
+      continue;
+    }
+
     try {
       await test.run();
-      process.stdout.write(`PASS ${test.id} ${test.name}\n`);
+      if (!options.silent) {
+        process.stdout.write(`PASS ${test.id} ${test.name}\n`);
+      }
     } catch (error) {
-      process.stderr.write(`FAIL ${test.id} ${test.name}\n`);
-      process.stderr.write(`${(error as Error).stack ?? String(error)}\n`);
+      if (!options.silent) {
+        process.stderr.write(`FAIL ${test.id} ${test.name}\n`);
+        process.stderr.write(`${(error as Error).stack ?? String(error)}\n`);
+      }
       return false;
     }
   }
@@ -10382,19 +10416,33 @@ async function runPass(testPass: TestPass): Promise<boolean> {
   return true;
 }
 
-async function main(): Promise<void> {
-  const passes: TestPass[] = [pass1, pass2, pass3, pass4, pass5, pass6, finalPass];
-
+export async function runArchitectureSuite(
+  passes: TestPass[] = [pass1, pass2, pass3, pass4, pass5, pass6, finalPass],
+  options: RunPassOptions = {}
+): Promise<boolean> {
   for (const testPass of passes) {
-    const ok = await runPass(testPass);
+    const ok = await runPass(testPass, options);
     if (!ok) {
-      process.stderr.write("\nArchitecture harness failed. Refactor is incomplete.\n");
-      process.exitCode = 1;
-      return;
+      if (!options.silent) {
+        process.stderr.write("\nArchitecture harness failed. Refactor is incomplete.\n");
+      }
+      return false;
     }
   }
 
-  process.stdout.write("\nPASS architecture harness (all passes)\n");
+  if (!options.silent) {
+    process.stdout.write("\nPASS architecture harness (all passes)\n");
+  }
+  return true;
 }
 
-void main();
+async function main(): Promise<void> {
+  const passed = await runArchitectureSuite(undefined, {
+    silent: process.env.CHOIR_ARCHITECTURE_SILENT === "1",
+  });
+  process.exitCode = passed ? 0 : 1;
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  void main();
+}

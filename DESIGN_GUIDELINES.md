@@ -7,6 +7,12 @@ This document defines the minimal, non-negotiable system contracts for Choir.
 TDD (test-driven development) MUST be used at all time when source code is to be introduced, modified, or deleted.
 Every qualifying code change must demonstrate RED -> GREEN -> REFACTOR evidence: focused failing test before production edits, then passing focused and regression/build validation after edits.
 
+## Testing Stratification Contract
+
+- Unit tests are the primary local TDD feedback loop and must be runnable without invoking full architecture/verification harnesses.
+- Alpha scope testing targets current source code logic directly: unit suites, rules harness, architecture harness, and verification suites.
+- Legacy parity/baseline migration gates are out of scope until explicitly reintroduced.
+
 ## Product Scope
 
 Choir is deterministic, policy-driven workspace governance:
