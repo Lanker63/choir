@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import * as path from "path";
 import * as fs from "fs";
 
-const CONTROL_PLANE_FILE_NAMES = ["choir.config.yaml", "choir.config.yml"] as const;
+const CONTROL_PLANE_FILE_NAMES = ["choir.config.yaml"] as const;
 
 function controlPlaneCandidates(root: string): string[] {
   return CONTROL_PLANE_FILE_NAMES.map((name) => path.join(root, ".choir", name));

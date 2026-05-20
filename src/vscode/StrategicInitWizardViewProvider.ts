@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { readControlPlane } from "../choirManager.js";
 import { readStrategicInitState } from "../core/strategicInit.js";
+import { deriveDomainHeatmapRows, derivePackageMappingRows } from "./strategicInitViewModel.js";
 
 function toHeatColor(value: number): string {
   const clamped = Math.max(0, Math.min(1, value));
@@ -67,27 +68,26 @@ export class StrategicInitWizardViewProvider {
     const control = readControlPlane();
     const state = root ? readStrategicInitState(root) : null;
 
-    const domains = control?.domains ? Object.entries(control.domains).sort(([left], [right]) => left.localeCompare(right)) : [];
-    const packages = control?.packages ? Object.entries(control.packages).sort(([left], [right]) => left.localeCompare(right)) : [];
+    const domains = deriveDomainHeatmapRows(control, state);
+    const packages = derivePackageMappingRows(control, state);
 
     const domainRows = domains.length > 0
-      ? domains.map(([id, domain]) => {
-        const intent = domain.strategicIntent;
-        const g = governanceScore(intent?.governanceIntensity);
-        const r = riskScore(intent?.riskTolerance);
+      ? domains.map((domain) => {
+        const g = governanceScore(domain.governanceIntensity);
+        const r = riskScore(domain.riskTolerance);
         return `<tr>
-          <td>${id}</td>
-          <td>${intent?.governanceIntensity ?? "inherited"}</td>
-          <td>${intent?.riskTolerance ?? "moderate"}</td>
-          <td>${(intent?.rolloutPreferences ?? []).join(", ") || "none"}</td>
+          <td>${domain.id}</td>
+          <td>${domain.governanceIntensity}</td>
+          <td>${domain.riskTolerance}</td>
+          <td>${domain.rolloutPreferences.join(", ") || "none"}</td>
           <td><span class="swatch" style="background:${toHeatColor(g)}"></span></td>
           <td><span class="swatch" style="background:${toHeatColor(r)}"></span></td>
         </tr>`;
       }).join("\n")
-      : `<tr><td colspan="6">No strategic domains modeled yet. Run @choir init.</td></tr>`;
+      : `<tr><td colspan="6">No strategic domains modeled yet. Run @choir init and complete strategic domain modeling.</td></tr>`;
 
     const packageRows = packages.length > 0
-      ? packages.map(([id, pkg]) => `<tr><td>${id}</td><td>${pkg.domain}</td><td>${pkg.strategicIntent?.governanceIntensity ?? "inherited"}</td></tr>`).join("\n")
+      ? packages.map((pkg) => `<tr><td>${pkg.id}</td><td>${pkg.domain}</td><td>${pkg.governanceIntensity}</td></tr>`).join("\n")
       : `<tr><td colspan="3">No package mappings configured.</td></tr>`;
 
     const stateBlock = state

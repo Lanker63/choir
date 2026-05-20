@@ -4485,17 +4485,23 @@ const pass2: TestPass = {
       name: "namespaced library macro execution logs audit metadata",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-run-"));
-        const libraryDir = path.join(root, ".choir", "libraries", "core", "1.0.0");
-        fs.mkdirSync(libraryDir, { recursive: true });
-        fs.writeFileSync(path.join(libraryDir, "macros.yaml"), [
-          "name: core",
+        const registryDir = path.join(root, ".choir", "registry", "local", "core", "1.0.0");
+        fs.mkdirSync(registryDir, { recursive: true });
+        fs.writeFileSync(path.join(registryDir, "manifest.yaml"), [
+          "id: core",
           "version: 1.0.0",
-          "metadata:",
-          "  description: core",
+          "selector: stable",
+          "capabilities:",
+          "  - id: enforce-service-boundaries",
+          "    type: macro",
+          "policies: []",
           "macros:",
           "  - id: enforce-service-boundaries",
           "    body:",
           "      - choir define goal \"enforce service boundaries\"",
+          "strategies: []",
+          "templates: []",
+          "dependencies: []",
           "",
         ].join("\n"), "utf-8");
 

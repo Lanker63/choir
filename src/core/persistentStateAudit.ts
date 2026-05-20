@@ -76,10 +76,6 @@ function recoveryStatePath(root: string): string {
   return path.join(choirDir(root), "state.recovery.json");
 }
 
-function statePath(root: string): string {
-  return path.join(choirDir(root), "state.json");
-}
-
 function transitionsPath(root: string): string {
   return path.join(choirDir(root), "state.transitions.jsonl");
 }
@@ -148,45 +144,7 @@ function ensureStorage(root: string): void {
     return;
   }
 
-  const legacyPath = statePath(root);
-  let migrated: PersistedState | null = null;
-
-  if (fs.existsSync(legacyPath)) {
-    try {
-      const legacyRaw = fs.readFileSync(legacyPath, "utf-8");
-      const legacy = JSON.parse(legacyRaw) as Record<string, unknown>;
-      const hasStatePlaneShape = (
-        Object.prototype.hasOwnProperty.call(legacy, "intent")
-        || Object.prototype.hasOwnProperty.call(legacy, "ast")
-        || Object.prototype.hasOwnProperty.call(legacy, "graph")
-        || Object.prototype.hasOwnProperty.call(legacy, "execution")
-        || Object.prototype.hasOwnProperty.call(legacy, "stateHash")
-      );
-
-      if (!hasStatePlaneShape) {
-        const currentHash = typeof legacy.currentHash === "string" && legacy.currentHash.trim().length > 0
-          ? legacy.currentHash
-          : "";
-        const logicalTime = typeof legacy.logicalTime === "number" && Number.isFinite(legacy.logicalTime) && legacy.logicalTime >= 0
-          ? Math.floor(legacy.logicalTime)
-          : -1;
-
-        if (currentHash.length > 0 && logicalTime >= 0) {
-          migrated = {
-            version: typeof legacy.version === "string" && legacy.version.trim().length > 0
-              ? legacy.version
-              : STATE_VERSION,
-            currentHash,
-            logicalTime,
-          };
-        }
-      }
-    } catch {
-      migrated = null;
-    }
-  }
-
-  const initial: PersistedState = migrated ?? {
+  const initial: PersistedState = {
     version: STATE_VERSION,
     currentHash: UNINITIALIZED_HASH,
     logicalTime: 0,

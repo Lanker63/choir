@@ -150,11 +150,6 @@ export function getControlPlanePath(): string | null {
         if (fs.existsSync(yamlPath)) {
             return yamlPath;
         }
-
-        const ymlPath = path.join(choirPath, "choir.config.yml");
-        if (fs.existsSync(ymlPath)) {
-            return ymlPath;
-        }
     }
 
     const preferredRoot = roots[0];

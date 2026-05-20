@@ -23,12 +23,7 @@ function addSubscription(context: vscode.ExtensionContext, disposable: vscode.Di
 
 function hasInitializedChoir(root: string): boolean {
     const yamlPath = path.join(root, ".choir", "choir.config.yaml");
-    if (fs.existsSync(yamlPath)) {
-        return true;
-    }
-
-    const ymlPath = path.join(root, ".choir", "choir.config.yml");
-    return fs.existsSync(ymlPath);
+    return fs.existsSync(yamlPath);
 }
 
 export function activate(context: vscode.ExtensionContext) {
@@ -76,8 +71,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     const isControlPlaneSave = (document: vscode.TextDocument): boolean => {
         const normalizedPath = document.uri.fsPath.split(path.sep).join("/").toLowerCase();
-        return normalizedPath.endsWith("/.choir/choir.config.yaml")
-            || normalizedPath.endsWith("/.choir/choir.config.yml");
+        return normalizedPath.endsWith("/.choir/choir.config.yaml");
     };
     
     try {

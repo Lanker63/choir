@@ -207,16 +207,6 @@ const ChoirLibrarySchema = z.object({
   integrityHash: z.string().optional(),
 }).strict();
 
-const LegacyMacroLibrarySchema = z.object({
-  name: z.string().regex(LIBRARY_NAME_PATTERN),
-  version: z.string().regex(SEMVER_EXACT_PATTERN),
-  macros: z.array(MacroSchema).default([]),
-  metadata: z.object({
-    description: z.string().optional(),
-    owner: z.string().optional(),
-  }).default({}),
-}).strict();
-
 const ChoirLockSchema = z.object({
   libraries: z.record(z.string().regex(LIBRARY_NAME_PATTERN), z.object({
     version: z.string().regex(SEMVER_EXACT_PATTERN),
@@ -552,36 +542,6 @@ function loadChoirLibraryManifest(manifestPath: string): ChoirLibrary {
   return normalized;
 }
 
-function loadLegacyLibraryManifest(manifestPath: string): ChoirLibrary {
-  const raw = fs.readFileSync(manifestPath, "utf-8");
-  const parsed = YAML.parse(raw) ?? {};
-  const legacy = LegacyMacroLibrarySchema.parse(parsed);
-
-  const provisional: Omit<ChoirLibrary, "integrityHash"> = {
-    id: legacy.name,
-    version: legacy.version,
-    selector: "latest",
-    capabilities: legacy.macros.map((macro) => ({
-      id: macro.id,
-      type: "macro",
-    })),
-    policies: [],
-    macros: legacy.macros,
-    strategies: [],
-    templates: [],
-    dependencies: [],
-    compatibility: "legacy-macro-library",
-  };
-
-  const normalized = normalizeLibrary({
-    ...provisional,
-    integrityHash: computeLibraryIntegrityHash(provisional),
-  });
-
-  validateLibrary(normalized);
-  return normalized;
-}
-
 function resolveFromMaterialized(root: string, id: string, version: string): ResolvedLibrary | null {
   const manifestPath = path.join(librariesRoot(root), id, "manifest.yaml");
   if (!fs.existsSync(manifestPath)) {
@@ -596,24 +556,6 @@ function resolveFromMaterialized(root: string, id: string, version: string): Res
   return {
     library: loaded,
     source: "materialized",
-    manifestPath,
-  };
-}
-
-function resolveFromLegacyLibraries(root: string, id: string, version: string): ResolvedLibrary | null {
-  const manifestPath = path.join(librariesRoot(root), id, version, "macros.yaml");
-  if (!fs.existsSync(manifestPath)) {
-    return null;
-  }
-
-  const loaded = loadLegacyLibraryManifest(manifestPath);
-  if (loaded.id !== id || loaded.version !== version) {
-    return null;
-  }
-
-  return {
-    library: loaded,
-    source: "legacy-local",
     manifestPath,
   };
 }
@@ -681,14 +623,6 @@ function allAvailableLibraries(root: string): ResolvedLibrary[] {
           source: "materialized",
           manifestPath: materialized,
         });
-      }
-
-      const versions = listVersionDirectories(path.join(localLibrariesRoot, id));
-      for (const version of versions) {
-        const legacy = resolveFromLegacyLibraries(root, id, version);
-        if (legacy) {
-          resolved.push(legacy);
-        }
       }
     }
   }
