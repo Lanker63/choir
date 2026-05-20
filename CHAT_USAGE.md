@@ -62,7 +62,7 @@ Choir accepts several equivalent input forms. The parser normalizes them all bef
 | `show` | `choir status` |
 | `show status` | `choir status` |
 
-The `@choir` prefix is always optional for DSL commands. Shortcut commands (`init`, `verify`, `cli install`, etc.) require the `@choir` prefix or work with and without it.
+The `@choir` prefix is always optional for DSL commands. Shortcut commands (`init`, `verify`, `cli install`, etc.) accept the `@choir` prefix; some also work without it.
 
 ---
 
@@ -112,14 +112,14 @@ Templates pre-populate default goals, constraints, priorities, and governance se
 ### Init modes
 
 ```
-@choir init --reclassify
-```
-Re-classifies domains from scratch when the package topology has changed (packages added or removed). Run this before `--recalibrate` if the package catalog has drifted.
-
-```
 @choir init --expand-domain
 ```
 Adds new domains discovered since the last init without touching existing domain models.
+
+```
+@choir init --reclassify
+```
+Re-classifies domains from scratch when the package topology has changed (packages added or removed). Run this before `--recalibrate` if the package catalog has drifted.
 
 ```
 @choir init --recalibrate

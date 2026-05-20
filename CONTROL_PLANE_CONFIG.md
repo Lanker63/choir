@@ -196,7 +196,7 @@ intent:
 
 Notes:
 
-- nonGoals uses a hyphen in the key name.
+- The YAML key is `nonGoals` (camelCase). The DSL command type is `non-goal` (hyphenated).
 - Each array item is a string.
 
 ### 4.2 Strategic Intent Block (used under domains, packages, contexts)

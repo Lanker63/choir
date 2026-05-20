@@ -43,7 +43,7 @@ Configuration assertions in this procedure use the current control-plane schema 
    - Confirm `.choir/init-strategic-state.json` is created.
    - Confirm `.choir/pipeline.diagnostics.jsonl` contains an init diagnostics record with stages for workspace-discovery, domain-classification, strategic-modeling, governance-modeling, orchestration-calibration, and control-plane-generation.
 
-1.1 In chat, enter `@choir init --template fintech-platform` in a fresh test workspace.
+**1.1** In chat, enter `@choir init --template fintech-platform` in a fresh test workspace.
 
    - Confirm strategic defaults are seeded for strict/high-governance initialization posture.
    - Confirm resulting control plane initializes strategic intent coherently at the applicable scope without persisting a duplicate top-level `domains` catalog.
@@ -52,12 +52,12 @@ Configuration assertions in this procedure use the current control-plane schema 
    - Confirm package entries do not persist legacy `packages.*.domain` fields.
    - Confirm governance scope is exclusive for rooted workspaces: global `runtime` + `capabilities` are present and `packageModes` is omitted.
 
-1.2 In chat, enter `@choir init --template experimentation-platform` in a fresh test workspace.
+**1.2** In chat, enter `@choir init --template experimentation-platform` in a fresh test workspace.
 
    - Confirm strategic defaults are seeded for experimentation/velocity posture.
    - Confirm initialization remains deterministic and replayable (re-run with unchanged workspace and verify equivalent topology/strategic hashes in diagnostics metadata when surfaced).
 
-1.3 In an already initialized workspace, run `@choir init` again and choose `Merge`.
+**1.3** In an already initialized workspace, run `@choir init` again and choose `Merge`.
 
    - Confirm mission and vision prompts are pre-populated with current control-plane values (editable, not blank).
    - Confirm existing root intent lists (goals, constraints, nonGoals) are preserved/seeded and can be incrementally updated.
@@ -76,12 +76,12 @@ Configuration assertions in this procedure use the current control-plane schema 
    - Confirm if finish is chosen immediately (no domain selected), root-level updates still apply and existing strategic domain/package mappings remain unchanged.
    - Confirm when one or more domains are selected, only selected domain/package strategic sections are updated; unselected strategic sections remain unchanged.
 
-1.4 In an already initialized workspace, run `@choir init` and choose `Overwrite`.
+**1.4** In an already initialized workspace, run `@choir init` and choose `Overwrite`.
 
    - Confirm init proceeds as full re-initialization (not incremental merge behavior).
    - Confirm merge-specific domain picker loop is not used in overwrite path.
 
-1.5 In a rootless workspace (no top-level `package.json`, with package manifests only in subfolders), run `@choir init`.
+**1.5** In a rootless workspace (no top-level `package.json`, with package manifests only in subfolders), run `@choir init`.
 
    - Confirm domain/package modeling still completes for discovered subfolder packages.
    - Confirm `.choir/choir.config.yaml` does not persist global `runtime` or top-level `capabilities`.
@@ -124,18 +124,18 @@ Configuration assertions in this procedure use the current control-plane schema 
 
 9. Validate strategic init rerun modes.
 
-9.1 Run `@choir init --expand-domain` after adding a new package/module in the workspace.
+**9.1** Run `@choir init --expand-domain` after adding a new package/module in the workspace.
 
    - Confirm newly discovered package/domain mappings are added without wiping existing strategic domain modeling.
    - Confirm strategic re-model prompts are scoped to domains impacted by newly discovered packages (unchanged domains are not re-prompted).
    - Confirm discovered domain identity follows topology-derived naming from package paths.
 
-9.2 Run `@choir init --reclassify` with unchanged workspace.
+**9.2** Run `@choir init --reclassify` with unchanged workspace.
 
    - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
    - Confirm each reclassify domain mission prompt is pre-populated from previously modeled mission text (not reset to generic topology fallback wording).
 
-9.3 Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
+**9.3** Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
 
    - Confirm rollout/governance recommendations are recalibrated and persisted without destructive resets of unrelated intent fields.
    - For multi-domain workspaces, confirm runtime governance is captured per-domain during domain modeling and global runtime prompt is not required as an interactive blocker.
