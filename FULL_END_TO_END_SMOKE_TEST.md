@@ -346,6 +346,12 @@ policy deny-production-plan-changes {
 
 5. Approve the pending action using the pending identifier, then re-run the action.
 
+   Use the `diffId` returned in the approval-required response:
+
+   ```
+   @choir approve <diffId>
+   ```
+
    - Confirm the action proceeds only after approval.
 
 6. Create a new pending action and reject it using `@choir reject <id>`.
