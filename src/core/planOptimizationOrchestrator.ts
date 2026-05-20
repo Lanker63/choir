@@ -316,6 +316,33 @@ function clonePlan(plan: Plan): Plan {
   return cloneJson(plan);
 }
 
+function basePlanFamilyKey(plan: Plan): string {
+  return stableHash({
+    derivedFrom: plan.derivedFrom,
+    goalRefs: sortedUnique(plan.goalRefs ?? []),
+    title: plan.title,
+    tasks: plan.tasks.map((task) => ({
+      id: task.id,
+      type: task.type,
+      files: sortedUnique((task.scope?.files ?? []).map((file) => normalizePath(file))),
+      successCriteria: sortedUnique(task.successCriteria),
+    })).sort((left, right) => left.id.localeCompare(right.id)),
+  });
+}
+
+function dedupeConfiguredBasePlans(plans: Plan[]): Plan[] {
+  const byFamily = new Map<string, Plan>();
+
+  for (const plan of [...plans].sort((left, right) => left.id.localeCompare(right.id))) {
+    const key = basePlanFamilyKey(plan);
+    if (!byFamily.has(key)) {
+      byFamily.set(key, plan);
+    }
+  }
+
+  return [...byFamily.values()].sort((left, right) => left.id.localeCompare(right.id));
+}
+
 function loadControlPlane(root: string): ControlPlane {
   const controlPath = path.join(root, ".choir", "choir.config.yaml");
   if (!fs.existsSync(controlPath)) {
@@ -769,7 +796,7 @@ export function generateCandidatePlans(
 ): CandidateExecutionPlan[] {
   const deterministicControl = targetControl(controlPlane, targetGoal);
   const baseSynthesized = generatePlan(deterministicControl, graph.state);
-  const configuredPlans = [...controlPlane.execution.plans]
+  const configuredPlans = dedupeConfiguredBasePlans([...controlPlane.execution.plans]
     .sort((left, right) => left.id.localeCompare(right.id))
     .filter((plan) => {
       if (!targetGoal) {
@@ -777,7 +804,7 @@ export function generateCandidatePlans(
       }
 
       return (plan.goalRefs ?? []).includes(targetGoal);
-    });
+    }));
 
   const basePlans = configuredPlans.length > 0
     ? configuredPlans

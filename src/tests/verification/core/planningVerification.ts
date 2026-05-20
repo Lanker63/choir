@@ -6,6 +6,8 @@ import * as YAML from "yaml";
 import { ControlPlane, ControlPlaneSchema, Plan } from "../../../schema.js";
 import { generateExecutionPreview } from "../../../core/executionPreview.js";
 import {
+  analyzeWorkspace,
+  generateCandidatePlans,
   PlanOptimizationError,
   synthesizeAndOptimizePlans,
 } from "../../../core/planOptimizationOrchestrator.js";
@@ -102,6 +104,30 @@ export async function runPlanningVerification(): Promise<PlanningVerificationRep
       detail: freshWorkspacePass
         ? `selected ${first.selectedPlan.id} via ${first.selectedPlan.strategyType} from ${first.candidatePlans.length} candidates`
         : "planner did not synthesize optimized plans in fresh workspace",
+    });
+
+    const duplicateConfiguredControl: ControlPlane = {
+      ...control,
+      execution: {
+        ...control.execution,
+        plans: [
+          first.selectedExecutionPlan,
+          {
+            ...first.selectedExecutionPlan,
+            id: `${first.selectedExecutionPlan.id}-duplicate`,
+          },
+        ],
+      },
+    };
+
+    const duplicateConfiguredGraph = await analyzeWorkspace(workspace.root, duplicateConfiguredControl);
+    const duplicateConfiguredCandidates = generateCandidatePlans(duplicateConfiguredControl, duplicateConfiguredGraph);
+    const strategyCount = new Set(duplicateConfiguredCandidates.map((candidate) => candidate.strategyId)).size;
+
+    checks.push({
+      name: "candidate-synthesis-collapses-equivalent-configured-plan-families",
+      passed: duplicateConfiguredCandidates.length === 5 && strategyCount === 5,
+      detail: `candidates=${duplicateConfiguredCandidates.length}, strategies=${strategyCount}`,
     });
 
     const fingerprints: string[] = [];

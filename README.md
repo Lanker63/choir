@@ -57,7 +57,7 @@ execution:
 | --- | --- |
 | **Strategic Init** | Deterministic workspace discovery → domain mapping → governance synthesis |
 | **Policy Evaluation** | Deterministic merge order: org → repo → environment. Parent deny cannot be bypassed. |
-| **Planning** | Simulates all candidate strategies before selection; produces explainable ranked output |
+| **Planning** | Simulates all candidate strategies before selection; deduplicates equivalent configured plan families for deterministic candidate counts and produces explainable ranked output |
 | **Preview** | Hash-bound, simulation-derived preview of every planned change |
 | **Execution** | Staged, dependency-aware rollout (canary / phased / batched / all-at-once) with approval gates |
 | **Rollback** | Failure-isolated rollback restores control-plane state and workspace snapshot |

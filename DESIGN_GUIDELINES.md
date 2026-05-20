@@ -76,6 +76,7 @@ For identical inputs, output must be identical for:
 
 - plan ids, ordering, scores, selections
 - strategy variants, adaptive iterations, selected strategy
+- candidate synthesis cardinality and ordering when equivalent configured plan variants (same intent/task family) are present
 - preview diffs and preview hash
 - execution graph, batches, conflict outcomes
 - state hash, transitions, snapshots, replay outcomes
