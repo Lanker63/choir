@@ -1,5 +1,6 @@
 import ts from "typescript";
 import { EnforcementContext } from "../core/context.js";
+import { deterministicHash, stableSortBy } from "../core/deterministicCore.js";
 import { NodeId, NormalizedAST, normalizeAST } from "../ast/model.js";
 
 export type SemanticGraph = {
@@ -27,24 +28,14 @@ type SemanticCacheEntry = {
 
 let semanticCache: SemanticCacheEntry | null = null;
 
-function hashText(input: string): string {
-  let hash = 2166136261;
-
-  for (let i = 0; i < input.length; i += 1) {
-    hash ^= input.charCodeAt(i);
-    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
-  }
-
-  return (hash >>> 0).toString(16);
-}
-
 function makeCacheKey(context: EnforcementContext): string {
-  const sorted = [...context.files].sort((a, b) => a.path.localeCompare(b.path));
-  const serialized = sorted
-    .map((file) => `${file.path}:${hashText(file.content)}`)
-    .join("|");
+  const fingerprints = stableSortBy(context.files, (file) => file.path)
+    .map((file) => ({
+      path: file.path,
+      contentHash: deterministicHash(file.content),
+    }));
 
-  return hashText(serialized);
+  return deterministicHash(fingerprints);
 }
 
 export function createEmptySemanticGraph(): SemanticGraph {

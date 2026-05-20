@@ -37,6 +37,10 @@ function normalizePath(filePath: string): string {
   return filePath.split("\\").join("/");
 }
 
+function comparePlanScores(left: PlanScore, right: PlanScore): number {
+  return left.totalCost - right.totalCost || left.planId.localeCompare(right.planId);
+}
+
 export function estimatePatches(plan: Plan): number {
   return plan.tasks.filter((task) => task.type === "refactor").length * 3;
 }
@@ -127,10 +131,9 @@ export function scorePlan(plan: Plan, state: StatePlane): PlanScore {
 }
 
 export function scorePlans(plans: Plan[], state: StatePlane): PlanScore[] {
-  return [...plans]
-    .sort((left, right) => left.id.localeCompare(right.id))
+  return plans
     .map((plan) => scorePlan(plan, state))
-    .sort((left, right) => left.totalCost - right.totalCost || left.planId.localeCompare(right.planId));
+    .sort(comparePlanScores);
 }
 
 export function selectBestPlan(plans: Plan[], state: StatePlane): Plan {
@@ -164,7 +167,7 @@ export function buildCostTrace(selectedPlanId: string, evaluatedPlans: PlanScore
 
   return {
     selectedPlanId,
-    evaluatedPlans: [...evaluatedPlans].sort((left, right) => left.totalCost - right.totalCost || left.planId.localeCompare(right.planId)),
+    evaluatedPlans: [...evaluatedPlans].sort(comparePlanScores),
     decision,
   };
 }
