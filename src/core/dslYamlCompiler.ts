@@ -44,6 +44,7 @@ import {
   validateRole,
 } from "./policyEngine.js";
 import { loadPolicies } from "./policyDsl.js";
+import { recordMutationTrace } from "./mutationTrace.js";
 
 export type ChoirConfig = {
   version: string;
@@ -711,6 +712,14 @@ export function writeYAML(config: ChoirConfig, controlPath: string): void {
   const yaml = serializeYAML(config);
   fs.mkdirSync(path.dirname(controlPath), { recursive: true });
   fs.writeFileSync(controlPath, yaml, "utf-8");
+  recordMutationTrace(inferPolicyRoot(controlPath), {
+    source: "dsl-yaml-compiler",
+    mechanism: "yaml-structured",
+    safety: "safe",
+    operation: "write-yaml",
+    targetFiles: [controlPath],
+    payload: canonicalizeConfig(config),
+  });
 }
 
 export function hashConfig(config: ChoirConfig): string {

@@ -10,6 +10,7 @@ import { ControlPlane } from "../schema.js";
 import { runPipeline } from "./pipeline.js";
 import { readStatePlane, StatePlane, validateState } from "./state.js";
 import { Diagnostic, SourceLocation } from "./types.js";
+import { recordMutationTrace } from "./mutationTrace.js";
 
 export type Pattern = {
   kind: "identifier";
@@ -1377,6 +1378,20 @@ function applyRefactorPlan(plan: RefactorPlan, graph: SymbolGraph, snapshot: Wor
 
     changedFiles[toStableFilePath(snapshot.root, filePath)] = after;
   }
+
+  recordMutationTrace(snapshot.root, {
+    source: "refactor-engine",
+    mechanism: "ts-morph",
+    safety: "conditionally-safe",
+    operation: plan.intent.type,
+    targetFiles: Object.keys(changedFiles),
+    detail: `affectedSymbols=${plan.impact.affectedSymbols.length}`,
+    payload: {
+      intent: plan.intent,
+      impact: plan.impact,
+      changedFiles: Object.keys(changedFiles).sort((left, right) => left.localeCompare(right)),
+    },
+  });
 
   return {
     changedFiles,

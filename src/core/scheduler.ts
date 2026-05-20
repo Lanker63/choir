@@ -11,6 +11,7 @@ import { createEmptyStatePlane, StatePlane, readStatePlane, persistStatePlane } 
 import { Diagnostic, SchedulerTrace, TransactionTrace } from "./types.js";
 import { locationToOffsetRange } from "./diagnostics.js";
 import { cloneJson } from "../utils/clone.js";
+import { classifyPatch, recordMutationTrace } from "./mutationTrace.js";
 
 export type ExecutionNode = {
   id: string;
@@ -818,6 +819,25 @@ function updateStateAfterCommit(tx: Transaction): StatePlane {
   return nextState;
 }
 
+function recordPatchMutationTraces(root: string | undefined, source: string, patches: Patch[], detail?: string): void {
+  if (!root) {
+    return;
+  }
+
+  for (const patch of patches) {
+    const classified = classifyPatch(patch);
+    recordMutationTrace(root, {
+      source,
+      mechanism: classified.mechanism,
+      safety: classified.safety,
+      operation: classified.operation,
+      targetFiles: classified.targetFiles,
+      detail,
+      payload: patch,
+    });
+  }
+}
+
 export function createNodeTransactionFS(root: string): TransactionFS {
   return {
     async readFiles(files: string[]): Promise<Record<string, string>> {
@@ -1450,6 +1470,7 @@ async function executeBatchTransaction(
 
   try {
     await simulate(tx, batch.workUnits, options.enforcer, options.controlPlane);
+    recordPatchMutationTraces(options.root, "scheduler-simulate", tx.proposedPatches, tx.id);
     const vfs = materializeVFS(tx);
     await validate(tx, vfs, options.pipeline, {
       maxNewErrors: options.maxNewErrors,
@@ -1459,6 +1480,7 @@ async function executeBatchTransaction(
     });
 
     if (tx.validation.passed) {
+      recordPatchMutationTraces(options.root, "scheduler-commit", tx.proposedPatches, tx.id);
       await commit(tx, txFs, lock);
     } else {
       rollbackReason = "validation-failed";

@@ -21,6 +21,7 @@ import {
   isTextPatch,
 } from "./types.js";
 import { locationToOffsetRange } from "../core/diagnostics.js";
+import { classifyPatch, findMutationTraceRoot, recordMutationTrace } from "../core/mutationTrace.js";
 
 function patchIdForIndex(index: number): string {
   return `patch-${index + 1}`;
@@ -294,6 +295,21 @@ export function applyPatchesWithRoundTrip(
   patches: Patch[]
 ): PatchApplyResult {
   const frozenPatches = deepFreeze([...patches]);
+  for (const patch of frozenPatches) {
+    const classified = classifyPatch(patch);
+    const root = findMutationTraceRoot(normalizedAst.filePath);
+    if (root) {
+      recordMutationTrace(root, {
+        source: "fix-engine",
+        mechanism: classified.mechanism,
+        safety: classified.safety,
+        operation: classified.operation,
+        targetFiles: classified.targetFiles,
+        payload: patch,
+      });
+    }
+  }
+
   const patchValidation = validatePatches(normalizedAst, frozenPatches);
   if (!patchValidation.ok) {
     return {

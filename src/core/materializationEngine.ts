@@ -33,6 +33,7 @@ import {
   semanticDiagnosticsForFixes,
   synthesizeSemanticFixesForWorkUnits,
 } from "./semanticMaterializerRegistry.js";
+import { classifyPatch, recordMutationTrace } from "./mutationTrace.js";
 
 export type PatchOperation = {
   id: string;
@@ -589,6 +590,17 @@ function buildPatchOperations(root: string, transactions: Transaction[]): PatchO
         files,
         patch: normalizedPatch,
         patchHash,
+      });
+      const classified = classifyPatch(normalizedPatch);
+      recordMutationTrace(root, {
+        source: "materialization-engine",
+        mechanism: classified.mechanism,
+        safety: classified.safety,
+        operation: classified.operation,
+        targetFiles: classified.targetFiles,
+        detail: `transaction=${transaction.id};batch=${transaction.batchId};order=${order}`,
+        payloadHash: patchHash,
+        payload: normalizedPatch,
       });
       order += 1;
     }

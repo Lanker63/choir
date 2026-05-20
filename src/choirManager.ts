@@ -5,6 +5,7 @@ import { ControlPlane, ControlPlaneSchema, CONTROL_PLANE_VERSION } from "./schem
 import * as YAML from "yaml";
 import { isRecord } from "./utils/guards.js";
 import { cloneJson } from "./utils/clone.js";
+import { recordMutationTrace } from "./core/mutationTrace.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -188,6 +189,14 @@ export function writeControlPlane(data: ControlPlane) {
 
     fs.mkdirSync(path.dirname(controlPath), { recursive: true });
     fs.writeFileSync(controlPath, YAML.stringify(validated), "utf-8");
+    recordMutationTrace(path.dirname(path.dirname(controlPath)), {
+        source: "choir-manager",
+        mechanism: "yaml-structured",
+        safety: "safe",
+        operation: "write-control-plane",
+        targetFiles: [controlPath],
+        payload: validated,
+    });
 }
 
 export function updateControlPlane(updater: (current: ControlPlane) => ControlPlane): ControlPlane | null {

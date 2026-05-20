@@ -15,6 +15,7 @@ import type { RuleResult } from "./astValidation.js";
 import type { ControlPlane, Plan } from "../schema.js";
 import { isNonNull, isRecord } from "../utils/guards.js";
 import { cloneJson, cloneJsonOrUndefined } from "../utils/clone.js";
+import { recordMutationTrace } from "./mutationTrace.js";
 
 export type AST = {
   rootNodeId: string;
@@ -2329,6 +2330,15 @@ export function persistStatePlane(root: string, state: StatePlane, options?: Per
 
   persistStatePersistJournal(root, journal);
   applyStatePersistJournal(root, journal);
+  recordMutationTrace(root, {
+    source: "state-plane",
+    mechanism: "state-structured",
+    safety: "safe",
+    operation: options?.action ?? "persist-state",
+    targetFiles: [statePath],
+    payloadHash: nextState.stateHash,
+    detail: `transition=${transition.id};patches=${transitionDiff.patchCount}`,
+  });
 
   const reloaded = readStatePlane(root);
   if (!reloaded) {

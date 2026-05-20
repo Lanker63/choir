@@ -14,6 +14,7 @@ const DEFAULT_IGNORED_PREFIXES = [
   ".choir/locks",
   ".choir/traces",
   ".choir/audit.log.jsonl",
+  ".choir/mutation-trace.jsonl",
   ".choir/pipeline.diagnostics.jsonl",
   ".choir/pipeline-diagnostics.jsonl",
   ".choir/state.json",

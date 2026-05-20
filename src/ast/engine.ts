@@ -92,13 +92,14 @@ export function runAST(
     };
   }
 
-  const semanticBuild = buildSemanticGraph(context, parsed.normalizedAsts);
-  const readonlySemanticGraph = createReadonlySemanticGraph(semanticBuild.graph);
-
   const diagnostics: Diagnostic[] = [];
   const fixes: Fix[] = [];
 
   const rules = registry.getASTRules();
+  const semanticBuild = buildSemanticGraph(context, parsed.normalizedAsts, {
+    includeGraph: rules.length > 0,
+  });
+  const readonlySemanticGraph = createReadonlySemanticGraph(semanticBuild.graph);
 
   for (const file of context.files) {
     const ast = context.astMap.get(file.path) as ts.SourceFile;
