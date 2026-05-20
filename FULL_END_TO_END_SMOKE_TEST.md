@@ -24,6 +24,10 @@ Configuration assertions in this procedure use the current control-plane schema 
 
 ---
 
+## Chat-Based Tests
+
+---
+
 ## Topic 1: Initialization and Control-Plane Authoring
 
 1. In chat, enter `@choir init` and respond to all prompts with a mission, vision, two goals, two constraints, and two nonGoals.
@@ -180,58 +184,6 @@ Topic setup for deterministic lineage:
 - For each strategy-specific execute run in this topic, start from a fresh checkpoint or re-run `@choir preview` immediately before execute to bind current state/workspace lineage.
 
 ---
-
-## Topic 3.1: CLI Parity Validation (Target Repository)
-
-Run these from a terminal in the target repository root with `choir-cli` installed.
-
-1. Verify JSON envelope contract for runtime families.
-
-   ```bash
-   choir analyze summary
-   choir plan --optimize
-   choir simulate plan <plan-id>
-   choir preview plan <plan-id>
-   choir execute plan <plan-id> --preview <preview-hash>
-   choir rollback --stage <stage-id>
-   ```
-
-   - Confirm each command prints JSON with top-level `ok` and `command` keys.
-   - Confirm `preview` and `execute` payloads include orchestration/runtime sections.
-
-2. Verify refactor and macro/abstraction families.
-
-   ```bash
-   choir refactor rename <symbol> <new-name>
-   choir macro list
-   choir abstraction list
-   ```
-
-   - Confirm each command returns an envelope and does not emit plain-text-only output.
-
-3. Verify library and audit families.
-
-   ```bash
-   choir library list
-   choir audit report
-   ```
-
-   - Confirm `audit report` writes:
-     - `.choir/reports/compliance-report.json`
-     - `.choir/reports/compliance-report.yaml`
-     - `.choir/reports/compliance-report.pdf`
-
-4. Verify non-interactive init family.
-
-   ```bash
-   choir init
-   choir init --template baseline --reclassify
-   choir init --recalibrate
-   ```
-
-   - Confirm each run is deterministic for unchanged workspace topology.
-   - Confirm `--recalibrate` fails closed if package catalog drift is detected.
-- If integrity reports `STATE_LINEAGE_DIVERGENCE` or `PREVIEW_HASH_MISMATCH`, treat it as a stale-lineage setup issue and refresh preview/simulation before retrying.
 
 1. In chat, enter `@choir simulate`.
 
@@ -600,16 +552,6 @@ Primary path (chat): run each command below and confirm the stated result.
        - regression-lock checks that expect extension-source paths (for example `src/tests/...` and `src/core/...`)
     - Fail Topic 11.10 only when required target-repo criteria above are not met.
 
-Optional path (if `choir` CLI is installed in the target repo environment):
-
-- Optional helper from chat: run `@choir cli install`, choose local or global scope, provide an explicit package source, and confirm the install command is launched in a visible terminal.
-- After completion, confirm `choir --help` succeeds in terminal before running CLI verify commands.
-
-- Repeat the same checks with `choir verify ...` flags from terminal.
-- CLI-only seed variants (not chat syntax):
-   - `choir verify --property --seed 1337`
-   - `choir verify --chaos moderate --seed 1337`
-
 ---
 
 ## Topic 12: Determinism and Repeatability
@@ -724,7 +666,104 @@ Run each command below a second time on unchanged inputs and confirm stability.
 
 ---
 
+## CLI-Based Tests
+
+---
+
+## Topic 14: CLI Parity Validation
+
+Run these from a terminal in the target repository root with `choir-cli` installed.
+
+1. Verify JSON envelope contract for runtime families.
+
+   ```bash
+   choir analyze summary
+   choir plan --optimize
+   choir simulate plan <plan-id>
+   choir preview plan <plan-id>
+   choir execute plan <plan-id> --preview <preview-hash>
+   choir rollback --stage <stage-id>
+   ```
+
+   - Confirm each command prints JSON with top-level `ok` and `command` keys.
+   - Confirm `preview` and `execute` payloads include orchestration/runtime sections.
+
+2. Verify refactor and macro/abstraction families.
+
+   ```bash
+   choir refactor rename <symbol> <new-name>
+   choir macro list
+   choir abstraction list
+   ```
+
+   - Confirm each command returns an envelope and does not emit plain-text-only output.
+
+3. Verify library and audit families.
+
+   ```bash
+   choir library list
+   choir audit report
+   ```
+
+   - Confirm `audit report` writes:
+     - `.choir/reports/compliance-report.json`
+     - `.choir/reports/compliance-report.yaml`
+     - `.choir/reports/compliance-report.pdf`
+
+4. Verify non-interactive init family.
+
+   ```bash
+   choir init
+   choir init --template baseline --reclassify
+   choir init --recalibrate
+   ```
+
+   - Confirm each run is deterministic for unchanged workspace topology.
+   - Confirm `--recalibrate` fails closed if package catalog drift is detected.
+- If integrity reports `STATE_LINEAGE_DIVERGENCE` or `PREVIEW_HASH_MISMATCH`, treat it as a stale-lineage setup issue and refresh preview/simulation before retrying.
+
+---
+
+## Topic 15: CLI Verification
+
+If `choir` CLI is installed in the target repo environment, run CLI-equivalent verification from terminal.
+
+1. Install the `choir` CLI if not already available.
+
+   - In chat, run `@choir cli install`, choose local or global scope, provide an explicit package source, and confirm the install command is launched in a visible terminal.
+   - Confirm `choir --help` succeeds in terminal before running CLI verify commands.
+
+2. Run CLI-equivalent verification checks.
+
+   ```bash
+   choir verify --compiler
+   choir verify --determinism
+   choir verify --transactions
+   choir verify --state
+   choir verify --policy
+   choir verify --orchestration
+   choir verify --production
+   choir verify --property
+   choir verify --chaos moderate
+   choir verify --full
+   ```
+
+   - Confirm each CLI command produces equivalent output to its chat counterpart in Topic 11.
+
+3. Run CLI-only seed-fixed variants.
+
+   ```bash
+   choir verify --property --seed 1337
+   choir verify --chaos moderate --seed 1337
+   ```
+
+   - Confirm results are deterministic and stable for the given seed across repeated runs.
+
+---
+
 ## Sign-Off
+
+**Chat-Based Tests**
 
 | Topic | Result | Notes |
 |---|---|---|
@@ -741,6 +780,13 @@ Run each command below a second time on unchanged inputs and confirm stability.
 | 11. Verification Surface (Target Repo) | PASS / FAIL | |
 | 12. Determinism and Repeatability | PASS / FAIL | |
 | 13. Runtime Governance Modes and Capability Gates | PASS / FAIL | |
+
+**CLI-Based Tests**
+
+| Topic | Result | Notes |
+|---|---|---|
+| 14. CLI Parity Validation | PASS / FAIL | |
+| 15. CLI Verification | PASS / FAIL | |
 
 **Overall result:** PASS / FAIL
 
