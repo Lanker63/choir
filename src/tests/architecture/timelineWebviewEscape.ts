@@ -7,8 +7,14 @@ const timelineProviderPath = path.join(repoRoot, "src", "vscode", "TimelineViewP
 const source = fs.readFileSync(timelineProviderPath, "utf-8");
 
 assert.ok(
-  source.includes("strategic.textContent = strategicLines.join('\\\\n');"),
-  "Timeline webview script must use escaped newline \\n so generated HTML stays syntactically valid."
+  source.includes('const scriptPath = path.join(this.context.extensionPath, "media", "timelinePanel.js");')
+    && source.includes('<script nonce="${nonce}" src="${scriptUri}"></script>'),
+  "Timeline webview must load runtime from external media/timelinePanel.js script."
 );
 
-process.stdout.write("PASS timeline webview newline escaping regression\n");
+assert.ok(
+  !source.includes("<script nonce=\"${nonce}\">") && !source.includes("const vscode = acquireVsCodeApi();"),
+  "Timeline webview must avoid embedding inline runtime script in provider HTML."
+);
+
+process.stdout.write("PASS timeline webview transport regression\n");

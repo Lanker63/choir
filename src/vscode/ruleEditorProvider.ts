@@ -38,6 +38,12 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     return /disposed/i.test(message);
   }
 
+  private releaseWebview(webview: vscode.Webview): void {
+    this.webviewRegistrations.get(webview)?.dispose();
+    this.webviewRegistrations.delete(webview);
+    this.webviews.delete(webview);
+  }
+
   public openPanel(column: vscode.ViewColumn = vscode.ViewColumn.One): void {
     if (this.panel) {
       try {
@@ -64,14 +70,13 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     );
 
     this.panel = panel;
-    this.configureWebview(panel.webview);
+    const panelWebview = panel.webview;
+    this.configureWebview(panelWebview);
     // Ensure the panel is revealed without stealing focus from editors
     panel.reveal(column, true);
 
     panel.onDidDispose(() => {
-      this.webviewRegistrations.get(panel.webview)?.dispose();
-      this.webviewRegistrations.delete(panel.webview);
-      this.webviews.delete(panel.webview);
+      this.releaseWebview(panelWebview);
       this.panel = undefined;
     });
   }
@@ -160,12 +165,11 @@ export class RuleEditorProvider implements vscode.WebviewViewProvider {
     console.log("RuleEditorProvider: resolveWebviewView called for", view?.viewType ?? "unknown");
     this.view = view;
 
-    this.configureWebview(view.webview);
+    const viewWebview = view.webview;
+    this.configureWebview(viewWebview);
 
     view.onDidDispose(() => {
-      this.webviewRegistrations.get(view.webview)?.dispose();
-      this.webviewRegistrations.delete(view.webview);
-      this.webviews.delete(view.webview);
+      this.releaseWebview(viewWebview);
       if (this.view === view) {
         this.view = undefined;
       }

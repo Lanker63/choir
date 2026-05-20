@@ -124,14 +124,19 @@ Configuration assertions in this procedure use the current control-plane schema 
 
 9. Validate strategic init rerun modes.
 
-   - Run `@choir init --expand-domain` after adding a new package/module in the workspace.
+9.1 Run `@choir init --expand-domain` after adding a new package/module in the workspace.
+
    - Confirm newly discovered package/domain mappings are added without wiping existing strategic domain modeling.
    - Confirm strategic re-model prompts are scoped to domains impacted by newly discovered packages (unchanged domains are not re-prompted).
    - Confirm discovered domain identity follows topology-derived naming from package paths.
-   - Run `@choir init --reclassify` with unchanged workspace.
+
+9.2 Run `@choir init --reclassify` with unchanged workspace.
+
    - Confirm classification is deterministic and explainable (same package->domain mapping on repeated runs).
    - Confirm each reclassify domain mission prompt is pre-populated from previously modeled mission text (not reset to generic topology fallback wording).
-   - Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
+
+9.3 Run `@choir init --recalibrate` after adjusting domain risk/governance posture.
+
    - Confirm rollout/governance recommendations are recalibrated and persisted without destructive resets of unrelated intent fields.
    - For multi-domain workspaces, confirm runtime governance is captured per-domain during domain modeling and global runtime prompt is not required as an interactive blocker.
    - For rooted single-package workspaces, confirm no additional global runtime prompt appears after domain modeling in full init.
@@ -386,30 +391,30 @@ policy deny-production-plan-changes {
    - Confirm strategic init diagnostics entries appear after running `@choir init`.
    - Confirm stage-level outcomes include strategic init pipeline stages (workspace-discovery through control-plane-generation).
 
-4.1 Open the Command Palette and run **Choir: Open Strategic Init Wizard**.
+5. Open the Command Palette and run **Choir: Open Strategic Init Wizard**.
 
    - Confirm the panel loads without runtime errors.
    - Confirm domain visualization/heatmaps render (governance intensity and risk posture by domain).
    - Confirm package-to-domain mapping table renders from current control plane.
    - Confirm latest strategic init replay artifact details are visible from `.choir/init-strategic-state.json`.
 
-5. In chat, enter `@choir graph`.
+6. In chat, enter `@choir graph`.
 
    - Confirm a graph summary is returned.
 
-6. In chat, enter `@choir graph focus <node>` using a known node id.
+7. In chat, enter `@choir graph focus <node>` using a known node id.
 
    - Confirm focused node projection is returned.
 
-7. In chat, enter `@choir graph dependencies <node>`.
+8. In chat, enter `@choir graph dependencies <node>`.
 
    - Confirm the dependency list is returned and matches known structure.
 
-8. In chat, enter `@choir graph dependents <node>`.
+9. In chat, enter `@choir graph dependents <node>`.
 
    - Confirm the dependents list is returned and matches known structure.
 
-9. In the Dependency Graph panel, select a node and click **Open Node**.
+10. In the Dependency Graph panel, select a node and click **Open Node**.
 
    - Confirm the selected node manifest file opens in the editor.
    - Confirm Timeline is opened (if not already open) and navigates to the same unit context.
@@ -417,7 +422,7 @@ policy deny-production-plan-changes {
    - Clear Focus Node (or switch to a state with no valid focus) and confirm **Open Node**, **Dependencies**, and **Dependents** are visibly disabled.
    - Re-select a valid node and confirm those controls re-enable.
 
-10. In the Dependency Graph panel, click **Refresh**.
+11. In the Dependency Graph panel, click **Refresh**.
 
    - Confirm the status line briefly shows `Refreshing graph projection...`.
    - Confirm the status line updates to include `refreshed=<time>`.
@@ -425,12 +430,12 @@ policy deny-production-plan-changes {
    - Confirm pipeline-driven projections refresh (graph/timeline/diagnostics) rather than a no-op repaint.
    - If strategic config changed since last run, confirm refreshed Control Center/Timeline projections reflect the updated strategic posture.
 
-11. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
+12. Open the Command Palette and run **Choir: Show Webview Sync Trace**.
 
    - Confirm Output opens to channel **Choir Webview Sync Trace**.
    - Confirm host-to-webview events are listed.
 
-12. Open the Command Palette and run **Choir: Show DSL Editor Trace**.
+13. Open the Command Palette and run **Choir: Show DSL Editor Trace**.
 
    - Confirm Output opens to channel **Choir DSL Editor Trace**.
    - Confirm counters are shown (`completionsTriggered`, `diagnosticsCount`, `parseErrors`).

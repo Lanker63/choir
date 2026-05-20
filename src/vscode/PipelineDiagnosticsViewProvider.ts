@@ -202,8 +202,8 @@ export class PipelineDiagnosticsViewProvider {
     this.webviews.delete(webview);
   }
 
-  private resetPanel(panel: vscode.WebviewPanel): void {
-    this.releaseWebview(panel.webview);
+  private resetPanel(panel: vscode.WebviewPanel, panelWebview: vscode.Webview): void {
+    this.releaseWebview(panelWebview);
     if (this.panel === panel) {
       this.panel = undefined;
     }
@@ -225,7 +225,7 @@ export class PipelineDiagnosticsViewProvider {
           throw error;
         }
 
-        this.resetPanel(this.panel);
+        this.resetPanel(this.panel, this.panel.webview);
       }
     }
 
@@ -239,10 +239,11 @@ export class PipelineDiagnosticsViewProvider {
     );
 
     this.panel = panel;
-    this.configureWebview(panel.webview);
+    const panelWebview = panel.webview;
+    this.configureWebview(panelWebview);
 
     panel.onDidDispose(() => {
-      this.resetPanel(panel);
+      this.resetPanel(panel, panelWebview);
     });
 
     void this.postSnapshot();
