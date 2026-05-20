@@ -99,6 +99,7 @@ import {
 } from "./core/initWizard.js";
 import {
     calibrateStrategicOrchestration,
+    ensurePoliciesDslForFirstTimeInit,
     detectMissingControlPlanePackageReferences,
     detectStrategicPackageCatalogDelta,
     discoverStrategicDomains,
@@ -790,6 +791,8 @@ export function registerChoir(context: vscode.ExtensionContext) {
                     return;
                 }
 
+                const hadChoirDirectoryAtStart = fs.existsSync(path.join(workspaceRoot, ".choir"));
+
                 const controlPath = getControlPlanePath();
                 if (!controlPath) {
                     stream.markdown("Unable to resolve .choir/choir.config.yaml.");
@@ -1401,6 +1404,11 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         synthesis: synthesis.report,
                         previous: readStrategicInitState(workspaceRoot),
                     });
+                    const seededPoliciesDsl = strategicMode === "full"
+                        ? ensurePoliciesDslForFirstTimeInit(workspaceRoot, {
+                            hadChoirDirectoryAtStart,
+                        })
+                        : false;
 
                     diagnosticsStages.push({
                         stage: "control-plane-generation",
@@ -1445,6 +1453,9 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         `- topologyHash: ${synthesis.report.topologyHash}`,
                         `- strategicHash: ${synthesis.report.strategicHash}`,
                         `- calibrationHash: ${synthesis.report.calibrationHash}`,
+                        ...(seededPoliciesDsl
+                            ? ["- bootstrap: created .choir/policies.dsl with a commented sample policy"]
+                            : []),
                     ].join("\n"));
                 } catch (error) {
                     const message = error instanceof Error ? error.message : String(error);

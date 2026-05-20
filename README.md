@@ -36,7 +36,7 @@ It compiles intent and policy into executable checks, plans and previews changes
 
 1. Open a workspace in VS Code.
 2. Run `@choir init` in the Chat panel (or create `.choir/choir.config.yaml` manually).
-3. Add policy sources at `/org/policies.dsl` or `.choir/policies.dsl`.
+3. On first-time init (no existing `.choir/`), Choir creates `.choir/policies.dsl` with a commented sample policy. Add or edit policy sources at `/org/policies.dsl` or `.choir/policies.dsl`.
 4. Commit all three files.
 
 Minimal config:

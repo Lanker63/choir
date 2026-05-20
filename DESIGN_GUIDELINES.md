@@ -211,6 +211,7 @@ Strategic init contract:
 - Strategic init template runtime defaults must propagate into domain prompt defaults: when a template defines runtimeMode and no existing package-level mode is uniquely resolved, seeded domain runtime mode must use the template runtimeMode.
 - Strategic intent persistence for rooted single-package synthesis must avoid duplicate scope blocks: persist package-level `packages.".".strategicIntent` as canonical and omit global `strategicIntent`.
 - Rooted single-package init must not prompt for an additional global runtime selection after domain modeling; global runtime must be derived from the sole domain runtime mode.
+- First-time `@choir init` runs (workspace started without `.choir/`) must create `.choir/policies.dsl` with a commented sample policy scaffold and must not overwrite an existing policies file.
 - Init rerun surfaces must support incremental strategic evolution: `--expand-domain`, `--reclassify`, `--recalibrate`.
 - `--expand-domain` interactive modeling must scope to domains impacted by newly discovered packages; unchanged domains are not re-prompted.
 - `--recalibrate` must fail closed when discovery detects package catalog drift (added/removed package paths relative to persisted `packages`); operators must run `--reclassify` before recalibrating.

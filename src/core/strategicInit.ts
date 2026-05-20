@@ -140,6 +140,14 @@ export type StrategicInitSynthesisResult = {
   };
 };
 
+const FIRST_TIME_POLICIES_DSL_SAMPLE = [
+  "# Sample policy (uncomment to activate).",
+  "# policy repo-require-approval-for-plan-edits {",
+  "#   when diff.path = \"execution.plans\" and diff.operation = update then require-approval",
+  "# }",
+  "",
+].join("\n");
+
 type TemplateDefaults = {
   priorities: StrategicPriority[];
   optimizationGoals: OptimizationGoal[];
@@ -1044,6 +1052,27 @@ export function synthesizeStrategicControlPlane(
 
 export function strategicInitStatePath(root: string): string {
   return path.join(root, ".choir", "init-strategic-state.json");
+}
+
+export function ensurePoliciesDslForFirstTimeInit(
+  root: string,
+  options: {
+    hadChoirDirectoryAtStart: boolean;
+  }
+): boolean {
+  if (options.hadChoirDirectoryAtStart) {
+    return false;
+  }
+
+  const choirRoot = path.join(root, ".choir");
+  const policiesPath = path.join(choirRoot, "policies.dsl");
+  if (fs.existsSync(policiesPath)) {
+    return false;
+  }
+
+  fs.mkdirSync(choirRoot, { recursive: true });
+  fs.writeFileSync(policiesPath, FIRST_TIME_POLICIES_DSL_SAMPLE, "utf-8");
+  return true;
 }
 
 export function writeStrategicInitState(root: string, value: unknown): void {
