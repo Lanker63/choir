@@ -9604,7 +9604,7 @@ const finalPass: TestPass = {
   name: "Final — Cross-Cutting Tests",
   tests: [
     {
-      id: "7.1",
+      id: "x.1",
 
       name: "higher priority rules override lower ones",
       run: async () => {
@@ -9615,7 +9615,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.2",
+      id: "x.2",
 
       name: "trace is fully populated",
       run: async () => {
@@ -9627,7 +9627,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.3",
+      id: "x.3",
 
       name: "control plane requires version",
       run: async () => {
@@ -9638,7 +9638,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.4",
+      id: "x.4",
 
       name: "conflict resolution is deterministic and priority driven",
       run: async () => {
@@ -9717,7 +9717,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.5",
+      id: "x.5",
 
       name: "priority overrides and dependency safety rejections are honored",
       run: async () => {
@@ -9833,7 +9833,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.6",
+      id: "x.6",
 
       name: "core runtime source never imports from /tests",
       run: async () => {
@@ -9848,7 +9848,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.7",
+      id: "x.7",
 
       name: "extension manifest does not expose npm bin path mapping",
       run: async () => {
@@ -9858,7 +9858,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.8",
+      id: "x.8",
 
       name: "standalone choir-cli package declares deterministic bin and prepack flow",
       run: async () => {
@@ -9877,7 +9877,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.9",
+      id: "x.9",
 
       name: "cli runtime parser preserves verify/ci behavior and fail-closes VS Code-only shortcuts",
       run: async () => {
@@ -10045,7 +10045,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.10",
+      id: "x.10",
 
       name: "cli scope registry captures in-scope parity surface and explicit exclusions",
       run: async () => {
@@ -10066,7 +10066,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.11",
+      id: "x.11",
 
       name: "cli runtime executor returns JSON envelopes for status and remove-goal",
       run: async () => {
@@ -10127,7 +10127,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.12",
+      id: "x.12",
 
       name: "cli runtime executor supports analyze targets with deterministic JSON payloads",
       run: async () => {
@@ -10182,7 +10182,7 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "7.13",
+      id: "x.13",
 
       name: "cli runtime executor covers remaining parity command families with JSON envelopes",
       run: async () => {

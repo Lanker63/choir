@@ -2070,7 +2070,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         writeControlPlane(persistedControl);
 
                         const rankingLines = optimized.rankedPlans.map((entry) =>
-                            `- ${entry.rank}. ${entry.strategyId} (policy=${entry.policyDecision}, risk=${entry.riskScore}, dependencyRisk=${entry.dependencyRisk}, blastRadius=${entry.blastRadius}, rollbackComplexity=${entry.rollbackComplexity}, executionCost=${entry.executionCost}, changes=${entry.changeCount})`
+                            `${entry.rank}. ${entry.strategyId} (policy=${entry.policyDecision}, risk=${entry.riskScore}, dependencyRisk=${entry.dependencyRisk}, blastRadius=${entry.blastRadius}, rollbackComplexity=${entry.rollbackComplexity}, executionCost=${entry.executionCost}, changes=${entry.changeCount})`
                         );
 
                         const stageLines = optimized.stageResults
@@ -2082,7 +2082,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         const executionLines = optimized.executionStages.length === 0
                             ? ["- none"]
                             : optimized.executionStages.map((stage) =>
-                                `- ${stage.order}. ${stage.id} (parallel=${stage.parallelizable}, units=[${stage.units.join(", ")}])`
+                                `${stage.order}. ${stage.id} (parallel=${stage.parallelizable}, units=[${stage.units.join(", ")}])`
                             );
 
                         stream.markdown([
@@ -2186,7 +2186,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         const executionStageLines = runtime.execute.executionStages.length === 0
                             ? ["- none"]
                             : runtime.execute.executionStages.map((stage) =>
-                                `- ${stage.order}. ${stage.id} (units=[${stage.units.join(", ")}])`
+                                `${stage.order}. ${stage.id} (units=[${stage.units.join(", ")}])`
                             );
 
                         stream.markdown([
@@ -2484,7 +2484,7 @@ export function registerChoir(context: vscode.ExtensionContext) {
                         const executionStageLines = runtime.optimized.executionStages.length === 0
                             ? ["- none"]
                             : runtime.optimized.executionStages.map((stage, index) => {
-                                return `- ${index + 1}. ${stage.id} (parallel=${stage.parallelizable}, units=${stage.units.length})${stage.units.length > 0 ? ` [${stage.units.join(", ")}]` : ""}`;
+                                return `${index + 1}. ${stage.id} (parallel=${stage.parallelizable}, units=${stage.units.length})${stage.units.length > 0 ? ` [${stage.units.join(", ")}]` : ""}`;
                             });
 
                         const diffLines = runtime.preview.fileChanges.length === 0

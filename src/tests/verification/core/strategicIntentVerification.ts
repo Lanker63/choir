@@ -52,15 +52,6 @@ function withDomain(control: ControlPlane, domain: "payments" | "experimentation
   if (domain === "payments") {
     return ControlPlaneSchema.parse({
       ...control,
-      strategicIntent: {
-        priorities: ["correctness", "rollback-safety"],
-        optimizationGoals: ["deterministic-replay"],
-        riskTolerance: "low",
-        architecturalPosture: ["conservative", "highly-reviewed"],
-        rolloutPreferences: ["canary-required"],
-        stabilityProfile: "stable",
-        governanceIntensity: "strict",
-      },
       domains: {
         payments: {
           mission: "Ensure reliable financial processing",
@@ -86,15 +77,6 @@ function withDomain(control: ControlPlane, domain: "payments" | "experimentation
 
   return ControlPlaneSchema.parse({
     ...control,
-    strategicIntent: {
-      priorities: ["iteration-speed", "developer-autonomy"],
-      optimizationGoals: ["rapid-delivery", "low-governance-friction"],
-      riskTolerance: "high",
-      architecturalPosture: ["exploratory", "adaptive"],
-      rolloutPreferences: ["phased-optional", "parallel-optimized"],
-      stabilityProfile: "adaptive",
-      governanceIntensity: "relaxed",
-    },
     domains: {
       experimentation: {
         mission: "Rapid feature incubation",
@@ -196,15 +178,6 @@ export async function runStrategicIntentVerification(): Promise<StrategicIntentV
     const base = loadControlPlane(ambiguityWorkspace.root);
     const packageScoped = ControlPlaneSchema.parse({
       ...base,
-      strategicIntent: {
-        priorities: ["correctness"],
-        optimizationGoals: ["deterministic-replay"],
-        riskTolerance: "moderate",
-        architecturalPosture: ["adaptive"],
-        rolloutPreferences: ["phased-optional"],
-        stabilityProfile: "adaptive",
-        governanceIntensity: "moderate",
-      },
       domains: {
         payments: {
           strategicIntent: {
@@ -264,15 +237,6 @@ export async function runStrategicIntentVerification(): Promise<StrategicIntentV
       mission: "",
       vision: "",
       intent: { goals: [], constraints: [], "nonGoals": [] },
-      strategicIntent: {
-        priorities: ["correctness"],
-        optimizationGoals: ["deterministic-replay"],
-        riskTolerance: "low",
-        architecturalPosture: ["conservative"],
-        rolloutPreferences: ["canary-required"],
-        stabilityProfile: "stable",
-        governanceIntensity: "strict",
-      },
       domains: {},
       packages: {},
       contexts: {},

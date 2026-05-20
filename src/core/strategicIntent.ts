@@ -170,7 +170,7 @@ export function resolveStrategicContext(input: {
   }
 
   const domains = sortedUnique([...domainSet]);
-  if (domains.length !== 1) {
+  if (domains.length > 1) {
     return {
       status: "failed",
       reason: "ambiguous-domain-resolution",
