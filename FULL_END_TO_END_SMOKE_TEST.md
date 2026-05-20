@@ -258,6 +258,80 @@ Topic setup for deterministic lineage:
 
 ## Topic 5: Policy Enforcement and Approval Gates
 
+### Policy DSL Reference
+
+Rules live in `.choir/policies.dsl`. Each file may contain one or more named `policy` blocks. Each rule inside a block follows the form:
+
+```
+when <clause> [and <clause> ...] then <effect>
+```
+
+**Matchers** (at least one required per rule):
+
+| Clause | Values |
+|---|---|
+| `diff.path = "<yaml.path>"` | Any dot-separated YAML key path (e.g. `"intent.goals"`) |
+| `diff.operation = <op>` | `add` · `remove` · `update` |
+| `macro = "<macro-id>"` | Quoted macro identifier string |
+
+**Scope selectors** (optional, combinable with `and`):
+
+| Clause | Values |
+|---|---|
+| `role = <role>` | `architect` · `analyst` · `conductor` · `enforcer` |
+| `environment = <env>` | `local` · `ci` · `staging` · `production` |
+
+**Condition selectors** (optional, combinable with `and`):
+
+| Clause | Values |
+|---|---|
+| `contains "<string>"` | Quoted substring to match in the diff value |
+| `countGreaterThan <n>` | Integer threshold on diff count |
+
+**Effects:**
+
+| Effect | Meaning |
+|---|---|
+| `allow` | Explicitly permit (overrides lower-priority deny) |
+| `deny` | Block the mutation fail-closed |
+| `require-approval` | Hold for explicit `@choir approve <id>` before proceeding |
+
+**Policy-level directives** (optional, one per block):
+
+| Directive | Values | Default |
+|---|---|---|
+| `inherit <op>` | `assign` · `append` · `remove` | `append` |
+| `override <scope>` | `child` · `none` | `none` |
+
+**Merge order:** `org → repo → environment`. A parent `deny` cannot be overridden by a child policy.
+
+**Example — deny:**
+
+```
+policy deny-goal-mutations {
+  when diff.path = "intent.goals" and diff.operation = add then deny
+}
+```
+
+**Example — require-approval (replace the deny block above with this for steps 3–6):**
+
+```
+policy require-approval-goal-mutations {
+  when diff.path = "intent.goals" and diff.operation = add then require-approval
+}
+```
+
+**Example — scoped by role and environment:**
+
+```
+policy deny-production-plan-changes {
+  when diff.path = "execution.plans" and diff.operation = add and environment = production then deny
+  when diff.path = "execution.plans" and diff.operation = update and environment = production then deny
+}
+```
+
+---
+
 1. Add a `deny` rule for a specific action prefix in `.choir/policies.dsl`.
 
 2. Execute the action covered by the deny rule.
