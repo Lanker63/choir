@@ -43,6 +43,14 @@ type SectionSpec = {
   checks: SectionCheck[];
 };
 
+function escapeRegExpLiteral(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+export function architecturePassByName(testName: string): RegExp {
+  return new RegExp(`PASS [^\\n]* ${escapeRegExpLiteral(testName)}`);
+}
+
 const SECTION_SPECS: SectionSpec[] = [
   {
     id: 1,
@@ -319,7 +327,7 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "cross-cutting safety contract",
         source: "architecture",
-        pattern: /PASS 7\.5 priority overrides and dependency safety rejections are honored/,
+        pattern: architecturePassByName("priority overrides and dependency safety rejections are honored"),
       },
     ],
   },
