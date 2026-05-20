@@ -72,17 +72,17 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "structural validation stage",
         source: "architecture",
-        pattern: /PASS 2\.90 ast structure validation rejects malformed nodes deterministically/,
+        pattern: /PASS 2\.16 ast structure validation rejects malformed nodes deterministically/,
       },
       {
         description: "semantic validation stage",
         source: "architecture",
-        pattern: /PASS 2\.91 ast semantic validation rejects duplicates and conflicts/,
+        pattern: /PASS 2\.17 ast semantic validation rejects duplicates and conflicts/,
       },
       {
         description: "cross-node validation stage",
         source: "architecture",
-        pattern: /PASS 2\.92 cross-node validation enforces plan preconditions and warns on implicit execute synthesis/,
+        pattern: /PASS 2\.18 cross-node validation enforces plan preconditions and warns on implicit execute synthesis/,
       },
     ],
   },
@@ -140,17 +140,17 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "require-approval gate",
         source: "architecture",
-        pattern: /PASS 2\.24 policy require-approval blocks until approved for exact diff hash/,
+        pattern: /PASS 2\.44 policy require-approval blocks until approved for exact diff hash/,
       },
       {
         description: "deny precedence",
         source: "architecture",
-        pattern: /PASS 2\.34 policy precedence is deterministic deny over require-approval/,
+        pattern: /PASS 2\.84 policy precedence is deterministic deny over require-approval/,
       },
       {
         description: "org deny precedence over repo",
         source: "architecture",
-        pattern: /PASS 2\.41 org deny policy wins over repo allow policy/,
+        pattern: /PASS 2\.91 org deny policy wins over repo allow policy/,
       },
     ],
   },
@@ -161,17 +161,17 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "transaction commit path",
         source: "architecture",
-        pattern: /PASS 4\.11 transactional execution commits validated batches/,
+        pattern: /PASS 4\.29 transactional execution commits validated batches/,
       },
       {
         description: "transaction rollback path",
         source: "architecture",
-        pattern: /PASS 4\.12 transactional execution rolls back on validation failure without writes/,
+        pattern: /PASS 4\.30 transactional execution rolls back on validation failure without writes/,
       },
       {
         description: "transaction reject non-idempotent patch",
         source: "architecture",
-        pattern: /PASS 4\.13 transactional execution rejects non-idempotent patch sets/,
+        pattern: /PASS 4\.31 transactional execution rejects non-idempotent patch sets/,
       },
     ],
   },
@@ -182,12 +182,12 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "simulation blocks execution on failure",
         source: "architecture",
-        pattern: /PASS 6\.10d execution is blocked when simulation gate fails/,
+        pattern: /PASS 6\.14 execution is blocked when simulation gate fails/,
       },
       {
         description: "simulation and execution converge",
         source: "architecture",
-        pattern: /PASS 6\.10e simulation and execution converge to identical final state/,
+        pattern: /PASS 6\.15 simulation and execution converge to identical final state/,
       },
     ],
   },
@@ -198,12 +198,12 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "refactor parser surface",
         source: "architecture",
-        pattern: /PASS 2\.8 choir DSL parser supports refactor commands/,
+        pattern: /PASS 2\.12 choir DSL parser supports refactor commands/,
       },
       {
         description: "deterministic refactor preview and rollback",
         source: "architecture",
-        pattern: /PASS 2\.59 refactor engine preview is deterministic and rollback restores snapshots/,
+        pattern: /PASS 2\.110 refactor engine preview is deterministic and rollback restores snapshots/,
       },
     ],
   },
@@ -214,17 +214,17 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "deterministic cost model",
         source: "architecture",
-        pattern: /PASS 4\.14 cost scoring is deterministic and explainable/,
+        pattern: /PASS 4\.11 cost scoring is deterministic and explainable/,
       },
       {
         description: "deterministic tie-break by plan id",
         source: "architecture",
-        pattern: /PASS 4\.15 cost selection uses deterministic plan-id tie-breaker/,
+        pattern: /PASS 4\.12 cost selection uses deterministic plan-id tie-breaker/,
       },
       {
         description: "deterministic lowest-cost selection",
         source: "architecture",
-        pattern: /PASS 4\.16 cost-based plan set selection returns lowest-cost plan/,
+        pattern: /PASS 4\.13 cost-based plan set selection returns lowest-cost plan/,
       },
     ],
   },
@@ -245,7 +245,7 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "rollback isolation scope",
         source: "architecture",
-        pattern: /PASS 6\.10p rollback set includes failed unit and executed dependents only/,
+        pattern: /PASS 6\.32 rollback set includes failed unit and executed dependents only/,
       },
     ],
   },
@@ -277,12 +277,12 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "immutable audit hash chain",
         source: "architecture",
-        pattern: /PASS 2\.48 audit store records compile and policy evaluation with immutable hash chain/,
+        pattern: /PASS 2\.98 audit store records compile and policy evaluation with immutable hash chain/,
       },
       {
         description: "deterministic audit query and reports",
         source: "architecture",
-        pattern: /PASS 2\.50 audit query and compliance reports are deterministic with multi-format export/,
+        pattern: /PASS 2\.100 audit query and compliance reports are deterministic with multi-format export/,
       },
     ],
   },
@@ -293,12 +293,12 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "deterministic graph transform for UI projection",
         source: "architecture",
-        pattern: /PASS 6\.15 dependency graph transform to UI graph is deterministic and sorted/,
+        pattern: /PASS 6\.50 dependency graph transform to UI graph is deterministic and sorted/,
       },
       {
         description: "deterministic graph snapshot overlays",
         source: "architecture",
-        pattern: /PASS 6\.16 graph snapshot is deterministic and projects plan\/violation overlays/,
+        pattern: /PASS 6\.51 graph snapshot is deterministic and projects plan\/violation overlays/,
       },
     ],
   },
@@ -309,17 +309,17 @@ const SECTION_SPECS: SectionSpec[] = [
       {
         description: "simulation gate enforcement",
         source: "architecture",
-        pattern: /PASS 6\.10d execution is blocked when simulation gate fails/,
+        pattern: /PASS 6\.14 execution is blocked when simulation gate fails/,
       },
       {
         description: "fail-closed simulation\/execution divergence",
         source: "architecture",
-        pattern: /PASS 6\.10g execution fails closed when simulation and execution outcomes diverge/,
+        pattern: /PASS 6\.17 execution fails closed when simulation and execution outcomes diverge/,
       },
       {
         description: "cross-cutting safety contract",
         source: "architecture",
-        pattern: /PASS X\.5 priority overrides and dependency safety rejections are honored/,
+        pattern: /PASS 7\.5 priority overrides and dependency safety rejections are honored/,
       },
     ],
   },

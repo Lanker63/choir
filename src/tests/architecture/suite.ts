@@ -489,6 +489,7 @@ const pass1: TestPass = {
   tests: [
     {
       id: "1.1",
+
       name: "only one control plane YAML exists",
       run: async () => {
         await withFixture("simple-project", async ({ root }) => {
@@ -500,6 +501,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.2",
+
       name: "control plane matches canonical schema",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -518,6 +520,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.3",
+
       name: "control plane compiles into executable rules",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -529,6 +532,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.4",
+
       name: "control plane rejects duplicate plan ids",
       run: async () => {
         const invalid = {
@@ -572,6 +576,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.5",
+
       name: "control plane rejects circular task dependencies",
       run: async () => {
         const invalid = {
@@ -609,6 +614,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.6",
+
       name: "control plane rejects mixed global and package runtime governance",
       run: async () => {
         const invalid = {
@@ -631,6 +637,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.7",
+
       name: "control plane accepts package runtime governance without global runtime",
       run: async () => {
         const valid = {
@@ -647,6 +654,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.8",
+
       name: "control plane rejects mixed global strategic intent and package runtime governance",
       run: async () => {
         const invalid = {
@@ -674,6 +682,7 @@ const pass1: TestPass = {
     },
     {
       id: "1.9",
+
       name: "control plane accepts package runtime governance with package-level strategic intent only",
       run: async () => {
         const valid = {
@@ -703,6 +712,7 @@ const pass2: TestPass = {
   tests: [
     {
       id: "2.1",
+
       name: "chat does not produce diagnostics without persistence",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -714,6 +724,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.2",
+
       name: "chat mutates control plane YAML",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -725,6 +736,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.3",
+
       name: "enforcement requires pipeline execution",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -741,6 +753,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.4",
+
       name: "enforcer does not consume raw chat input",
       run: async () => {
         const enforcerPath = path.join(repoRoot, "src", "enforcer.ts");
@@ -750,6 +763,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.5",
+
       name: "plural chat directives split comma-delimited lists",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -770,6 +784,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.6",
+
       name: "choir DSL tokenizer is deterministic",
       run: async () => {
         assert.deepStrictEqual(
@@ -787,6 +802,7 @@ const pass2: TestPass = {
     },
     {
       id: "2.7",
+
       name: "choir DSL parser builds AST and supports then-pipeline",
       run: async () => {
         assert.deepStrictEqual(splitByThen('choir define goal "A" then plan then execute'), [
@@ -822,7 +838,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.7a",
+      id: "2.8",
+
       name: "analyze formatter emits target-specific deterministic output",
       run: async () => {
         const workspaceOnly = formatAnalyzeMarkdown("workspace", {
@@ -846,7 +863,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.7b",
+      id: "2.9",
+
       name: "compilation trace formatter renders empty change list inline",
       run: async () => {
         const output = formatCompilationTraceMarkdown({
@@ -863,7 +881,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.7c",
+      id: "2.10",
+
       name: "hotspot classifier uses line-based Large and God thresholds",
       run: async () => {
         const belowThreshold = Array.from({ length: 500 }, (_, index) => `line-${index + 1}`).join("\n");
@@ -876,7 +895,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.7d",
+      id: "2.11",
+
       name: "hotspot analyzer resolves workspaceRoot and package-scoped exclude globs deterministically",
       run: async () => {
         const control = ControlPlaneSchema.parse({
@@ -906,7 +926,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.8",
+      id: "2.12",
+
       name: "choir DSL parser supports refactor commands",
       run: async () => {
         const rename = parseCommand("choir refactor rename runQuery executeQuery");
@@ -1037,7 +1058,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.81",
+      id: "2.13",
+
       name: "choir DSL rejects invalid syntax deterministically",
       run: async () => {
         assert.throws(() => parseCommand("plan"), /Expected keyword 'choir'/);
@@ -1060,7 +1082,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.9",
+      id: "2.14",
+
       name: "choir DSL compiler routes AST actions deterministically",
       run: async () => {
         const calls: string[] = [];
@@ -1114,7 +1137,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.10",
+      id: "2.15",
+
       name: "capability enforcement prevents cross-role actions",
       run: async () => {
         enforceCapabilities("architect", "modify-yaml");
@@ -1128,7 +1152,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.90",
+      id: "2.16",
+
       name: "ast structure validation rejects malformed nodes deterministically",
       run: async () => {
         const malformed = {
@@ -1142,7 +1167,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.91",
+      id: "2.17",
+
       name: "ast semantic validation rejects duplicates and conflicts",
       run: async () => {
         const control = makeControlPlane();
@@ -1171,7 +1197,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.92",
+      id: "2.18",
+
       name: "cross-node validation enforces plan preconditions and warns on implicit execute synthesis",
       run: async () => {
         const control = makeControlPlane();
@@ -1192,7 +1219,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.93",
+      id: "2.19",
+
       name: "rule engine execution order is deterministic and sorted by id",
       run: async () => {
         const ast = parseCommand('choir define goal "A"').ast;
@@ -1223,7 +1251,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.94",
+      id: "2.20",
+
       name: "rule conflict detection catches contradictory decisions and fixes",
       run: async () => {
         const conflicts = detectConflicts([
@@ -1260,7 +1289,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.95",
+      id: "2.21",
+
       name: "fix engine preserves immutability and semantic equivalence",
       run: async () => {
         const ast = parseCommand('choir define goal "A"').ast;
@@ -1281,7 +1311,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.96",
+      id: "2.22",
+
       name: "processAST validates before rules and emits deterministic trace",
       run: async () => {
         const control = makeControlPlane();
@@ -1318,7 +1349,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.97",
+      id: "2.23",
+
       name: "dependency graph and impact analysis are deterministic",
       run: async () => {
         const before = parseCommand('choir define goal "A" then plan then execute').ast;
@@ -1338,7 +1370,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.98",
+      id: "2.24",
+
       name: "rule indexing is stable and keyed by node type",
       run: async () => {
         const rules: Rule[] = [
@@ -1371,7 +1404,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.99",
+      id: "2.25",
+
       name: "incremental engine executes only affected local rules",
       run: async () => {
         const state = createIncrementalRuleState();
@@ -1444,7 +1478,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.100",
+      id: "2.26",
+
       name: "incremental cache invalidates changed nodes and reuses unaffected entries",
       run: async () => {
         const state = createIncrementalRuleState();
@@ -1486,7 +1521,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.101",
+      id: "2.27",
+
       name: "consistency check detects divergence and falls back to full evaluation",
       run: async () => {
         const state = createIncrementalRuleState();
@@ -1519,7 +1555,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.102",
+      id: "2.28",
+
       name: "optimized selected plan can be persisted for immediate plan approve",
       run: async () => {
         const control = makeControlPlane();
@@ -1558,7 +1595,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.103",
+      id: "2.29",
+
       name: "rollback selector resolution supports stage and unit aliases deterministically",
       run: async () => {
         const plan = {
@@ -1613,7 +1651,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.11",
+      id: "2.30",
+
       name: "dsl compiler mutates yaml intent deterministically",
       run: async () => {
         const control = makeControlPlane();
@@ -1634,7 +1673,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.12",
+      id: "2.31",
+
       name: "dsl compiler supports multi-command then pipeline",
       run: async () => {
         const control = makeControlPlane();
@@ -1650,7 +1690,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.13",
+      id: "2.32",
+
       name: "dsl compiler plan upsert is deterministic and duplicate-safe",
       run: async () => {
         const control = makeControlPlane();
@@ -1663,7 +1704,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.14",
+      id: "2.33",
+
       name: "dsl compiler execute allows deterministic runtime synthesis without plan",
       run: async () => {
         const control = makeControlPlane();
@@ -1689,7 +1731,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.14a",
+      id: "2.34",
+
       name: "dsl compiler write path preserves packageModes-only governance without injecting global runtime",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-package-modes-only-write-"));
@@ -1712,7 +1755,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.15",
+      id: "2.35",
+
       name: "dsl compiler rejects malformed and empty-value commands",
       run: async () => {
         const control = makeControlPlane();
@@ -1721,7 +1765,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.16",
+      id: "2.36",
+
       name: "yaml serialization is canonical and reproducible",
       run: async () => {
         const control = makeControlPlane();
@@ -1741,7 +1786,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.17",
+      id: "2.37",
+
       name: "dsl parser supports export dsl command",
       run: async () => {
         const parsed = parseCommand("choir export dsl intent");
@@ -1756,7 +1802,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.18",
+      id: "2.38",
+
       name: "yaml to dsl projection is deterministic and diff-friendly",
       run: async () => {
         const control = makeControlPlane();
@@ -1778,7 +1825,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.19",
+      id: "2.39",
+
       name: "yaml to dsl round-trip is stable",
       run: async () => {
         const control = makeControlPlane();
@@ -1791,7 +1839,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.20",
+      id: "2.40",
+
       name: "yaml to dsl partial projection supports intent section",
       run: async () => {
         const control = makeControlPlane();
@@ -1813,7 +1862,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.21",
+      id: "2.41",
+
       name: "yaml to dsl warns for unrepresentable policy and plans",
       run: async () => {
         const control = makeControlPlane();
@@ -1835,7 +1885,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.22",
+      id: "2.42",
+
       name: "policy engine computes deterministic yaml diffs and hash",
       run: async () => {
         const before = controlPlaneToChoirConfig(makeControlPlane());
@@ -1852,7 +1903,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.23",
+      id: "2.43",
+
       name: "policy deny rule blocks yaml mutation before write",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-deny-"));
@@ -1878,7 +1930,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.24",
+      id: "2.44",
+
       name: "policy require-approval blocks until approved for exact diff hash",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-approval-"));
@@ -1916,7 +1969,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.25",
+      id: "2.45",
+
       name: "policy evaluation trace is deterministic",
       run: async () => {
         const beforeControl = makeControlPlane();
@@ -1960,7 +2014,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.26",
+      id: "2.46",
+
       name: "dsl parser supports policy approval command surface",
       run: async () => {
         assert.deepStrictEqual(parseCommand("choir approve diff-abc123").ast, {
@@ -2013,7 +2068,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.27",
+      id: "2.47",
+
       name: "choir editor completions are deterministic and grammar-aligned",
       run: async () => {
         const root = getDeterministicCompletions("").map((item) => item.label);
@@ -2083,7 +2139,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.28",
+      id: "2.48",
+
       name: "choir editor validation reuses parser behavior per command line",
       run: async () => {
         const diagnostics = validateChoirDocument([
@@ -2098,7 +2155,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.28a",
+      id: "2.49",
+
       name: "single-select quick-pick defaults mark the current value",
       run: async () => {
         const items = withSingleSelectDefault(["low", "moderate", "high"] as const, "moderate");
@@ -2111,7 +2169,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.28b",
+      id: "2.50",
+
       name: "single-select quick-pick defaults remain unmarked without a selected value",
       run: async () => {
         const items = withSingleSelectDefault(["low", "moderate", "high"] as const, undefined);
@@ -2119,7 +2178,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.29",
+      id: "2.51",
+
       name: "init wizard enforces step flow validation and deterministic dsl output",
       run: async () => {
         const wizard = new InitWizard(createWizardState());
@@ -2163,7 +2223,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.29a",
+      id: "2.52",
+
       name: "init template catalog loader fails closed on malformed schema",
       run: async () => {
         const catalogPath = path.join(repoRoot, "config", "init-templates.json");
@@ -2203,7 +2264,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30",
+      id: "2.53",
+
       name: "init wizard session persistence supports resume and clear",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-wizard-"));
@@ -2231,7 +2293,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30aa",
+      id: "2.54",
+
       name: "init wizard seeded state pre-populates merge values deterministically",
       run: async () => {
         const seeded = createWizardState(undefined, {
@@ -2250,7 +2313,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ab",
+      id: "2.55",
+
       name: "init template catalog is authoritative for wizard defaults",
       run: async () => {
         const catalogPath = path.join(repoRoot, "config", "init-templates.json");
@@ -2287,7 +2351,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ac",
+      id: "2.56",
+
       name: "init template catalog is authoritative for strategic defaults",
       run: async () => {
         const catalogPath = path.join(repoRoot, "config", "init-templates.json");
@@ -2343,7 +2408,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ad",
+      id: "2.57",
+
       name: "template-seeded domain runtime defaults preserve template runtime mode",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-runtime-defaults-"));
@@ -2368,7 +2434,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ada",
+      id: "2.58",
+
       name: "rootless template synthesis applies template capabilities to packageModes",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-template-package-capabilities-"));
@@ -2424,7 +2491,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ae",
+      id: "2.59",
+
       name: "rooted single-package synthesis avoids duplicating global and package strategicIntent",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-intent-"));
@@ -2489,7 +2557,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30af",
+      id: "2.60",
+
       name: "rooted single-package synthesis derives global runtime from sole domain runtime mode",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-rooted-single-runtime-"));
@@ -2553,7 +2622,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ag",
+      id: "2.61",
+
       name: "expand-domain modeling selector scopes to domains touched by newly discovered packages",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-selector-"));
@@ -2630,7 +2700,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah",
+      id: "2.62",
+
       name: "rootless expand-domain synthesis preserves existing packageModes and adds new package modes only",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-expand-domain-rootless-modes-"));
@@ -2717,7 +2788,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah1",
+      id: "2.63",
+
       name: "recalibrate package drift detection flags added discovered packages",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-add-"));
@@ -2754,7 +2826,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah2",
+      id: "2.64",
+
       name: "recalibrate package drift detection flags removed persisted packages",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-remove-"));
@@ -2790,7 +2863,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah3",
+      id: "2.65",
+
       name: "recalibrate package drift detection allows unchanged package catalogs",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-recalibrate-drift-none-"));
@@ -2828,7 +2902,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah4",
+      id: "2.66",
+
       name: "init discovery stale-reference detection flags non-existent package references across control plane scopes",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-detect-"));
@@ -2882,7 +2957,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah5",
+      id: "2.67",
+
       name: "init discovery stale-reference detection allows control plane package references aligned with discovery",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-none-"));
@@ -2934,7 +3010,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah6",
+      id: "2.68",
+
       name: "init discovery stale-reference detection can ignore package and packageModes references",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-ignore-modes-"));
@@ -2984,7 +3061,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ah7",
+      id: "2.69",
+
       name: "init discovery stale-reference detection fails on packageModes-only drift when packageModes checks are enabled",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-init-stale-refs-modes-only-"));
@@ -3030,7 +3108,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30ai",
+      id: "2.70",
+
       name: "reclassify prompt defaults preserve domain mission from package strategic intent when domains are omitted",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-reclassify-mission-seed-"));
@@ -3092,7 +3171,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30a",
+      id: "2.71",
+
       name: "init chat shortcut parser accepts prefixed and stripped participant input",
       run: async () => {
         assert.deepStrictEqual(parseInitChatCommand("@choir init"), {
@@ -3127,7 +3207,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30c",
+      id: "2.72",
+
       name: "verify chat shortcut parser accepts full and quick modes",
       run: async () => {
         assert.deepStrictEqual(parseVerifyChatCommand("@choir verify"), {
@@ -3210,7 +3291,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30d",
+      id: "2.73",
+
       name: "chat DSL normalization maps set shorthand to canonical define commands",
       run: async () => {
         assert.strictEqual(
@@ -3286,7 +3368,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30g",
+      id: "2.74",
+
       name: "cli install chat shortcut parser accepts prefixed and stripped participant input",
       run: async () => {
         assert.deepStrictEqual(parseCliInstallChatCommand("@choir cli install"), {
@@ -3302,7 +3385,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30h",
+      id: "2.75",
+
       name: "cli install requires explicit package source and rejects bare choir package",
       run: async () => {
         assert.strictEqual(normalizeCliPackageSpec("  @org/choir-cli  "), "@org/choir-cli");
@@ -3326,7 +3410,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30e",
+      id: "2.76",
+
       name: "preview synthesis is deterministic in fresh workspace without configured plans",
       run: async () => {
         const fixture = createHarnessFromFixture("simple-project");
@@ -3367,7 +3452,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30f",
+      id: "2.77",
+
       name: "preview synthesis enforces approval binding for require-approval policies",
       run: async () => {
         const fixture = createHarnessFromFixture("simple-project");
@@ -3418,7 +3504,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.30b",
+      id: "2.78",
+
       name: "simulation chat formatter renders deterministic summary and risk labels",
       run: async () => {
         const rendered = formatSimulationChatResult({
@@ -3460,7 +3547,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.31",
+      id: "2.79",
+
       name: "dsl parser supports macro command surface",
       run: async () => {
         assert.deepStrictEqual(parseCommand("choir macro list").ast, {
@@ -3486,7 +3574,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.32",
+      id: "2.80",
+
       name: "macro expansion is deterministic with parameter defaults",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-defaults-"));
@@ -3524,7 +3613,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.33",
+      id: "2.81",
+
       name: "macro execution compiles sequentially through yaml pipeline",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-run-"));
@@ -3566,7 +3656,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.32",
+      id: "2.82",
+
       name: "macro composition rejects recursive cycles deterministically",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-recursion-"));
@@ -3595,7 +3686,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.33",
+      id: "2.83",
+
       name: "policy role x environment matrix is deterministic",
       run: async () => {
         const baseline = controlPlaneToChoirConfig(makeControlPlane());
@@ -3670,7 +3762,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.34",
+      id: "2.84",
+
       name: "policy precedence is deterministic deny over require-approval",
       run: async () => {
         const baseline = controlPlaneToChoirConfig(makeControlPlane());
@@ -3702,7 +3795,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.35",
+      id: "2.85",
+
       name: "runtime environment detection drives policy deny in production",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-prod-"));
@@ -3727,7 +3821,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.36",
+      id: "2.86",
+
       name: "role capability validation denies escalation deterministically",
       run: async () => {
         validateRole({ role: "architect", environment: "local" }, "modify-yaml");
@@ -3746,7 +3841,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.37",
+      id: "2.87",
+
       name: "policy dsl parses and compiles deterministically",
       run: async () => {
         const text = [
@@ -3773,7 +3869,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.38",
+      id: "2.88",
+
       name: "policy dsl rejects invalid role during parse",
       run: async () => {
         const invalid = [
@@ -3787,7 +3884,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.39",
+      id: "2.89",
+
       name: "policy dsl loader rejects duplicate policy ids",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dsl-dup-"));
@@ -3806,7 +3904,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.40",
+      id: "2.90",
+
       name: "policy inheritance loader returns org repo and environment sources",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-sources-"));
@@ -3832,7 +3931,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.41",
+      id: "2.91",
+
       name: "org deny policy wins over repo allow policy",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-org-deny-"));
@@ -3864,7 +3964,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.42",
+      id: "2.92",
+
       name: "repo cannot override org deny with assign inheritance",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-no-override-deny-"));
@@ -3889,7 +3990,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.43",
+      id: "2.93",
+
       name: "org can allow controlled child assign for non-deny policy",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-child-override-"));
@@ -3923,7 +4025,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.44",
+      id: "2.94",
+
       name: "environment policy layer is applied last and can enforce strict production denies",
       run: async () => {
         const prodRoot = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-env-last-prod-"));
@@ -3977,7 +4080,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.45",
+      id: "2.95",
+
       name: "duplicate policy ids across org and repo layers are rejected",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-dup-cross-layer-"));
@@ -4000,7 +4104,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.46",
+      id: "2.96",
+
       name: "effective policy trace records source and final decision deterministically",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-policy-trace-sources-"));
@@ -4040,7 +4145,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.47",
+      id: "2.97",
+
       name: "effective policy visualization renders source-aware debug output",
       run: async () => {
         const rendered = formatPolicyInheritanceTrace({
@@ -4066,7 +4172,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.48",
+      id: "2.98",
+
       name: "audit store records compile and policy evaluation with immutable hash chain",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-compile-"));
@@ -4098,7 +4205,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.49",
+      id: "2.99",
+
       name: "audit records approval granted events",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-approval-"));
@@ -4130,7 +4238,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.50",
+      id: "2.100",
+
       name: "audit query and compliance reports are deterministic with multi-format export",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-report-"));
@@ -4175,7 +4284,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.51",
+      id: "2.101",
+
       name: "transactional execution writes execution audit record",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-audit-execute-"));
@@ -4215,7 +4325,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.52",
+      id: "2.102",
+
       name: "macro library version selectors resolve deterministically",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-resolve-"));
@@ -4255,7 +4366,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.53",
+      id: "2.103",
+
       name: "library install update and lock are reproducible",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-lock-"));
@@ -4301,7 +4413,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.53a",
+      id: "2.104",
+
       name: "library catalog import and lock graph are deterministic",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-library-catalog-"));
@@ -4345,7 +4458,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.54",
+      id: "2.105",
+
       name: "namespaced library macro execution logs audit metadata",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-library-run-"));
@@ -4398,7 +4512,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.55",
+      id: "2.106",
+
       name: "policy engine supports macro selector deterministically",
       run: async () => {
         const baseline = controlPlaneToChoirConfig(makeControlPlane());
@@ -4442,7 +4557,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.56",
+      id: "2.107",
+
       name: "breaking library changes require major bump",
       run: async () => {
         const oldLibrary = {
@@ -4507,7 +4623,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.57",
+      id: "2.108",
+
       name: "ci config defaults are deterministic",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-config-defaults-"));
@@ -4526,7 +4643,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.58",
+      id: "2.109",
+
       name: "ci pipeline trace and artifacts are deterministic for identical inputs",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-ci-run-"));
@@ -4596,7 +4714,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59",
+      id: "2.110",
+
       name: "refactor engine preview is deterministic and rollback restores snapshots",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-engine-"));
@@ -4665,7 +4784,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.1",
+      id: "2.111",
+
       name: "refactor rename supports exported function declarations",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-exported-function-"));
@@ -4709,7 +4829,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.2",
+      id: "2.112",
+
       name: "refactor rename fails closed when symbol name is ambiguous",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-ambiguous-rename-"));
@@ -4746,7 +4867,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.3",
+      id: "2.113",
+
       name: "refactor rename supports declaration selector to resolve ambiguity",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-"));
@@ -4794,7 +4916,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.4",
+      id: "2.114",
+
       name: "refactor rename file selector requires line and character when file has multiple matches",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-rename-selector-multi-"));
@@ -4833,7 +4956,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.5",
+      id: "2.115",
+
       name: "refactor inline supports top-level variable declarations referenced across functions",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-inline-variable-"));
@@ -4874,7 +4998,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.6",
+      id: "2.116",
+
       name: "refactor move executes for top-level exported function declarations",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-function-"));
@@ -4923,7 +5048,7 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.59.7",
+      id: "2.117",
       name: "refactor move supports file-target selector within workspace root",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-file-target-"));
@@ -4970,7 +5095,7 @@ const pass2: TestPass = {
       },
     },
       {
-        id: "2.59.8",
+        id: "2.118",
         name: "refactor move ignores dist declaration files when resolving symbol source",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-ignore-dist-dts-"));
@@ -5026,7 +5151,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.9",
+        id: "2.119",
         name: "refactor move rewrites imports that reference moved symbol through previous source file",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-rewrite-external-imports-"));
@@ -5075,7 +5200,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.10",
+        id: "2.120",
         name: "refactor move uses explicit .js extensions for rewritten relative imports under NodeNext",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-import-ext-"));
@@ -5125,7 +5250,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.11",
+        id: "2.121",
         name: "refactor move resolves NodeNext moduleResolution from extended tsconfig with JSONC",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-node-next-extends-jsonc-"));
@@ -5184,7 +5309,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.12",
+        id: "2.122",
         name: "refactor move uses .js extensions when tsconfig sets NodeNext module without moduleResolution",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-move-nodenext-module-only-"));
@@ -5233,7 +5358,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.13",
+        id: "2.123",
         name: "refactor extract executes for top-level exported function declarations",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-function-"));
@@ -5279,7 +5404,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.14",
+        id: "2.124",
         name: "refactor extract fails closed for non-exported function declarations",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-fail-closed-non-exported-"));
@@ -5308,7 +5433,7 @@ const pass2: TestPass = {
         },
       },
       {
-        id: "2.59.15",
+        id: "2.125",
         name: "refactor extract supports file-target selector within workspace root",
         run: async () => {
           const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-refactor-extract-file-target-"));
@@ -5352,7 +5477,8 @@ const pass2: TestPass = {
         },
       },
     {
-      id: "2.60",
+      id: "2.126",
+
       name: "macro execution is blocked outside pipeline in ci mode",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-macro-ci-mode-"));
@@ -5377,7 +5503,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.60",
+      id: "2.127",
+
       name: "dsl parser supports abstraction command surface",
       run: async () => {
         assert.deepStrictEqual(
@@ -5398,7 +5525,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.61",
+      id: "2.128",
+
       name: "abstraction execution is deterministic and idempotent",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-run-"));
@@ -5473,7 +5601,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.62",
+      id: "2.129",
+
       name: "abstraction composition rejects recursive cycles",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-recursion-"));
@@ -5504,7 +5633,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.63",
+      id: "2.130",
+
       name: "abstraction validation enforces macro existence",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-abstraction-macro-validation-"));
@@ -5533,7 +5663,8 @@ const pass2: TestPass = {
       },
     },
     {
-      id: "2.64",
+      id: "2.131",
+
       name: "dsl plan approval command mutates plan status deterministically",
       run: async () => {
         assert.deepStrictEqual(
@@ -5590,6 +5721,7 @@ const pass3: TestPass = {
   tests: [
     {
       id: "3.1",
+
       name: "state file is generated",
       run: async () => {
         await withFixture("multi-module", async ({ harness, root }) => {
@@ -5600,6 +5732,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.2",
+
       name: "state contains required structures",
       run: async () => {
         await withFixture("multi-module", async ({ harness }) => {
@@ -5620,6 +5753,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.3",
+
       name: "state is reproducible",
       run: async () => {
         await withFixture("dependency-graph", async ({ harness }) => {
@@ -5635,6 +5769,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.4",
+
       name: "state derived only from workspace plus control plane",
       run: async () => {
         await withFixture("dependency-graph", async ({ harness, root }) => {
@@ -5648,6 +5783,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.5",
+
       name: "deterministic plan generation from goals and violations",
       run: async () => {
         const control = makeControlPlane();
@@ -5690,6 +5826,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.6",
+
       name: "plan snapshot matches simple-project golden",
       run: async () => {
         await assertPlanGoldenForFixture("simple-project", "simple-project.plan.json");
@@ -5697,6 +5834,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.7",
+
       name: "plan snapshot matches multi-module golden",
       run: async () => {
         await assertPlanGoldenForFixture("multi-module", "multi-module.plan.json");
@@ -5704,6 +5842,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.8",
+
       name: "plan snapshot matches dependency-graph golden",
       run: async () => {
         await assertPlanGoldenForFixture("dependency-graph", "dependency-graph.plan.json");
@@ -5711,6 +5850,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.9",
+
       name: "plan groups violations by rule into minimal refactor tasks",
       run: async () => {
         const control = makeControlPlane();
@@ -5757,6 +5897,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.10",
+
       name: "dependency layer computation detects cycles",
       run: async () => {
         assert.throws(
@@ -5770,6 +5911,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.11",
+
       name: "state builder and validator enforce structural correctness",
       run: async () => {
         const control = makeControlPlane();
@@ -5798,6 +5940,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.12",
+
       name: "state consistency check catches yaml ast and rule divergences",
       run: async () => {
         const control = makeControlPlane();
@@ -5835,6 +5978,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.13",
+
       name: "state hash is deterministic for equivalent states",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -5848,6 +5992,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.14",
+
       name: "state snapshots are created and rollback restores exact snapshot",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-snapshot-"));
@@ -5888,6 +6033,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.15",
+
       name: "workspace timeline model records global and per-unit events",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-timeline-"));
@@ -5940,6 +6086,7 @@ const pass3: TestPass = {
     },
     {
       id: "3.16",
+
       name: "rollback target resolution restores previous state hash",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-state-rollback-target-"));
@@ -5999,6 +6146,7 @@ const pass4: TestPass = {
   tests: [
     {
       id: "4.1",
+
       name: "pipeline is sole enforcement entry",
       run: async () => {
         const pipelineUsages = searchCodebase("runPipeline");
@@ -6010,6 +6158,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.2",
+
       name: "chat triggers pipeline indirectly",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -6023,6 +6172,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.3",
+
       name: "rule editor validation uses pipeline",
       run: async () => {
         const result = simulateRuleEditorValidation();
@@ -6031,6 +6181,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.4",
+
       name: "pipeline executes in correct order",
       run: async () => {
         await withFixture("multi-module", async ({ harness }) => {
@@ -6041,6 +6192,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.5",
+
       name: "scheduler enforces dependency order",
       run: async () => {
         const control = makeControlPlane();
@@ -6077,6 +6229,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.6",
+
       name: "global execution graph flattens and normalizes dependencies",
       run: async () => {
         const plans: Plan[] = [
@@ -6098,6 +6251,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.7",
+
       name: "global execution graph topological layers are deterministic",
       run: async () => {
         const plans: Plan[] = [
@@ -6120,6 +6274,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.8",
+
       name: "conflict matrix blocks overlapping file mutations",
       run: async () => {
         const plans: Plan[] = [
@@ -6136,6 +6291,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.9",
+
       name: "execution planner enables safe parallel batches",
       run: async () => {
         const plans: Plan[] = [
@@ -6157,6 +6313,7 @@ const pass4: TestPass = {
     },
     {
       id: "4.10",
+
       name: "execution planner separates conflicting tasks into distinct batches",
       run: async () => {
         const plans: Plan[] = [
@@ -6171,7 +6328,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.14",
+      id: "4.11",
+
       name: "cost scoring is deterministic and explainable",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6215,7 +6373,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.15",
+      id: "4.12",
+
       name: "cost selection uses deterministic plan-id tie-breaker",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6231,7 +6390,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.16",
+      id: "4.13",
+
       name: "cost-based plan set selection returns lowest-cost plan",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6270,7 +6430,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.17",
+      id: "4.14",
+
       name: "strategy registry is deterministic and capped",
       run: async () => {
         assert.strictEqual(MAX_STRATEGIES, 4);
@@ -6281,7 +6442,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.18",
+      id: "4.15",
+
       name: "strategy transforms are deterministic across grouped layered and aggressive modes",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6317,7 +6479,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.19",
+      id: "4.16",
+
       name: "strategy evaluation and selection are deterministic with lexicographic tie break",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6390,7 +6553,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.20",
+      id: "4.17",
+
       name: "preview patch grouping and hash are deterministic",
       run: async () => {
         const patches: Patch[] = [
@@ -6454,7 +6618,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.21",
+      id: "4.18",
+
       name: "adaptive refinement deterministically generates bounded strategies from failure patterns",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6536,7 +6701,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.22",
+      id: "4.19",
+
       name: "adaptive strategy selection is deterministic and bounded by iteration limits",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6582,7 +6748,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.23",
+      id: "4.20",
+
       name: "strategy memory signature generation and matching are deterministic",
       run: async () => {
         const control = {
@@ -6644,7 +6811,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.24",
+      id: "4.21",
+
       name: "strategy memory record lookup reuse and dedupe are deterministic",
       run: async () => {
         await withFixture("simple-project", async ({ root }) => {
@@ -6699,7 +6867,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.25",
+      id: "4.22",
+
       name: "adaptive failure analysis is deterministic and classifies extended patterns",
       run: async () => {
         const outcome: StrategyOutcome = {
@@ -6744,7 +6913,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.26",
+      id: "4.23",
+
       name: "adaptive cycle determinism assertion passes for identical inputs",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6779,7 +6949,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.27",
+      id: "4.24",
+
       name: "plan --adaptive integrates memory fallback and records iteration feedback",
       run: async () => {
         await withFixture("simple-project", async ({ root }) => {
@@ -6836,7 +7007,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.28",
+      id: "4.25",
+
       name: "adaptive acceptance criteria converges to valid deterministic selection",
       run: async () => {
         const state = createEmptyStatePlane();
@@ -6870,7 +7042,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.29",
+      id: "4.26",
+
       name: "plan optimize synthesizes deterministic plans in fresh workspaces",
       run: async () => {
         await withFixture("multi-module", async ({ root, harness }) => {
@@ -6906,7 +7079,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.30",
+      id: "4.27",
+
       name: "plan optimize simulation hash matches execution preview hash",
       run: async () => {
         await withFixture("multi-module", async ({ root, harness }) => {
@@ -6942,7 +7116,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.31",
+      id: "4.28",
+
       name: "plan optimize rejects deny policy candidates deterministically",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -6976,7 +7151,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.11",
+      id: "4.29",
+
       name: "transactional execution commits validated batches",
       run: async () => {
         const plans: Plan[] = [
@@ -7039,7 +7215,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.12",
+      id: "4.30",
+
       name: "transactional execution rolls back on validation failure without writes",
       run: async () => {
         const plans: Plan[] = [
@@ -7113,7 +7290,8 @@ const pass4: TestPass = {
       },
     },
     {
-      id: "4.13",
+      id: "4.31",
+
       name: "transactional execution rejects non-idempotent patch sets",
       run: async () => {
         const plans: Plan[] = [
@@ -7187,6 +7365,7 @@ const pass5: TestPass = {
   tests: [
     {
       id: "5.1",
+
       name: "replica model and logical clock operations are deterministic",
       run: async () => {
         const replica = createReplica("repo-a", { feature: { enabled: true } }, {
@@ -7209,6 +7388,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.2",
+
       name: "delta computation is minimal and deterministic",
       run: async () => {
         const oldState = {
@@ -7248,6 +7428,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.3",
+
       name: "delta application records visible conflicts and resolves by logical clock",
       run: async () => {
         const local = createReplica("repo-a", { service: { owner: "team-a" } }, {
@@ -7282,6 +7463,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.4",
+
       name: "state merge is commutative and deterministic",
       run: async () => {
         const left = createReplica("repo-a", {
@@ -7320,6 +7502,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.5",
+
       name: "push pull and bidirectional sync modes converge deterministically",
       run: async () => {
         const pushLocal = createReplica("repo-a", { a: 1 });
@@ -7350,6 +7533,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.6",
+
       name: "version vectors track per-replica updates after sync",
       run: async () => {
         const left = createReplica<Record<string, unknown>>("repo-a", { x: 1 });
@@ -7364,6 +7548,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.7",
+
       name: "signed changesets reject tampering and require manual resolution",
       run: async () => {
         const secret = "top-secret";
@@ -7395,6 +7580,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.8",
+
       name: "transport batching compression and trace helpers remain deterministic",
       run: async () => {
         const deltaA = computeDelta({}, { a: 1 }, {
@@ -7428,6 +7614,7 @@ const pass5: TestPass = {
     },
     {
       id: "5.9",
+
       name: "manual conflict strategy marks unresolved conflicts for manual resolution",
       run: async () => {
         const local = createReplica("repo-a", { rules: { owner: "team-a" } }, {
@@ -7463,6 +7650,7 @@ const pass6: TestPass = {
   tests: [
     {
       id: "6.1",
+
       name: "global context and synthesized plan are deterministic for identical inputs",
       run: async () => {
         const cache = createGlobalPlanningCache();
@@ -7511,6 +7699,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.2",
+
       name: "global dependency graph includes inter-repo edges and rejects repo cycles",
       run: async () => {
         const repos: Repo[] = [
@@ -7541,6 +7730,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.3",
+
       name: "ordered global execution is deterministic and dependency-safe",
       run: async () => {
         const repos: Repo[] = [
@@ -7578,6 +7768,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.4",
+
       name: "global plan validation catches missing deps and conflicting actions",
       run: async () => {
         const invalid = {
@@ -7596,6 +7787,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.5",
+
       name: "task batching parallelizes independent work and sequences dependencies",
       run: async () => {
         const plan = {
@@ -7615,6 +7807,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.6",
+
       name: "org policies are propagated to all repos with no opt-out",
       run: async () => {
         const repos: Repo[] = [
@@ -7645,6 +7838,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.7",
+
       name: "cross-repo policy evaluation detects compatibility violations and blocks execution",
       run: async () => {
         const repos: Repo[] = [
@@ -7681,6 +7875,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.8",
+
       name: "global execution isolates failure and rolls back only impacted units",
       run: async () => {
         const repos: Repo[] = [
@@ -7728,6 +7923,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.9",
+
       name: "policy drift detection flags repo states that diverge from org expectations",
       run: async () => {
         const orgPolicies: OrgPolicy[] = [
@@ -7765,6 +7961,7 @@ const pass6: TestPass = {
     },
     {
       id: "6.10",
+
       name: "incremental planning cache reuses previous graph and plan for unchanged inputs",
       run: async () => {
         const cache = createGlobalPlanningCache();
@@ -7800,7 +7997,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10a",
+      id: "6.11",
+
       name: "global simulation is deterministic and does not mutate repo input state",
       run: async () => {
         const repos: Repo[] = [
@@ -7835,7 +8033,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10b",
+      id: "6.12",
+
       name: "strategy comparison ranks deterministic outcomes by real simulated metrics",
       run: async () => {
         const repos: Repo[] = [
@@ -7875,7 +8074,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10c",
+      id: "6.13",
+
       name: "partial simulation includes selected units and required dependencies only",
       run: async () => {
         const repos: Repo[] = [
@@ -7899,7 +8099,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10d",
+      id: "6.14",
+
       name: "execution is blocked when simulation gate fails",
       run: async () => {
         const repos: Repo[] = [
@@ -7923,7 +8124,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10e",
+      id: "6.15",
+
       name: "simulation and execution converge to identical final state",
       run: async () => {
         const repos: Repo[] = [
@@ -7948,7 +8150,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10f",
+      id: "6.16",
+
       name: "strategy comparison tie-break is deterministic by lexical strategy id",
       run: async () => {
         const repos: Repo[] = [
@@ -7979,7 +8182,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10g",
+      id: "6.17",
+
       name: "execution fails closed when simulation and execution outcomes diverge",
       run: async () => {
         const repos: Repo[] = [
@@ -8014,7 +8218,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10ga",
+      id: "6.18",
+
       name: "integrity gate aborts execute before transaction on state tampering",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8058,7 +8263,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10gb",
+      id: "6.19",
+
       name: "integrity gate aborts execute on orchestration DAG artifact corruption",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8104,7 +8310,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10gc",
+      id: "6.20",
+
       name: "integrity gate aborts execute when inputs diverge after preview simulation",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8149,7 +8356,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10gc1",
+      id: "6.21",
+
       name: "execute trace stores deterministic work-unit bindings for rollback selectors",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8184,7 +8392,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10gd",
+      id: "6.22",
+
       name: "execute reports execution stage when forced rollback is execution-only",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8229,7 +8438,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10ge",
+      id: "6.23",
+
       name: "execute rollout strategy overrides reported execution stage grouping",
       run: async () => {
         await withFixture("simple-project", async ({ root, harness }) => {
@@ -8261,7 +8471,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10h",
+      id: "6.24",
+
       name: "strategy evaluation simulates all candidates deterministically",
       run: async () => {
         const repos: Repo[] = [
@@ -8293,7 +8504,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10i",
+      id: "6.25",
+
       name: "strategy metrics comparator enforces lexicographic priority and deterministic score",
       run: async () => {
         assert.strictEqual(compareStrategyMetricsLex(
@@ -8321,7 +8533,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10j",
+      id: "6.26",
+
       name: "strategy selection filters violations by default and emits explainable decision",
       run: async () => {
         const repos: Repo[] = [
@@ -8432,7 +8645,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10k",
+      id: "6.27",
+
       name: "rollout stage generation is deterministic across canary phased and batched strategies",
       run: async () => {
         const plan = {
@@ -8467,7 +8681,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10l",
+      id: "6.28",
+
       name: "rollout stops on stage failure and rolls back affected stage units",
       run: async () => {
         const repos: Repo[] = [
@@ -8510,7 +8725,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10m",
+      id: "6.29",
+
       name: "rollout threshold gates stop progression deterministically",
       run: async () => {
         const repos: Repo[] = [
@@ -8546,7 +8762,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10n",
+      id: "6.30",
+
       name: "rollout requires approval gate before execution when configured",
       run: async () => {
         const repos: Repo[] = [
@@ -8573,7 +8790,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10o",
+      id: "6.31",
+
       name: "rollout fails closed and rolls back all units on simulation divergence",
       run: async () => {
         const repos: Repo[] = [
@@ -8606,7 +8824,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10p",
+      id: "6.32",
+
       name: "rollback set includes failed unit and executed dependents only",
       run: async () => {
         const plan = {
@@ -8631,7 +8850,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10q",
+      id: "6.33",
+
       name: "rollback order is reverse dependency order and deterministic",
       run: async () => {
         const plan = {
@@ -8649,7 +8869,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10r",
+      id: "6.34",
+
       name: "rollback isolation and post-rollback consistency checks fail closed",
       run: async () => {
         const plan = {
@@ -8681,7 +8902,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10s",
+      id: "6.35",
+
       name: "transaction abort prevents stage partial state leakage",
       run: async () => {
         const repos: Repo[] = [
@@ -8717,7 +8939,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10s1",
+      id: "6.36",
+
       name: "transaction forced rollback hook only triggers in execution after mutation",
       run: async () => {
         const repos: Repo[] = [
@@ -8753,7 +8976,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10t",
+      id: "6.37",
+
       name: "transaction trace id and stage sequence are deterministic",
       run: async () => {
         const repos: Repo[] = [
@@ -8786,7 +9010,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10u",
+      id: "6.38",
+
       name: "transaction lock conflicts fail closed with deterministic error",
       run: async () => {
         const repos: Repo[] = [
@@ -8835,7 +9060,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10v",
+      id: "6.39",
+
       name: "deterministic input hash and trace are stable for identical input",
       run: async () => {
         const plan = {
@@ -8871,7 +9097,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10w",
+      id: "6.40",
+
       name: "transaction deterministic trace replays to exact final state hash",
       run: async () => {
         const repos: Repo[] = [
@@ -8899,7 +9126,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10x",
+      id: "6.41",
+
       name: "simulation and execution deterministic hashes converge",
       run: async () => {
         const repos: Repo[] = [
@@ -8932,14 +9160,16 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10y",
+      id: "6.42",
+
       name: "deterministic sort is stable and ordered",
       run: async () => {
         assert.deepStrictEqual(deterministicSort(["repo-b", "repo-a", "repo-b"]), ["repo-a", "repo-b", "repo-b"]);
       },
     },
     {
-      id: "6.10z",
+      id: "6.43",
+
       name: "transaction lifecycle enforces prepare-validate-commit ordering",
       run: async () => {
         const ctx = beginTransaction({
@@ -8991,7 +9221,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.10aa",
+      id: "6.44",
+
       name: "idempotency guard suppresses duplicate deterministic changes",
       run: async () => {
         const ctx = beginTransaction({
@@ -9018,7 +9249,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.11",
+      id: "6.45",
+
       name: "workspace detection reads pnpm workspace config with deterministic package ordering",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-pnpm-"));
@@ -9048,7 +9280,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.12",
+      id: "6.46",
+
       name: "workspace detection prioritizes turbo marker over package manager hints",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-turbo-"));
@@ -9076,7 +9309,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.13",
+      id: "6.47",
+
       name: "workspace detection supports nx defaults and remains deterministic",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-nx-"));
@@ -9101,7 +9335,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.14",
+      id: "6.48",
+
       name: "workspace detection reads package.json workspaces and deduplicates overlaps",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-npm-"));
@@ -9131,7 +9366,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.14a",
+      id: "6.49",
+
       name: "workspace detection top-level fallback includes package directories and excludes docs-only folders",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-workspace-top-level-"));
@@ -9156,7 +9392,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.15",
+      id: "6.50",
+
       name: "dependency graph transform to UI graph is deterministic and sorted",
       run: async () => {
         const ui = toUIGraph({
@@ -9174,7 +9411,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.16",
+      id: "6.51",
+
       name: "graph snapshot is deterministic and projects plan/violation overlays",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-graph-snapshot-"));
@@ -9263,7 +9501,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.17",
+      id: "6.52",
+
       name: "graph DSL commands parse into deterministic graph AST",
       run: async () => {
         const parsed = parseCommand("choir graph dependencies \"unit:packages/b\"");
@@ -9277,7 +9516,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.18",
+      id: "6.53",
+
       name: "verification harness case runner validates deterministic replay simulation and rollback",
       run: async () => {
         const result = await runVerificationCase(deterministicCase);
@@ -9289,7 +9529,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.19",
+      id: "6.54",
+
       name: "verification harness full run is deterministic and report formatting is stable",
       run: async () => {
         const suite = createVerificationSuite("quick");
@@ -9317,7 +9558,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.20",
+      id: "6.55",
+
       name: "property-based harness is deterministic with fixed seed and stable report",
       run: async () => {
         setSeed(424242);
@@ -9336,7 +9578,8 @@ const pass6: TestPass = {
       },
     },
     {
-      id: "6.21",
+      id: "6.56",
+
       name: "chaos harness mode is deterministic and reports invariant set",
       run: async () => {
         setSeed(515151);
@@ -9361,7 +9604,8 @@ const finalPass: TestPass = {
   name: "Final — Cross-Cutting Tests",
   tests: [
     {
-      id: "X.1",
+      id: "7.1",
+
       name: "higher priority rules override lower ones",
       run: async () => {
         await withFixture("multi-module", async ({ harness }) => {
@@ -9371,7 +9615,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.2",
+      id: "7.2",
+
       name: "trace is fully populated",
       run: async () => {
         await withFixture("multi-module", async ({ harness }) => {
@@ -9382,7 +9627,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.3",
+      id: "7.3",
+
       name: "control plane requires version",
       run: async () => {
         await withFixture("simple-project", async ({ harness }) => {
@@ -9392,7 +9638,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.4",
+      id: "7.4",
+
       name: "conflict resolution is deterministic and priority driven",
       run: async () => {
         const sharedLocation = testLocation("src/example.ts", 1, 0, 1, 10);
@@ -9470,7 +9717,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.5",
+      id: "7.5",
+
       name: "priority overrides and dependency safety rejections are honored",
       run: async () => {
         const sharedLocation = testLocation("src/example.ts", 2, 0, 2, 6);
@@ -9585,7 +9833,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.6",
+      id: "7.6",
+
       name: "core runtime source never imports from /tests",
       run: async () => {
         const forbiddenImports = searchCodebase(/(?:from\s+["'][^"']*\/tests\/|import\(\s*["'][^"']*\/tests\/)/)
@@ -9599,7 +9848,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.7",
+      id: "7.7",
+
       name: "extension manifest does not expose npm bin path mapping",
       run: async () => {
         const packagePath = path.join(repoRoot, "package.json");
@@ -9608,7 +9858,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.8",
+      id: "7.8",
+
       name: "standalone choir-cli package declares deterministic bin and prepack flow",
       run: async () => {
         const cliPackagePath = path.join(repoRoot, "packages", "choir-cli", "package.json");
@@ -9626,7 +9877,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.9",
+      id: "7.9",
+
       name: "cli runtime parser preserves verify/ci behavior and fail-closes VS Code-only shortcuts",
       run: async () => {
         assert.deepStrictEqual(parseCliIntent(["verify"]), {
@@ -9793,7 +10045,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.10",
+      id: "7.10",
+
       name: "cli scope registry captures in-scope parity surface and explicit exclusions",
       run: async () => {
         assert.ok(CLI_IN_SCOPE_CHAT_PIPELINE_OPERATIONS.includes("verify"));
@@ -9813,7 +10066,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.11",
+      id: "7.11",
+
       name: "cli runtime executor returns JSON envelopes for status and remove-goal",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-runtime-"));
@@ -9873,7 +10127,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.12",
+      id: "7.12",
+
       name: "cli runtime executor supports analyze targets with deterministic JSON payloads",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-analyze-"));
@@ -9927,7 +10182,8 @@ const finalPass: TestPass = {
       },
     },
     {
-      id: "X.13",
+      id: "7.13",
+
       name: "cli runtime executor covers remaining parity command families with JSON envelopes",
       run: async () => {
         const root = fs.mkdtempSync(path.join(repoRoot, ".tmp-cli-parity-"));
