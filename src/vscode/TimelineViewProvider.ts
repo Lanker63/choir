@@ -363,7 +363,7 @@ export class TimelineViewProvider {
           ? 'rollout: ' + selectedCandidate.rolloutBias.preferred + ', stage=' + selectedCandidate.rolloutBias.stageSizing + ', rollback=' + selectedCandidate.rolloutBias.rollbackAggressiveness + ', isolation=' + selectedCandidate.rolloutBias.dependencyIsolation
           : 'rollout: no rationale captured',
       ];
-      strategic.textContent = strategicLines.join('\n');
+      strategic.textContent = strategicLines.join('\\n');
     }
 
     document.getElementById('refreshBtn').addEventListener('click', () => post({ type: 'REQUEST_STATE' }));

@@ -52,7 +52,10 @@ function fallbackProjection(): DiagnosticsProjection {
 }
 
 function bootstrapSnapshotJson(snapshot: DiagnosticsProjection): string {
-  return JSON.stringify(snapshot).replace(/</g, "\\u003c");
+  return JSON.stringify(snapshot)
+    .replace(/</g, "\\u003c")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
 }
 
 function renderStaticList(snapshot: DiagnosticsProjection): string {
