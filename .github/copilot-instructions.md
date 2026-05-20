@@ -23,10 +23,15 @@ DESIGN_GUIDELINES.md is the authoritative source of truth for system contracts. 
 When source code is added, modified, or deleted, agents must execute strict red-green-refactor order.
 
 Required order:
-1. RED: add or update a test that captures the intended behavior, then run the smallest focused test command and confirm failure.
-2. GREEN: implement the minimal production change required to make that same focused test pass.
+1. RED: add or update a test that captures the intended behavior, then run the smallest focused related unit-test command and confirm failure.
+2. GREEN: implement the minimal production change required to make that same focused related unit-test command pass.
 3. REFACTOR: perform only safe cleanup with tests still green.
 4. REGRESSION: run the broader required suite for touched surfaces and run build validation.
+
+Test-scope policy (mandatory):
+- RED/GREEN loops must execute only related unit tests for the changed source logic.
+- Do not use architecture/integration/E2E suites as substitutes for RED/GREEN unit feedback.
+- Architecture, integration, and E2E suites are reserved for CI and explicit full-run hardening (or when the user explicitly asks for them).
 
 Required completion evidence in the final response:
 - RED command and explicit failing result.

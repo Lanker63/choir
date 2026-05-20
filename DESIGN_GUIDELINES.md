@@ -10,7 +10,9 @@ Every qualifying code change must demonstrate RED -> GREEN -> REFACTOR evidence:
 ## Testing Stratification Contract
 
 - Unit tests are the primary local TDD feedback loop and must be runnable without invoking full architecture/verification harnesses.
+- RED/GREEN TDD execution must run only related unit tests for the changed source logic; architecture/integration/E2E suites must not be used as the RED/GREEN feedback loop.
 - Alpha scope testing targets current source code logic directly: unit suites, rules harness, architecture harness, and verification suites.
+- Architecture/integration/E2E execution is reserved for CI and explicitly requested full-suite hardening runs.
 - Legacy parity/baseline migration gates are out of scope until explicitly reintroduced.
 
 ## Product Scope

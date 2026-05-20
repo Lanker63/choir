@@ -7,13 +7,14 @@ const diagnosticsProviderPath = path.join(repoRoot, "src", "vscode", "PipelineDi
 const source = fs.readFileSync(diagnosticsProviderPath, "utf-8");
 
 assert.ok(
-  source.includes("const bootstrapSnapshotEncoded = \"") && source.includes("JSON.parse(atob(bootstrapSnapshotEncoded))"),
-  "Diagnostics webview must transport bootstrap payload as encoded data and parse via JSON.parse(atob(...))."
+  source.includes('const scriptPath = path.join(this.context.extensionPath, "media", "diagnosticsPanel.js");')
+    && source.includes('<script nonce="${nonce}" src="${scriptUri}"></script>'),
+  "Diagnostics webview must use an external script asset for runtime rendering."
 );
 
 assert.ok(
-  !source.includes("const bootstrapSnapshot = ${bootstrapJson};"),
-  "Diagnostics webview must not inject raw JSON directly into executable script context."
+  !source.includes("bootstrapSnapshotEncoded") && !source.includes("JSON.parse(atob("),
+  "Diagnostics webview should not inject bootstrap payload into inline script context."
 );
 
 process.stdout.write("PASS diagnostics webview bootstrap transport regression\\n");
