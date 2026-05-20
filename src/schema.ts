@@ -355,10 +355,10 @@ export const ControlPlaneSchema = z.object({
         }
     }
 
-    const hasDomainCatalog = Object.keys(control.domains ?? {}).length > 0;
+    const domainCatalog = control.domains ?? {};
 
     for (const [packageName, packageConfig] of Object.entries(control.packages ?? {})) {
-        if (hasDomainCatalog && packageConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, packageConfig.domain)) {
+        if (packageConfig.domain && !Object.prototype.hasOwnProperty.call(domainCatalog, packageConfig.domain)) {
             context.addIssue({
                 code: "custom",
                 message: `Package "${packageName}" maps to unknown domain "${packageConfig.domain}"`,
@@ -368,7 +368,7 @@ export const ControlPlaneSchema = z.object({
     }
 
     for (const [contextName, contextConfig] of Object.entries(control.contexts ?? {})) {
-        if (hasDomainCatalog && contextConfig.domain && !Object.prototype.hasOwnProperty.call(control.domains ?? {}, contextConfig.domain)) {
+        if (contextConfig.domain && !Object.prototype.hasOwnProperty.call(domainCatalog, contextConfig.domain)) {
             context.addIssue({
                 code: "custom",
                 message: `Context "${contextName}" maps to unknown domain "${contextConfig.domain}"`,

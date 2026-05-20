@@ -78,6 +78,8 @@ execution:
 
 Runtime guarantee: `preview == simulation == execute == replay`
 
+Strategic mapping guard: package/context domain references fail closed when they target an unknown domain.
+
 ---
 
 ## Intent Concepts

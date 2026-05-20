@@ -704,6 +704,26 @@ const pass1: TestPass = {
         assert.doesNotThrow(() => ControlPlaneSchema.parse(valid));
       },
     },
+    {
+      id: "1.10",
+
+      name: "control plane fails closed when package references unknown domain without domains catalog",
+      run: async () => {
+        const invalid = {
+          ...makeControlPlane(),
+          packages: {
+            ".": {
+              domain: "non-existent-domain",
+            },
+          },
+        };
+
+        assert.throws(
+          () => ControlPlaneSchema.parse(invalid),
+          /maps to unknown domain/i
+        );
+      },
+    },
   ],
 };
 

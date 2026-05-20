@@ -165,6 +165,7 @@ Imported libraries must participate in policy evaluation order (`org -> repo -> 
 - Strategic intent is a first-class orchestration input, distinct from runtime governance.
 - Hierarchy is explicit and deterministic: `domain -> package -> context -> orchestration unit`.
 - Strategic intent must not be inferred implicitly; resolution is configuration-driven and fail-closed on ambiguity or missing package/context mappings.
+- Package/context domain references must fail closed when they point to unknown domains, including configs that omit a `domains` catalog.
 - Deterministic planning must include strategic semantics in candidate synthesis, ranking, rollout bias, and rollback posture.
 - Deterministic ranking order is: `violations -> strategic alignment -> risk -> rollback complexity -> changes -> execution cost`.
 - Strategic inheritance must compose with governance inheritance and must not bypass deny precedence.
