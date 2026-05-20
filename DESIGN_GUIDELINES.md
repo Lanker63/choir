@@ -5,6 +5,7 @@ This document defines the minimal, non-negotiable system contracts for Choir.
 ## Development Methodology
 
 TDD (test-driven development) MUST be used at all time when source code is to be introduced, modified, or deleted.
+Every qualifying code change must demonstrate RED -> GREEN -> REFACTOR evidence: focused failing test before production edits, then passing focused and regression/build validation after edits.
 
 ## Product Scope
 
@@ -48,6 +49,7 @@ Read-only analyze commands across chat and choir-cli surfaces (for example analy
 Hotspot analysis labels are line-count based and include LOC in output: `Large file (<n> LOC)` (>500 lines) and `God file (<n> LOC)` (>1000 lines).
 Hotspot analysis must ignore `node_modules` by default and allow deterministic package-scoped exclusion globs through `analysis.hotspots.excludeGlobs`; `workspaceRoot` is the canonical root key and `.` is a supported alias.
 Compilation trace output should render empty change sets inline as `changes: none` instead of a separate top-level list item.
+Compilation trace output must include input and normalized change summary but must not render AST payloads in operator-facing chat output.
 Plan optimization outputs must be promotable to plan approval without manual YAML edits; selected optimize plan ids must be persisted to the control plane when optimization is invoked interactively.
 Rollback commands must resolve and persist the deterministic previous state target; when a prior transition exists, `stateHash` after rollback must equal the previous transition hash rather than remaining unchanged.
 Rollback stage and unit selectors must support deterministic alias normalization (stage order aliases, canonical punctuation-insensitive unit ids, and resolvable work-unit ids like `wu-<hash>`) while still failing closed on ambiguous selector mappings.

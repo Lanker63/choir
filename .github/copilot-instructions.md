@@ -18,6 +18,26 @@ This applies to:
 
 DESIGN_GUIDELINES.md is the authoritative source of truth for system contracts. Conflicting implementation choices must be reconciled against it, not the other way around.
 
+## Mandatory TDD Protocol (All Agents)
+
+When source code is added, modified, or deleted, agents must execute strict red-green-refactor order.
+
+Required order:
+1. RED: add or update a test that captures the intended behavior, then run the smallest focused test command and confirm failure.
+2. GREEN: implement the minimal production change required to make that same focused test pass.
+3. REFACTOR: perform only safe cleanup with tests still green.
+4. REGRESSION: run the broader required suite for touched surfaces and run build validation.
+
+Required completion evidence in the final response:
+- RED command and explicit failing result.
+- GREEN command and explicit passing result.
+- Regression/build commands and pass status.
+
+Operational safeguards:
+- If RED does not fail, strengthen or correct the test before touching production code.
+- If production edits were made before RED, stop and re-run the change in strict TDD order before completing.
+- TDD waiver is allowed only when the user explicitly requests no-TDD for that specific change.
+
 ## Memory: Do Not Store Design Guidelines
 
 Do **not** store design guidelines, architectural contracts, or system behavioral rules in any memory file (`/memories/`, `/memories/repo/`, or `/memories/session/`).

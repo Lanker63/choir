@@ -11,8 +11,6 @@ export type CompilationTraceOutput = {
 };
 
 export function formatCompilationTraceMarkdown(trace: CompilationTraceOutput): string {
-  const astJson = JSON.stringify(trace.ast, null, 2);
-
   const changeLines = trace.changes.length === 0
     ? ["- changes: none"]
     : [
@@ -30,9 +28,5 @@ export function formatCompilationTraceMarkdown(trace: CompilationTraceOutput): s
     "Compilation trace:",
     `- input: ${trace.input}`,
     ...changeLines,
-    "- ast:",
-    "```json",
-    astJson,
-    "```",
   ].join("\n");
 }

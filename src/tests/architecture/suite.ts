@@ -885,7 +885,7 @@ const pass2: TestPass = {
     {
       id: "2.9",
 
-      name: "compilation trace formatter renders empty change list inline",
+      name: "compilation trace formatter renders empty change list inline without ast payload",
       run: async () => {
         const output = formatCompilationTraceMarkdown({
           input: "choir analyze workspace",
@@ -898,6 +898,7 @@ const pass2: TestPass = {
 
         assert.ok(output.includes("- changes: none"));
         assert.ok(!output.includes("- changes:\n- none"));
+        assert.ok(!output.includes("- ast:"));
       },
     },
     {

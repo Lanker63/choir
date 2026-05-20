@@ -11,6 +11,10 @@ It compiles intent and policy into executable checks, plans and previews changes
 - VS Code 1.90+
 - Open workspace folder
 
+## Development Workflow
+
+- Use strict TDD for source-code changes: RED (focused failing test) -> GREEN (minimal fix) -> REFACTOR (safe cleanup) -> regression/build validation.
+
 ## Install
 
 - Install from Marketplace: **Choir**
@@ -65,6 +69,7 @@ execution:
 | **Refactoring** | Deterministic rename/move/extract/inline through the same preview → execute pipeline |
 | **Libraries** | Registry-backed capability bundles with integrity-hash enforcement and deterministic locking |
 | **CI Integration** | `choir ci run` executes the canonical pipeline: source → compile → plan → policy → preview → execute → audit |
+| **Compilation Trace** | Operator-facing trace output includes command input and normalized changes (AST payload intentionally omitted) |
 
 ---
 
